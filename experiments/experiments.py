@@ -20,6 +20,7 @@ from datetime import datetime
 from sklearn import svm 
 from utils import diff_operators
 from utils.error_evaluators import scenario_optimization, ValueThresholdValidator, MultiValidator, MLPConditionedValidator, target_fraction, MLP, MLPValidator, SliceSampleGenerator
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 class Experiment(ABC):
     def __init__(self, model, dataset, experiment_dir, use_wandb):
@@ -58,7 +59,7 @@ class Experiment(ABC):
         zs = torch.linspace(z_min, z_max, z_resolution)
         xys = torch.cartesian_prod(xs, ys)
         
-        fig = plt.figure(figsize=(5*len(times), 5*len(zs)))
+        fig = plt.figure(figsize=(5*len(zs), 5*len(times)))
         for i in range(len(times)):
             for j in range(len(zs)):
                 coords = torch.zeros(x_resolution*y_resolution, self.dataset.dynamics.state_dim + 1)
@@ -75,7 +76,9 @@ class Experiment(ABC):
                 ax = fig.add_subplot(len(times), len(zs), (j+1) + i*len(zs))
                 ax.set_title('t = %0.2f, %s = %0.2f' % (times[i], plot_config['state_labels'][plot_config['z_axis_idx']], zs[j]))
                 s = ax.imshow(1*(values.detach().cpu().numpy().reshape(x_resolution, y_resolution).T <= 0), cmap='bwr', origin='lower', extent=(-1., 1., -1., 1.))
-                fig.colorbar(s) 
+                divider = make_axes_locatable(ax)
+                cax = divider.append_axes("right", size="5%", pad=0.05)
+                fig.colorbar(s, cax=cax) 
         fig.savefig(save_path)
         if self.use_wandb:
             wandb.log({
