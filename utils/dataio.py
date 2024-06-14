@@ -3,7 +3,7 @@ from torch.utils.data import Dataset
 
 # uses model input and real boundary fn
 class ReachabilityDataset(Dataset):
-    def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples):
+    def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, hopf_pretrain=False, hopf_pretrain_iters=10000):
         self.dynamics = dynamics
         self.numpoints = numpoints
         self.pretrain = pretrain
@@ -15,6 +15,10 @@ class ReachabilityDataset(Dataset):
         self.counter_end = counter_end 
         self.num_src_samples = num_src_samples
         self.num_target_samples = num_target_samples
+
+        self.hopf_pretrain = hopf_pretrain
+        self.hopf_pretrain_counter = 0
+        self.hopf_pretrain_iters = hopf_pretrain_iters
 
     def __len__(self):
         return 1
@@ -31,9 +35,10 @@ class ReachabilityDataset(Dataset):
             times = torch.full((self.numpoints, 1), self.tMin)
         else:
             # slowly grow time values from start time
-            times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * (self.counter / self.counter_end))
+            times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * ((self.counter + self.hopf_pretrain_counter)/(self.counter_end + self.hopf_pretrain_iters)))
             # make sure we always have training samples at the initial time
             times[-self.num_src_samples:, 0] = self.tMin
+
         model_coords = torch.cat((times, model_states), dim=1)        
         if self.dynamics.input_dim > self.dynamics.state_dim + 1: # temporary workaround for having to deal with dynamics classes for parametrized models with extra inputs
             model_coords = torch.cat((model_coords, torch.zeros(self.numpoints, self.dynamics.input_dim - self.dynamics.state_dim - 1)), dim=1)      
@@ -43,6 +48,11 @@ class ReachabilityDataset(Dataset):
             reach_values = self.dynamics.reach_fn(self.dynamics.input_to_coord(model_coords)[..., 1:])
             avoid_values = self.dynamics.avoid_fn(self.dynamics.input_to_coord(model_coords)[..., 1:])
         
+        ## WAS: compute Hopf value
+        # compute find/solve value at model_coords with Hopf (prob from preloaded interpolation for now)
+        # format properly
+        hopf_values = boundary_values.detach().clone()
+        
         if self.pretrain:
             dirichlet_masks = torch.ones(model_coords.shape[0]) > 0
         else:
@@ -51,14 +61,21 @@ class ReachabilityDataset(Dataset):
 
         if self.pretrain:
             self.pretrain_counter += 1
+        elif self.hopf_pretrain:
+            self.hopf_pretrain_counter += 1
         elif self.counter < self.counter_end:
             self.counter += 1
 
         if self.pretrain and self.pretrain_counter == self.pretrain_iters:
             self.pretrain = False
 
+        if self.hopf_pretrain and self.hopf_pretrain_counter == self.hopf_pretrain_iters:
+            self.hopf_pretrain = False
+
         if self.dynamics.loss_type == 'brt_hjivi':
             return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks}
+        elif self.dynamics.loss_type == 'brt_hjivi_hopf':
+            return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks, 'hopf_values': hopf_values}
         elif self.dynamics.loss_type == 'brat_hjivi':
             return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'reach_values': reach_values, 'avoid_values': avoid_values, 'dirichlet_masks': dirichlet_masks}
         else:

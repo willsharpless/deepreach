@@ -128,6 +128,7 @@ class Experiment(ABC):
 
         if adjust_relative_grads:
             new_weight = 1
+            new_weight_hopf = 1
 
         with tqdm(total=len(train_dataloader) * epochs) as pbar:
             train_losses = []
@@ -158,6 +159,9 @@ class Experiment(ABC):
 
                     if self.dataset.dynamics.loss_type == 'brt_hjivi':
                         losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks)
+                    elif self.dataset.dynamics.loss_type == 'brt_hjivi_hopf':
+                        hopf_values = gt['hopf_values']
+                        losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, hopf_values, self.dataset.hopf_pretrain)
                     elif self.dataset.dynamics.loss_type == 'brat_hjivi':
                         losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, reach_values, avoid_values, dirichlet_masks)
                     else:
@@ -195,6 +199,14 @@ class Experiment(ABC):
                                 grads_dirichlet.append(param.grad.view(-1))
                             grads_dirichlet = torch.cat(grads_dirichlet)
 
+                            # Gradients with respect to the hopf loss
+                            optim.zero_grad()
+                            losses['hopf'].backward(retain_graph=True)
+                            grads_hopf = []
+                            for key, param in params.items():
+                                grads_hopf.append(param.grad.view(-1))
+                            grads_hopf = torch.cat(grads_hopf)
+
                             # # Plot the gradients
                             # import seaborn as sns
                             # import matplotlib.pyplot as plt
@@ -220,7 +232,13 @@ class Experiment(ABC):
                             den = torch.mean(torch.abs(grads_dirichlet))
                             new_weight = 0.9*new_weight + 0.1*num/den
                             losses['dirichlet'] = new_weight*losses['dirichlet']
+
+                            den = torch.mean(torch.abs(grads_hopf))
+                            new_weight_hopf = 0.9*new_weight_hopf + 0.1*num/den
+                            losses['hopf'] = new_weight_hopf*losses['hopf']
+
                         writer.add_scalar('weight_scaling', new_weight, total_steps)
+                        writer.add_scalar('weight_scaling_hopf', new_weight_hopf, total_steps)
 
                     # import ipdb; ipdb.set_trace()
 
@@ -230,6 +248,8 @@ class Experiment(ABC):
 
                         if loss_name == 'dirichlet':
                             writer.add_scalar(loss_name, single_loss/new_weight, total_steps)
+                        elif loss_name == 'hopf':
+                            writer.add_scalar(loss_name, single_loss/new_weight_hopf, total_steps)
                         else:
                             writer.add_scalar(loss_name, single_loss, total_steps)
                         train_loss += single_loss

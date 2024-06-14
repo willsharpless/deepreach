@@ -45,7 +45,7 @@ if (mode == 'all') or (mode == 'train'):
 
     # simulation data source options
     p.add_argument('--numpoints', type=int, default=65000, help='Number of points in simulation data source __getitem__.')
-    p.add_argument('--pretrain', action='store_true', default=False, required=False, help='Pretrain dirichlet conditions')
+    p.add_argument('--pretrain', action='store_true', default=True, required=False, help='Pretrain dirichlet conditions')
     p.add_argument('--pretrain_iters', type=int, default=2000, required=False, help='Number of pretrain iterations')
     p.add_argument('--tMin', type=float, default=0.0, required=False, help='Start time of the simulation')
     p.add_argument('--tMax', type=float, default=1.0, required=False, help='End time of the simulation')
@@ -90,6 +90,12 @@ if (mode == 'all') or (mode == 'train'):
 
     # loss options
     p.add_argument('--minWith', type=str, default='target', choices=['none', 'zero', 'target'], help='BRS vs BRT computation (typically should be using target for BRT)') #FIXME: required=True instead of default
+    
+    # hopf options
+    p.add_argument('--hopf_loss', type=str, default='lindiff', choices=['none', 'lindiff', 'grad'], help='Method for using Hopf data')
+    p.add_argument('--hopf_loss_divisor', default=1.0, required=False, type=float, help='What to divide the hopf loss by for loss reweighting')
+    p.add_argument('--hopf_pretrain', action='store_true', default=True, required=False, help='Pretrain hopf conditions')
+    p.add_argument('--hopf_pretrain_iters', type=int, default=10000, required=False, help='Number of pretrain iterations with Hopf loss')
 
     # load dynamics_class choices dynamically from dynamics module
     dynamics_classes_dict = {name: clss for name, clss in inspect.getmembers(dynamics, inspect.isclass) if clss.__bases__[0] == dynamics.Dynamics}
@@ -164,13 +170,16 @@ np.random.seed(orig_opt.seed)
 
 dynamics_class = getattr(dynamics, orig_opt.dynamics_class)
 dynamics = dynamics_class(**{argname: getattr(orig_opt, argname) for argname in inspect.signature(dynamics_class).parameters.keys() if argname != 'self'})
+if orig_opt.hopf_loss != 'none':
+    dynamics.loss_type = 'brt_hjivi_hopf'
 
 dataset = dataio.ReachabilityDataset(
     dynamics=dynamics, numpoints=orig_opt.numpoints, 
     pretrain=orig_opt.pretrain, pretrain_iters=orig_opt.pretrain_iters, 
     tMin=orig_opt.tMin, tMax=orig_opt.tMax, 
     counter_start=orig_opt.counter_start, counter_end=orig_opt.counter_end, 
-    num_src_samples=orig_opt.num_src_samples, num_target_samples=orig_opt.num_target_samples)
+    num_src_samples=orig_opt.num_src_samples, num_target_samples=orig_opt.num_target_samples,
+    hopf_pretrain=orig_opt.hopf_pretrain, hopf_pretrain_iters=orig_opt.hopf_pretrain_iters)
 
 model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
                              final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl)
@@ -185,6 +194,8 @@ if (mode == 'all') or (mode == 'train'):
         loss_fn = losses.init_brt_hjivi_loss(dynamics, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
     elif dynamics.loss_type == 'brat_hjivi':
         loss_fn = losses.init_brat_hjivi_loss(dynamics, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
+    elif dynamics.loss_type == 'brt_hjivi_hopf':
+        loss_fn = losses.init_brt_hjivi_hopf_loss(dynamics, orig_opt.minWith, orig_opt.dirichlet_loss_divisor, orig_opt.hopf_loss_divisor, orig_opt.hopf_loss)
     else:
         raise NotImplementedError
     experiment.train(
