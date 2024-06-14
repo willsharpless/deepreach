@@ -257,7 +257,7 @@ class Air3D(Dynamics):
         }
 
 class Dubins3D(Dynamics):
-    def __init__(self, goalR:float, velocity:float, omega_max:float, angle_alpha_factor:float, set_mode:str, freeze_model: bool):
+    def __init__(self, goalR:float, velocity:float, omega_max:float, angle_alpha_factor:float, set_mode:str, freeze_model:bool):
         self.goalR = goalR
         self.velocity = velocity
         self.omega_max = omega_max
@@ -335,10 +335,13 @@ class Dubins3D(Dynamics):
         }
 
 class Linear2D(Dynamics):
-    def __init__(self, goalR:float, u_max:float, d_max:float, set_mode:str):
-        self.goalR = goalR
+    def __init__(self):
+        # __init__(self, goalR:float, u_max:float, d_max:float, A:tensor, B:tensor, C:tensor, set_mode:str) #FIXME
+        goalR, u_max, d_max, set_mode = 0.25, 0.5, 0.3, "reach" 
         self.a11, self.a12, self.a21, self.a22 = 0., .5, -1., -1. # FIXME lin algebra will be faster and cleaner
         self.b1, self.b2, self.c1, self.c2 = .4, .1, 0., .1
+
+        self.goalR = goalR
         self.u_max, self.d_max = u_max, d_max
         super().__init__(
             loss_type='brt_hjivi', set_mode=set_mode,

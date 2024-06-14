@@ -15,11 +15,11 @@ from utils import modules, dataio, losses
 
 p = configargparse.ArgumentParser()
 p.add_argument('-c', '--config_filepath', required=False, is_config_file=True, help='Path to config file.')
-p.add_argument('--mode', type=str, required=True, choices=['all', 'train', 'test'], help="Experiment mode to run (new experiments must choose 'all' or 'train').")
+p.add_argument('--mode', type=str, default="train", choices=['all', 'train', 'test'], help="Experiment mode to run (new experiments must choose 'all' or 'train').") #FIXME: required=True instead of default
 
 # save/load directory options
 p.add_argument('--experiments_dir', type=str, default='./runs', help='Where to save the experiment subdirectory.')
-p.add_argument('--experiment_name', type=str, required=True, help='Name of the experient subdirectory.')
+p.add_argument('--experiment_name', type=str, default='test_run', help='Name of the experient subdirectory.') #FIXME: required=True instead of default
 p.add_argument('--use_wandb', default=False, action='store_true', help='use wandb for logging')
 
 use_wandb = p.parse_known_args()[0].use_wandb
@@ -36,7 +36,7 @@ if (mode == 'all') or (mode == 'train'):
 
     # load experiment_class choices dynamically from experiments module
     experiment_classes_dict = {name: clss for name, clss in inspect.getmembers(experiments, inspect.isclass) if clss.__bases__[0] == experiments.Experiment}
-    p.add_argument('--experiment_class', type=str, default='DeepReach', choices=experiment_classes_dict.keys(), help='Experiment class to use.')
+    p.add_argument('--experiment_class', type=str, default='DeepReach2D', choices=experiment_classes_dict.keys(), help='Experiment class to use.') #FIXME: default='DeepReach' instead of 2D
     # load special experiment_class arguments dynamically from chosen experiment class
     experiment_class = experiment_classes_dict[p.parse_known_args()[0].experiment_class]
     experiment_params = {name: param for name, param in inspect.signature(experiment_class.init_special).parameters.items() if name != 'self'}
@@ -89,11 +89,11 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--val_time_resolution', type=int, default=3, help='time-axis resolution of validation plot during training')
 
     # loss options
-    p.add_argument('--minWith', type=str, required=True, choices=['none', 'zero', 'target'], help='BRS vs BRT computation (typically should be using target for BRT)')
+    p.add_argument('--minWith', type=str, default='target', choices=['none', 'zero', 'target'], help='BRS vs BRT computation (typically should be using target for BRT)') #FIXME: required=True instead of default
 
     # load dynamics_class choices dynamically from dynamics module
     dynamics_classes_dict = {name: clss for name, clss in inspect.getmembers(dynamics, inspect.isclass) if clss.__bases__[0] == dynamics.Dynamics}
-    p.add_argument('--dynamics_class', type=str, required=True, choices=dynamics_classes_dict.keys(), help='Dynamics class to use.')
+    p.add_argument('--dynamics_class', type=str, default="Linear2D", choices=dynamics_classes_dict.keys(), help='Dynamics class to use.') #FIXME: required=True instead of default
     # load special dynamics_class arguments dynamically from chosen dynamics class
     dynamics_class = dynamics_classes_dict[p.parse_known_args()[0].dynamics_class]
     dynamics_params = {name: param for name, param in inspect.signature(dynamics_class).parameters.items() if name != 'self'}
