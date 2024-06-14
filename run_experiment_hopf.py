@@ -45,8 +45,8 @@ if (mode == 'all') or (mode == 'train'):
 
     # simulation data source options
     p.add_argument('--numpoints', type=int, default=65000, help='Number of points in simulation data source __getitem__.')
-    p.add_argument('--pretrain', action='store_true', default=True, required=False, help='Pretrain dirichlet conditions')
-    p.add_argument('--pretrain_iters', type=int, default=40000, required=False, help='Number of pretrain iterations')
+    p.add_argument('--pretrain', action='store_true', default=False, required=False, help='Pretrain dirichlet conditions')
+    p.add_argument('--pretrain_iters', type=int, default=2000, required=False, help='Number of pretrain iterations')
     p.add_argument('--tMin', type=float, default=0.0, required=False, help='Start time of the simulation')
     p.add_argument('--tMax', type=float, default=1.0, required=False, help='End time of the simulation')
     p.add_argument('--counter_start', type=int, default=0, required=False, help='Defines the initial time for the curriculum training')

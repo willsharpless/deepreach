@@ -49,7 +49,6 @@ def init_brat_hjivi_loss(dynamics, minWith, dirichlet_loss_divisor):
 def init_brt_hjivi_loss_lindif(dynamics, minWith, dirichlet_loss_divisor):
 
     # load solution? solve solution?
-    # minWith = 'nothing' to start
 
     def brt_hjivi_loss(state, value, dvdt, dvds, boundary_value, dirichlet_mask):
         if torch.all(dirichlet_mask):
