@@ -76,7 +76,12 @@ class ReachabilityDataset(Dataset):
         # compute find/solve value at model_coords with Hopf (prob from preloaded interpolation for now)
         # hopf_values = boundary_values.detach().clone()
         if self.use_hopf:
-            hopf_values = self.V_hopf(self.dynamics.input_to_coord(model_coords).t())
+            try:
+                hopf_values = self.V_hopf(self.dynamics.input_to_coord(model_coords).t())
+            except:
+                # FP error, will just interpolate outside of range in future
+                hopf_values = self.V_hopf(0.999 * self.dynamics.input_to_coord(model_coords).t())
+
         
         if self.pretrain:
             dirichlet_masks = torch.ones(model_coords.shape[0]) > 0
