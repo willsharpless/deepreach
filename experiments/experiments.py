@@ -282,10 +282,12 @@ class Experiment(ABC):
                     if not total_steps % steps_til_summary:
                         tqdm.write("Epoch %d, Total loss %0.6f, iteration time %0.6f" % (epoch, train_loss, time.time() - start_time))
                         if self.use_wandb:
-                            wandb.log({
+                            log_dict = {
                                 'step': epoch,
-                                'train_loss': train_loss,
-                            })
+                                'train_loss': train_loss}
+                            for loss_name, loss in losses.items():
+                                log_dict[loss_name + "_loss"] = loss
+                            wandb.log(log_dict)
 
                     total_steps += 1
 
