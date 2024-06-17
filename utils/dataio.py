@@ -72,15 +72,14 @@ class ReachabilityDataset(Dataset):
             reach_values = self.dynamics.reach_fn(self.dynamics.input_to_coord(model_coords)[..., 1:])
             avoid_values = self.dynamics.avoid_fn(self.dynamics.input_to_coord(model_coords)[..., 1:])
         
-        ## TODO: compute Hopf value
-        # compute find/solve value at model_coords with Hopf (prob from preloaded interpolation for now)
-        # hopf_values = boundary_values.detach().clone()
+        ## Compute Hopf value
+        # compute find/solve value at model_coords with Hopf (from preloaded interpolation for now)
         if self.use_hopf:
             try:
-                hopf_values = self.V_hopf(self.dynamics.input_to_coord(model_coords).t())
+                hopf_values = 2 * self.V_hopf(self.dynamics.input_to_coord(model_coords).t()) # 2x for diff in val fn
             except:
-                # FP error, will just interpolate outside of range in future
-                hopf_values = self.V_hopf(0.999 * self.dynamics.input_to_coord(model_coords).t())
+                # TODO: interpolate outside of range in future (FP issue)
+                hopf_values = 2 * self.V_hopf(0.999 * self.dynamics.input_to_coord(model_coords).t())
 
         
         if self.pretrain:
