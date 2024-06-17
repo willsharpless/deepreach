@@ -200,12 +200,13 @@ class Experiment(ABC):
                             grads_dirichlet = torch.cat(grads_dirichlet)
 
                             # Gradients with respect to the hopf loss
-                            optim.zero_grad()
-                            losses['hopf'].backward(retain_graph=True)
-                            grads_hopf = []
-                            for key, param in params.items():
-                                grads_hopf.append(param.grad.view(-1))
-                            grads_hopf = torch.cat(grads_hopf)
+                            if self.dataset.dynamics.loss_type == 'brt_hjivi_hopf':
+                                optim.zero_grad()
+                                losses['hopf'].backward(retain_graph=True)
+                                grads_hopf = []
+                                for key, param in params.items():
+                                    grads_hopf.append(param.grad.view(-1))
+                                grads_hopf = torch.cat(grads_hopf)
 
                             # # Plot the gradients
                             # import seaborn as sns
@@ -233,12 +234,14 @@ class Experiment(ABC):
                             new_weight = 0.9*new_weight + 0.1*num/den
                             losses['dirichlet'] = new_weight*losses['dirichlet']
 
-                            den = torch.mean(torch.abs(grads_hopf))
-                            new_weight_hopf = 0.9*new_weight_hopf + 0.1*num/den
-                            losses['hopf'] = new_weight_hopf*losses['hopf']
+                            if self.dataset.dynamics.loss_type == 'brt_hjivi_hopf':
+                                den = torch.mean(torch.abs(grads_hopf))
+                                new_weight_hopf = 0.9*new_weight_hopf + 0.1*num/den
+                                losses['hopf'] = new_weight_hopf*losses['hopf']
 
                         writer.add_scalar('weight_scaling', new_weight, total_steps)
-                        writer.add_scalar('weight_scaling_hopf', new_weight_hopf, total_steps)
+                        if self.dataset.dynamics.loss_type == 'brt_hjivi_hopf':
+                            writer.add_scalar('weight_scaling_hopf', new_weight_hopf, total_steps)
 
                     # import ipdb; ipdb.set_trace()
 

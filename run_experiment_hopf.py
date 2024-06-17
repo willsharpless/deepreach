@@ -45,7 +45,7 @@ if (mode == 'all') or (mode == 'train'):
 
     # simulation data source options
     p.add_argument('--numpoints', type=int, default=65000, help='Number of points in simulation data source __getitem__.')
-    p.add_argument('--pretrain', action='store_true', default=True, required=False, help='Pretrain dirichlet conditions')
+    p.add_argument('--pretrain', action='store_true', default=False, required=False, help='Pretrain dirichlet conditions')
     p.add_argument('--pretrain_iters', type=int, default=2000, required=False, help='Number of pretrain iterations')
     p.add_argument('--tMin', type=float, default=0.0, required=False, help='Start time of the simulation')
     p.add_argument('--tMax', type=float, default=1.0, required=False, help='End time of the simulation')
@@ -94,7 +94,7 @@ if (mode == 'all') or (mode == 'train'):
     # hopf options
     p.add_argument('--hopf_loss', type=str, default='lindiff', choices=['none', 'lindiff', 'grad'], help='Method for using Hopf data')
     p.add_argument('--hopf_loss_divisor', default=1.0, required=False, type=float, help='What to divide the hopf loss by for loss reweighting')
-    p.add_argument('--hopf_pretrain', action='store_true', default=True, required=False, help='Pretrain hopf conditions')
+    p.add_argument('--hopf_pretrain', action='store_true', default=False, required=False, help='Pretrain hopf conditions')
     p.add_argument('--hopf_pretrain_iters', type=int, default=10000, required=False, help='Number of pretrain iterations with Hopf loss')
 
     # load dynamics_class choices dynamically from dynamics module
@@ -179,6 +179,7 @@ dataset = dataio.ReachabilityDataset(
     tMin=orig_opt.tMin, tMax=orig_opt.tMax, 
     counter_start=orig_opt.counter_start, counter_end=orig_opt.counter_end, 
     num_src_samples=orig_opt.num_src_samples, num_target_samples=orig_opt.num_target_samples,
+    use_hopf=orig_opt.hopf_loss != 'none',
     hopf_pretrain=orig_opt.hopf_pretrain, hopf_pretrain_iters=orig_opt.hopf_pretrain_iters)
 
 model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,

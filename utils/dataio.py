@@ -1,9 +1,10 @@
+from juliacall import Main as jl, convert as jlconvert
 import torch
 from torch.utils.data import Dataset
 
 # uses model input and real boundary fn
 class ReachabilityDataset(Dataset):
-    def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, hopf_pretrain=False, hopf_pretrain_iters=10000):
+    def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0):
         self.dynamics = dynamics
         self.numpoints = numpoints
         self.pretrain = pretrain
@@ -16,10 +17,33 @@ class ReachabilityDataset(Dataset):
         self.num_src_samples = num_src_samples
         self.num_target_samples = num_target_samples
 
-        self.hopf_pretrain = hopf_pretrain
+        self.use_hopf = use_hopf
+        self.hopf_pretrain = use_hopf and hopf_pretrain
         self.hopf_pretrain_counter = 0
         self.hopf_pretrain_iters = hopf_pretrain_iters
 
+        ## compute Hopf value interpolant (if hopf loss)
+        # using dynamics load/solve corresponding HopfReachability.jl code to get interpolation solution
+        if use_hopf:
+            jl.seval("using JLD2, Interpolations")
+            self.V_hopf_itp = jl.load("lin2d_hopf_interp_linear.jld")["V_itp"]
+            fast_interp_exec = """
+            function fast_interp(_V_itp, tXg, method="grid")
+                # assumes tXg has time in first row
+                if method == "grid"
+                    Vg = zeros(size(tXg,2))
+                    for i=1:length(Vg)
+                        Vg[i] = _V_itp(tXg[:,i][end:-1:1]...)
+                    end
+                else
+                    Vg = ScatteredInterpolation.evaluate(_V_itp, tXg)
+                end
+                return Vg
+            end
+            """
+            self.fast_interp = jl.seval(fast_interp_exec)
+            self.V_hopf = lambda tXg: torch.from_numpy(self.fast_interp(self.V_hopf_itp, tXg.numpy()).to_numpy())
+        
     def __len__(self):
         return 1
 
@@ -48,10 +72,11 @@ class ReachabilityDataset(Dataset):
             reach_values = self.dynamics.reach_fn(self.dynamics.input_to_coord(model_coords)[..., 1:])
             avoid_values = self.dynamics.avoid_fn(self.dynamics.input_to_coord(model_coords)[..., 1:])
         
-        ## WAS: compute Hopf value
+        ## TODO: compute Hopf value
         # compute find/solve value at model_coords with Hopf (prob from preloaded interpolation for now)
-        # format properly
-        hopf_values = boundary_values.detach().clone()
+        # hopf_values = boundary_values.detach().clone()
+        if self.use_hopf:
+            hopf_values = self.V_hopf(self.dynamics.input_to_coord(model_coords).t())
         
         if self.pretrain:
             dirichlet_masks = torch.ones(model_coords.shape[0]) > 0
