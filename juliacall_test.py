@@ -4,8 +4,10 @@ from juliacall import Main as jl, convert as jlconvert
 import torch
 
 # julia_path = jl.seval("Sys.BINDIR")
-
 # print(f"Julia executable directory: {julia_path}")
+
+# jl.seval("using Pkg")
+# Pkg.add("JLD, JLD2, Interpolations")
 
 jl.seval("using JLD2, Interpolations")
 

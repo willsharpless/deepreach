@@ -126,9 +126,9 @@ class Experiment(ABC):
 
         total_steps = 0
 
-        if adjust_relative_grads:
-            new_weight = 1
-            new_weight_hopf = 1
+        # if adjust_relative_grads:
+        new_weight = 1
+        new_weight_hopf = 1
 
         with tqdm(total=len(train_dataloader) * epochs) as pbar:
             train_losses = []

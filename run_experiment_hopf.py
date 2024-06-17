@@ -45,7 +45,7 @@ if (mode == 'all') or (mode == 'train'):
 
     # simulation data source options
     p.add_argument('--numpoints', type=int, default=65000, help='Number of points in simulation data source __getitem__.')
-    p.add_argument('--pretrain', action='store_true', default=True, required=False, help='Pretrain dirichlet conditions')
+    p.add_argument('--pretrain', action='store_true', default=False, required=False, help='Pretrain dirichlet conditions')
     p.add_argument('--pretrain_iters', type=int, default=2000, required=False, help='Number of pretrain iterations')
     p.add_argument('--tMin', type=float, default=0.0, required=False, help='Start time of the simulation')
     p.add_argument('--tMax', type=float, default=1.0, required=False, help='End time of the simulation')
@@ -68,7 +68,7 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--num_epochs', type=int, default=150000, help='Number of epochs to train for.')
     p.add_argument('--clip_grad', default=0.0, type=float, help='Clip gradient.')
     p.add_argument('--use_lbfgs', default=False, type=bool, help='use L-BFGS.')
-    p.add_argument('--adj_rel_grads', default=True, type=bool, help='adjust the relative magnitude of the losses')
+    p.add_argument('--adj_rel_grads', default=False, type=bool, help='adjust the relative magnitude of the losses') # adds 0.05s/it FYI
     p.add_argument('--dirichlet_loss_divisor', default=1.0, required=False, type=float, help='What to divide the dirichlet loss by for loss reweighting')
 
     # cost-supervised learning (CSL) options
