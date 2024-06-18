@@ -59,7 +59,11 @@ class ReachabilityDataset(Dataset):
             times = torch.full((self.numpoints, 1), self.tMin)
         else:
             # slowly grow time values from start time
-            times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * ((self.counter + self.hopf_pretrain_counter)/(self.counter_end + self.hopf_pretrain_iters)))
+            if self.hopf_pretrain:
+                # times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * ((self.counter + self.hopf_pretrain_counter)/(self.counter_end + self.hopf_pretrain_iters)))
+                times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin)) # during hopf pt, sample across all time?
+            else:
+                times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * (self.counter/self.counter_end))
             # make sure we always have training samples at the initial time
             times[-self.num_src_samples:, 0] = self.tMin
 
