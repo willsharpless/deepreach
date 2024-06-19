@@ -19,6 +19,7 @@ class ReachabilityDataset(Dataset):
 
         self.use_hopf = use_hopf
         self.hopf_pretrain = use_hopf and hopf_pretrain
+        self.hopf_pretrained = use_hopf and hopf_pretrain
         self.hopf_pretrain_counter = 0
         self.hopf_pretrain_iters = hopf_pretrain_iters
 
@@ -59,7 +60,7 @@ class ReachabilityDataset(Dataset):
             times = torch.full((self.numpoints, 1), self.tMin)
         else:
             # slowly grow time values from start time
-            if self.hopf_pretrain:
+            if self.hopf_pretrain or self.hopf_pretrained:
                 # times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * ((self.counter + self.hopf_pretrain_counter)/(self.counter_end + self.hopf_pretrain_iters)))
                 times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin)) # during hopf pt, sample across all time?
             else:
