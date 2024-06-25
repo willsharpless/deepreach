@@ -243,6 +243,11 @@ class Experiment(ABC):
                         if self.dataset.dynamics.loss_type == 'brt_hjivi_hopf':
                             writer.add_scalar('weight_scaling_hopf', new_weight_hopf, total_steps)
 
+                    ## Decay Hopf Loss (After Pretraining)
+                    elif self.dataset.hopf_loss_decay and not(self.dataset.hopf_pretrain) and not(self.dataset.pretrain) and self.dataset.dynamics.loss_type == 'brt_hjivi_hopf':
+                        losses['hopf'] = new_weight_hopf*losses['hopf']
+                        new_weight_hopf = self.dataset.hopf_loss_decay_w * new_weight_hopf
+
                     # import ipdb; ipdb.set_trace()
 
                     train_loss = 0.

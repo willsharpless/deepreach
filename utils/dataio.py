@@ -4,7 +4,8 @@ from torch.utils.data import Dataset
 
 # uses model input and real boundary fn
 class ReachabilityDataset(Dataset):
-    def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0):
+    def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, 
+                 use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0, hopf_loss_decay=False, hopf_loss_decay_w=0.):
         self.dynamics = dynamics
         self.numpoints = numpoints
         self.pretrain = pretrain
@@ -22,6 +23,8 @@ class ReachabilityDataset(Dataset):
         self.hopf_pretrained = use_hopf and hopf_pretrain
         self.hopf_pretrain_counter = 0
         self.hopf_pretrain_iters = hopf_pretrain_iters
+        self.hopf_loss_decay = hopf_loss_decay
+        self.hopf_loss_decay_w = hopf_loss_decay_w
 
         ## compute Hopf value interpolant (if hopf loss)
         # using dynamics load/solve corresponding HopfReachability.jl code to get interpolation solution

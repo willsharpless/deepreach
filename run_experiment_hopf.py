@@ -96,6 +96,8 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--hopf_loss_divisor', default=1.0, required=False, type=float, help='What to divide the hopf loss by for loss reweighting')
     p.add_argument('--hopf_pretrain', action='store_true', default=False, required=False, help='Pretrain hopf conditions')
     p.add_argument('--hopf_pretrain_iters', type=int, default=10000, required=False, help='Number of pretrain iterations with Hopf loss')
+    p.add_argument('--hopf_loss_decay', action='store_true', default=False, required=False, help='Hopf loss weight decay')
+    p.add_argument('--hopf_loss_decay_w', default=0.9999, required=False, type=float, help='Hopf loss weight decay rate')
 
     # load dynamics_class choices dynamically from dynamics module
     dynamics_classes_dict = {name: clss for name, clss in inspect.getmembers(dynamics, inspect.isclass) if clss.__bases__[0] == dynamics.Dynamics}
@@ -180,7 +182,8 @@ dataset = dataio.ReachabilityDataset(
     counter_start=orig_opt.counter_start, counter_end=orig_opt.counter_end, 
     num_src_samples=orig_opt.num_src_samples, num_target_samples=orig_opt.num_target_samples,
     use_hopf=orig_opt.hopf_loss != 'none',
-    hopf_pretrain=orig_opt.hopf_pretrain, hopf_pretrain_iters=orig_opt.hopf_pretrain_iters)
+    hopf_pretrain=orig_opt.hopf_pretrain, hopf_pretrain_iters=orig_opt.hopf_pretrain_iters,
+    hopf_loss_decay=orig_opt.hopf_loss_decay, hopf_loss_decay_w=orig_opt.hopf_loss_decay_w,)
 
 model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
                              final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl)
