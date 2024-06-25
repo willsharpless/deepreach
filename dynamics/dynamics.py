@@ -422,12 +422,12 @@ class Linear2D(Dynamics):
         }
 
 class LessLinear2D(Dynamics):
-    def __init__(self, gamma:float, gamma2:float):
+    def __init__(self, gamma:float, mu:float, alpha:float):
         # __init__(self, goalR:float, u_max:float, d_max:float, A:tensor, B:tensor, C:tensor, set_mode:str) #FIXME
         goalR, u_max, d_max, set_mode = 0.25, 0.5, 0.3, "reach" 
         self.a11, self.a12, self.a21, self.a22 = 0., .5, -1., -1. # FIXME lin algebra will be faster and cleaner
         self.b1, self.b2, self.c1, self.c2 = .4, .1, 0., .1
-        self.gamma, self.gamma2 = gamma, gamma2
+        self.gamma, self.mu, self.alpha = gamma, mu, alpha
 
         self.goalR = goalR
         self.u_max, self.d_max = u_max, d_max
@@ -459,7 +459,7 @@ class LessLinear2D(Dynamics):
     def dsdt(self, state, control, disturbance):
         dsdt = torch.zeros_like(state)
         nl_term =  - self.gamma * state[..., 1] * state[..., 0] * state[..., 0]
-        nl_term2 =  self.gamma2 * state[..., 0] * state[..., 1] * state[..., 1]
+        nl_term2 =  self.mu * torch.sin(self.alpha * state[..., 0]) * state[..., 1] * state[..., 1]
         dsdt[..., 0] = self.a11 * state[..., 0] + self.a12 * state[..., 1] + self.b1 * control[..., 0] + self.c1 * disturbance[..., 0] + nl_term2
         dsdt[..., 1] = self.a21 * state[..., 0] + self.a22 * state[..., 1] + self.b2 * control[..., 1] + self.c2 * disturbance[..., 1] + nl_term
         return dsdt
@@ -475,7 +475,7 @@ class LessLinear2D(Dynamics):
     
     def hamiltonian(self, state, dvds):
         nl_term =  - self.gamma * state[..., 1] * state[..., 0] * state[..., 0]
-        nl_term2 =  self.gamma2 * state[..., 0] * state[..., 1] * state[..., 1]
+        nl_term2 =  self.mu * torch.sin(self.alpha * state[..., 0]) * state[..., 1] * state[..., 1]
         pAx = dvds[..., 0] * (self.a11 * state[..., 0] + self.a12 * state[..., 1] + nl_term2) + dvds[..., 1] * (self.a21 * state[..., 0] + self.a22 * state[..., 1] + nl_term)
         pb = self.b1 * torch.abs(dvds[..., 0]) + self.b2 * torch.abs(dvds[..., 1])
         pc = self.c1 * torch.abs(dvds[..., 0]) + self.c2 * torch.abs(dvds[..., 1])
