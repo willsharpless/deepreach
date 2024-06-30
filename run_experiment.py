@@ -59,6 +59,7 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--model_mode', type=str, default='mlp', required=False, choices=['mlp', 'rbf', 'pinn'], help='Whether to use uniform velocity parameter')
     p.add_argument('--num_hl', type=int, default=3, required=False, help='The number of hidden layers')
     p.add_argument('--num_nl', type=int, default=512, required=False, help='Number of neurons per hidden layer.')
+    p.add_argument('--deepreach_model', type=str, default='exact', required=False, choices=['exact', 'diff', 'vanilla'], help='deepreach model')
 
     # training options
     p.add_argument('--epochs_til_ckpt', type=int, default=1000, help='Time interval in seconds until checkpoint is saved.')
@@ -164,7 +165,7 @@ np.random.seed(orig_opt.seed)
 
 dynamics_class = getattr(dynamics, orig_opt.dynamics_class)
 dynamics = dynamics_class(**{argname: getattr(orig_opt, argname) for argname in inspect.signature(dynamics_class).parameters.keys() if argname != 'self'})
-
+dynamics.deepreach_model=orig_opt.deepreach_model
 dataset = dataio.ReachabilityDataset(
     dynamics=dynamics, numpoints=orig_opt.numpoints, 
     pretrain=orig_opt.pretrain, pretrain_iters=orig_opt.pretrain_iters, 
