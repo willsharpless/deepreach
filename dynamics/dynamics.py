@@ -423,7 +423,9 @@ class Linear2D(Dynamics):
 
 class LessLinear2D(Dynamics):
     def __init__(self, gamma:float, mu:float, alpha:float):
+        # __init__(self):
         # __init__(self, goalR:float, u_max:float, d_max:float, A:tensor, B:tensor, C:tensor, set_mode:str) #FIXME
+        # gamma, mu, alpha = 20, -20, 1
         goalR, u_max, d_max, set_mode = 0.25, 0.5, 0.3, "reach" 
         self.a11, self.a12, self.a21, self.a22 = 0., .5, -1., -1. # FIXME lin algebra will be faster and cleaner
         self.b1, self.b2, self.c1, self.c2 = .4, .1, 0., .1

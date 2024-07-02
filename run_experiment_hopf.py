@@ -65,7 +65,7 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--steps_til_summary', type=int, default=100, help='Time interval in seconds until tensorboard summary is saved.')
     p.add_argument('--batch_size', type=int, default=1, help='Batch size used during training (irrelevant, since len(dataset) == 1).')
     p.add_argument('--lr', type=float, default=2e-5, help='learning rate. default=2e-5')
-    p.add_argument('--num_epochs', type=int, default=150000, help='Number of epochs to train for.')
+    p.add_argument('--num_epochs', type=int, default=100000, help='Number of epochs to train for.')
     p.add_argument('--clip_grad', default=0.0, type=float, help='Clip gradient.')
     p.add_argument('--use_lbfgs', default=False, type=bool, help='use L-BFGS.')
     p.add_argument('--adj_rel_grads', default=False, type=bool, help='adjust the relative magnitude of the losses') # adds 0.05s/it FYI
@@ -99,9 +99,12 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--hopf_loss_decay', action='store_true', default=False, required=False, help='Hopf loss weight decay')
     p.add_argument('--hopf_loss_decay_w', default=0.9999, required=False, type=float, help='Hopf loss weight decay rate')
 
+    # record set metrics
+    p.add_argument('--set_metrics', action='store_true', default=True, required=False, help='Compute and Score the Learned Set Similarity (Needs Ground Truth)')
+
     # load dynamics_class choices dynamically from dynamics module
     dynamics_classes_dict = {name: clss for name, clss in inspect.getmembers(dynamics, inspect.isclass) if clss.__bases__[0] == dynamics.Dynamics}
-    p.add_argument('--dynamics_class', type=str, default="Linear2D", choices=dynamics_classes_dict.keys(), help='Dynamics class to use.') #FIXME: required=True instead of default
+    p.add_argument('--dynamics_class', type=str, default="LessLinear2D", choices=dynamics_classes_dict.keys(), help='Dynamics class to use.') #FIXME: required=True instead of default
     # load special dynamics_class arguments dynamically from chosen dynamics class
     dynamics_class = dynamics_classes_dict[p.parse_known_args()[0].dynamics_class]
     dynamics_params = {name: param for name, param in inspect.signature(dynamics_class).parameters.items() if name != 'self'}
@@ -183,7 +186,8 @@ dataset = dataio.ReachabilityDataset(
     num_src_samples=orig_opt.num_src_samples, num_target_samples=orig_opt.num_target_samples,
     use_hopf=orig_opt.hopf_loss != 'none',
     hopf_pretrain=orig_opt.hopf_pretrain, hopf_pretrain_iters=orig_opt.hopf_pretrain_iters,
-    hopf_loss_decay=orig_opt.hopf_loss_decay, hopf_loss_decay_w=orig_opt.hopf_loss_decay_w,)
+    hopf_loss_decay=orig_opt.hopf_loss_decay, hopf_loss_decay_w=orig_opt.hopf_loss_decay_w,
+    record_set_metrics=orig_opt.set_metrics)
 
 model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
                              final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl)

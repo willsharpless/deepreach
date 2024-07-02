@@ -244,7 +244,7 @@ class Experiment(ABC):
                             writer.add_scalar('weight_scaling_hopf', new_weight_hopf, total_steps)
 
                     ## Decay Hopf Loss (After Pretraining)
-                    elif self.dataset.hopf_loss_decay and not(self.dataset.hopf_pretrain) and not(self.dataset.pretrain) and self.dataset.dynamics.loss_type == 'brt_hjivi_hopf':
+                    elif self.dataset.hopf_loss_decay and self.dataset.dynamics.loss_type == 'brt_hjivi_hopf': # and not(self.dataset.hopf_pretrain) and not(self.dataset.pretrain):
                         losses['hopf'] = new_weight_hopf*losses['hopf']
                         new_weight_hopf = self.dataset.hopf_loss_decay_w * new_weight_hopf
 
@@ -292,6 +292,12 @@ class Experiment(ABC):
                                 'train_loss': train_loss}
                             for loss_name, loss in losses.items():
                                 log_dict[loss_name + "_loss"] = loss
+                            if self.dataset.record_set_metrics:
+                                with torch.no_grad():
+                                    JIp, FIp, FEp = self.set_metrics_overtime()
+                                log_dict["Jaccard Index over Time"] = JIp
+                                log_dict["Falsely Included percent over Time"] = FIp
+                                log_dict["Falsely Excluded percent over Time"] = FEp
                             wandb.log(log_dict)
 
                     total_steps += 1
@@ -540,7 +546,7 @@ class DeepReach(Experiment):
 
 class DeepReach2D(Experiment):
     def init_special(self):
-        pass
+        pass        
     
     def validate(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution):
         was_training = self.model.training
@@ -589,6 +595,73 @@ class DeepReach2D(Experiment):
             })
         plt.close()
 
+        if self.dataset.record_set_metrics:
+            with torch.no_grad():
+                JIps, FIps, FEps = self.set_metrics_eachtime()
+            
+            if not(hasattr(self, 't_ep_acc_fig')):
+                self.t_ep_acc_fig, (self.t_ep_acc_fig_ax1, self.t_ep_acc_fig_ax2, self.t_ep_acc_fig_ax3) = plt.subplots(1, 3, figsize=(5*len(times), 5*1), subplot_kw={'projection': '3d'})
+
+                for axi, ax in enumerate([self.t_ep_acc_fig_ax1, self.t_ep_acc_fig_ax2, self.t_ep_acc_fig_ax3]):
+                    ax.set_xlim(self.dataset.tMin, self.dataset.tMax)
+                    ax.set_ylim(1, self.dataset.counter_end/100)
+                    ax.set_zlim(0, 1)
+                    ax.set_xlabel('Time')
+                    ax.set_ylabel('Epoch (C)')
+                    ax.set_zlabel(['JI', 'FI%', 'FE%'][axi])
+                    ax.view_init(elev=20., azim=-35, roll=0)
+
+            time_data = torch.linspace(self.dataset.tMin, self.dataset.tMax, self.dataset.n_grid_t_pts_hi)
+            epoch_data = epoch*torch.ones(self.dataset.n_grid_t_pts_hi)/100
+
+            lw = 1
+            self.t_ep_acc_fig_ax1.plot(time_data, epoch_data, JIps, lw=lw, color="blue")
+            self.t_ep_acc_fig_ax2.plot(time_data, epoch_data, FIps, lw=lw, color="green")
+            self.t_ep_acc_fig_ax3.plot(time_data, epoch_data, FEps, lw=lw, color="red")
+
+            if self.use_wandb:
+                wandb.log({
+                    'Time vs. Epoch vs. Set Accuracy compared to DP': wandb.Image(self.t_ep_acc_fig),
+                })
+            plt.close()
+
         if was_training:
             self.model.train()
             self.model.requires_grad_(True)
+    
+    def set_metrics_overtime(self):
+
+        model_results_grid = self.model({'coords': self.dataset.model_coords_grid_allt})
+        values_grid = self.dataset.dynamics.io_to_value(model_results_grid['model_in'].detach(), model_results_grid['model_out'].squeeze(dim=-1))
+        values_grid_sub0_ixs = torch.argwhere(values_grid <= 0).flatten()
+
+        # n_intersect = np.intersect1d(values_grid_sub0_ixs, self.dataset.values_DP_grid_sub0_ixs).size
+        n_intersect = values_grid_sub0_ixs[(values_grid_sub0_ixs.view(1, -1) == self.dataset.values_DP_grid_sub0_ixs.view(-1, 1)).any(dim=0)].size()[0] # ty Amin_Jun
+        n_overlap = values_grid_sub0_ixs.size()[0] + self.dataset.values_DP_grid_sub0_ixs.size()[0] - n_intersect
+
+        FIp = (values_grid_sub0_ixs.size()[0] - n_intersect) / values_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
+        FEp = (self.dataset.values_DP_grid_sub0_ixs.size()[0] - n_intersect) / self.dataset.values_DP_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
+        JIp = n_intersect / n_overlap
+
+        return JIp, FIp, FEp
+        
+    def set_metrics_eachtime(self): 
+
+        model_results_grid = self.model({'coords': self.dataset.model_coords_grid_allt_hi})
+        values_grid = self.dataset.dynamics.io_to_value(model_results_grid['model_in'].detach(), model_results_grid['model_out'].squeeze(dim=-1))
+        
+        JIps, FIps, FEps = torch.zeros(self.dataset.n_grid_t_pts_hi), torch.zeros(self.dataset.n_grid_t_pts_hi), torch.zeros(self.dataset.n_grid_t_pts_hi)
+        for i in range(self.dataset.n_grid_t_pts_hi):
+
+            values_grid_sub0_ixs = torch.argwhere(values_grid[i*self.dataset.n_grid_pts:(i+1)*self.dataset.n_grid_pts] <= 0).flatten()
+            values_DP_grid_sub0_ixs = torch.argwhere(self.dataset.values_DP_grid_hi[i*self.dataset.n_grid_pts:(i+1)*self.dataset.n_grid_pts] <= 0).flatten()
+
+            # n_intersect = np.intersect1d(values_grid_sub0_ixs, values_DP_grid_sub0_ixs).size
+            n_intersect = values_grid_sub0_ixs[(values_grid_sub0_ixs.view(1, -1) == values_DP_grid_sub0_ixs.view(-1, 1)).any(dim=0)].size()[0] # ty Amin_Jun
+            n_overlap = values_grid_sub0_ixs.size()[0] + values_DP_grid_sub0_ixs.size()[0] - n_intersect
+
+            FIps[i] = (values_grid_sub0_ixs.size()[0] - n_intersect) / values_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: self.dataset.n_grid_pts
+            FEps[i] = (values_DP_grid_sub0_ixs.size()[0] - n_intersect) / values_DP_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: self.dataset.n_grid_pts
+            JIps[i] = n_intersect / n_overlap
+
+        return JIps, FIps, FEps
