@@ -5,7 +5,11 @@ from torch.utils.data import Dataset
 # uses model input and real boundary fn
 class ReachabilityDataset(Dataset):
     def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, 
-                 use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0, hopf_loss_decay=False, hopf_loss_decay_w=0., record_set_metrics=False):
+                 use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0, hopf_loss_decay=False, hopf_loss_decay_w=0., diff_con_loss_incr=False, record_set_metrics=False,
+                 manual_load=False, load_packet=None):
+        
+        # print("Into the dataset!")
+
         self.dynamics = dynamics
         self.numpoints = numpoints
         self.pretrain = pretrain
@@ -25,11 +29,17 @@ class ReachabilityDataset(Dataset):
         self.hopf_pretrain_iters = hopf_pretrain_iters
         self.hopf_loss_decay = hopf_loss_decay
         self.hopf_loss_decay_w = hopf_loss_decay_w
+        self.diff_con_loss_incr = hopf_loss_decay and diff_con_loss_incr
         self.record_set_metrics = record_set_metrics
+
+        if manual_load:
+            self.V_hopf_itp, self.fast_interp, self.V_hopf, self.V_DP_itp, self.V_DP = load_packet
+
+        # print("About to call julia")
 
         ## compute Hopf value interpolant (if hopf loss)
         # using dynamics load/solve corresponding HopfReachability.jl code to get interpolation solution
-        if use_hopf:
+        if use_hopf and not(manual_load):
             jl.seval("using JLD2, Interpolations")
             self.V_hopf_itp = jl.load("lin2d_hopf_interp_linear.jld")["V_itp"]
             fast_interp_exec = """
@@ -48,29 +58,32 @@ class ReachabilityDataset(Dataset):
             """
             self.fast_interp = jl.seval(fast_interp_exec)
             self.V_hopf = lambda tXg: torch.from_numpy(self.fast_interp(self.V_hopf_itp, tXg.numpy()).to_numpy())
+            
+        # print("About to call julia again")
 
         if record_set_metrics:
-            jl.seval("using JLD2, Interpolations")
-            # self.V_DP_itp = jl.load("llin2d_g20_m0_a0_DP_interp_linear.jld")["V_itp"]
-            # self.V_DP_itp = jl.load("llin2d_g20_m-20_a1_DP_interp_linear.jld")["V_itp"]
-            self.V_DP_itp = jl.load("llin2d_g20_m20_a-20_DP_interp_linear.jld")["V_itp"]
-            fast_interp_exec = """
-            function fast_interp(_V_itp, tXg, method="grid")
-                # assumes tXg has time in first row
-                if method == "grid"
-                    Vg = zeros(size(tXg,2))
-                    for i=1:length(Vg)
-                        Vg[i] = _V_itp(tXg[:,i][end:-1:1]...)
+            if not(manual_load):
+                jl.seval("using JLD2, Interpolations")
+                # self.V_DP_itp = jl.load("llin2d_g20_m0_a0_DP_interp_linear.jld")["V_itp"]
+                self.V_DP_itp = jl.load("llin2d_g20_m-20_a1_DP_interp_linear.jld")["V_itp"]
+                # self.V_DP_itp = jl.load("llin2d_g20_m20_a-20_DP_interp_linear.jld")["V_itp"]
+                fast_interp_exec = """
+                function fast_interp(_V_itp, tXg, method="grid")
+                    # assumes tXg has time in first row
+                    if method == "grid"
+                        Vg = zeros(size(tXg,2))
+                        for i=1:length(Vg)
+                            Vg[i] = _V_itp(tXg[:,i][end:-1:1]...)
+                        end
+                    else
+                        Vg = ScatteredInterpolation.evaluate(_V_itp, tXg)
                     end
-                else
-                    Vg = ScatteredInterpolation.evaluate(_V_itp, tXg)
+                    return Vg
                 end
-                return Vg
-            end
-            """
-            if not(hasattr(self, 'fast_interp')):
-                self.fast_interp = jl.seval(fast_interp_exec)
-            self.V_DP = lambda tXg: torch.from_numpy(self.fast_interp(self.V_DP_itp, tXg.numpy()).to_numpy())
+                """
+                if not(hasattr(self, 'fast_interp')):
+                    self.fast_interp = jl.seval(fast_interp_exec)
+                self.V_DP = lambda tXg: torch.from_numpy(self.fast_interp(self.V_DP_itp, tXg.numpy()).to_numpy())
 
             self.n_grid_t_pts, self.n_grid_t_pts_hi = 5, 20
             xig = torch.arange(-0.99, 1.01, 0.02) # 100 x 100
@@ -92,6 +105,8 @@ class ReachabilityDataset(Dataset):
                 new_coords = torch.cat((times, self.model_states_grid), dim=1) 
                 self.model_coords_grid_allt_hi = torch.cat((self.model_coords_grid_allt_hi, new_coords), dim=0) 
 
+            # print("About to move stuff to CUDA")
+
             self.values_DP_grid = 2 * self.V_DP(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
             self.values_DP_grid_sub0_ixs = torch.argwhere(self.values_DP_grid <= 0).flatten().cuda()
 
@@ -101,7 +116,6 @@ class ReachabilityDataset(Dataset):
             self.model_coords_grid_allt = self.model_coords_grid_allt.cuda()
             self.model_coords_grid_allt_hi = self.model_coords_grid_allt_hi.cuda()
             self.model_states_grid = self.model_states_grid.cuda()
-
         
     def __len__(self):
         return 1
@@ -117,7 +131,7 @@ class ReachabilityDataset(Dataset):
             # only sample in time around the initial condition
             times = torch.full((self.numpoints, 1), self.tMin)
         else:
-            # slowly grow time values from start time
+            # slowly grow time values from start time (unless Hopf)
             if self.hopf_pretrain or self.hopf_pretrained:
                 # times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * ((self.counter + self.hopf_pretrain_counter)/(self.counter_end + self.hopf_pretrain_iters)))
                 times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin)) # during hopf pt, sample across all time?
