@@ -97,6 +97,7 @@ class Experiment(ABC):
             loss_fn, clip_grad, use_lbfgs, adjust_relative_grads, 
             val_x_resolution, val_y_resolution, val_z_resolution, val_time_resolution,
             use_CSL, CSL_lr, CSL_dt, epochs_til_CSL, num_CSL_samples, CSL_loss_frac_cutoff, max_CSL_epochs, CSL_loss_weight, CSL_batch_size,
+            dual_lr=False, lr_decay_w=1., lr_hopf=2e-5, lr_hopf_decay_w=1., smoothing_factor=0.8
         ):
         was_eval = not self.model.training
         self.model.train()
@@ -104,7 +105,16 @@ class Experiment(ABC):
 
         train_dataloader = DataLoader(self.dataset, shuffle=True, batch_size=batch_size, pin_memory=True, num_workers=0)
 
-        optim = torch.optim.Adam(lr=lr, params=self.model.parameters())
+        if dual_lr and self.dataset.hopf_pretrain:
+            optim_hopf = torch.optim.Adam(lr=lr_hopf, params=self.model.parameters())
+            optim_std = torch.optim.Adam(lr=lr, params=self.model.parameters())
+            lr_scheduler_hopf = torch.optim.lr_scheduler.ExponentialLR(optimizer=optim_hopf, gamma=lr_hopf_decay_w)
+            lr_scheduler_std = torch.optim.lr_scheduler.ExponentialLR(optimizer=optim_std, gamma=lr_decay_w)
+            optim = optim_hopf
+            lr_scheduler = lr_scheduler_hopf
+        else:
+            optim = torch.optim.Adam(lr=lr, params=self.model.parameters())
+            lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer=optim, gamma=lr_decay_w)
 
         # copy settings from Raissi et al. (2019) and here 
         # https://github.com/maziarraissi/PINNs
@@ -126,9 +136,13 @@ class Experiment(ABC):
 
         total_steps = 0
 
-        # if adjust_relative_grads:
         new_weight = 1
         new_weight_hopf = 1
+        new_weight_diff_con = 1
+
+        JIp_s_max, JIp_s = 0., 0.
+
+        # print("About to train...")
 
         with tqdm(total=len(train_dataloader) * epochs) as pbar:
             train_losses = []
@@ -166,6 +180,11 @@ class Experiment(ABC):
                         losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, reach_values, avoid_values, dirichlet_masks)
                     else:
                         raise NotImplementedError
+                    
+                    ## Switch Optimizers/Rates (after Hopf Pretraining)
+                    if dual_lr and not(self.dataset.hopf_pretrain) and self.dataset.hopf_pretrained:
+                        optim = optim_std
+                        lr_scheduler = lr_scheduler_std
                     
                     if use_lbfgs:
                         def closure():
@@ -243,10 +262,16 @@ class Experiment(ABC):
                         if self.dataset.dynamics.loss_type == 'brt_hjivi_hopf':
                             writer.add_scalar('weight_scaling_hopf', new_weight_hopf, total_steps)
 
-                    ## Decay Hopf Loss (After Pretraining)
-                    elif self.dataset.hopf_loss_decay and self.dataset.dynamics.loss_type == 'brt_hjivi_hopf': # and not(self.dataset.hopf_pretrain) and not(self.dataset.pretrain):
-                        losses['hopf'] = new_weight_hopf*losses['hopf']
+                    ## Decay Hopf Loss (Works Better if Started in Pretraining)
+                    if self.dataset.hopf_loss_decay and self.dataset.dynamics.loss_type == 'brt_hjivi_hopf': # and not(self.dataset.pretrain): # and not(self.dataset.hopf_pretrain):
+                        losses['hopf'] = new_weight_hopf * losses['hopf']
                         new_weight_hopf = self.dataset.hopf_loss_decay_w * new_weight_hopf
+                    
+                    ## Incrementally Introduce Differential Constraint Loss (After All Pretraining)
+                    if self.dataset.diff_con_loss_incr and not(self.dataset.pretrain) and not(self.dataset.hopf_pretrain):
+                        # losses['diff_constraint_hom'] = (1-new_weight_hopf) * losses['diff_constraint_hom']
+                        losses['diff_constraint_hom'] = (1-new_weight_diff_con) * losses['diff_constraint_hom']
+                        new_weight_diff_con = self.dataset.hopf_loss_decay_w * new_weight_diff_con
 
                     # import ipdb; ipdb.set_trace()
 
@@ -259,7 +284,7 @@ class Experiment(ABC):
                         elif loss_name == 'hopf':
                             writer.add_scalar(loss_name, single_loss/new_weight_hopf, total_steps)
                         else:
-                            writer.add_scalar(loss_name, single_loss, total_steps)
+                            writer.add_scalar(loss_name, single_loss/(1-new_weight_diff_con), total_steps)
                         train_loss += single_loss
 
                     train_losses.append(train_loss.item())
@@ -281,8 +306,11 @@ class Experiment(ABC):
                                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=clip_grad)
 
                         optim.step()
+                        lr_scheduler.step()
 
                     pbar.update(1)
+
+                    # print("About to write to WandB on epoch:", epoch)
 
                     if not total_steps % steps_til_summary:
                         tqdm.write("Epoch %d, Total loss %0.6f, iteration time %0.6f" % (epoch, train_loss, time.time() - start_time))
@@ -295,7 +323,11 @@ class Experiment(ABC):
                             if self.dataset.record_set_metrics:
                                 with torch.no_grad():
                                     JIp, FIp, FEp = self.set_metrics_overtime()
+                                    JIp_s = smoothing_factor * JIp + (1 - smoothing_factor) * JIp_s
+                                    JIp_s_max = max(JIp_s, JIp_s_max)
                                 log_dict["Jaccard Index over Time"] = JIp
+                                log_dict["Smooth Jaccard Index over Time"] = JIp_s
+                                log_dict["Max Smooth Jaccard Index over Time"] = JIp_s_max
                                 log_dict["Falsely Included percent over Time"] = FIp
                                 log_dict["Falsely Excluded percent over Time"] = FEp
                             wandb.log(log_dict)
@@ -638,8 +670,11 @@ class DeepReach2D(Experiment):
         # n_intersect = np.intersect1d(values_grid_sub0_ixs, self.dataset.values_DP_grid_sub0_ixs).size
         n_intersect = values_grid_sub0_ixs[(values_grid_sub0_ixs.view(1, -1) == self.dataset.values_DP_grid_sub0_ixs.view(-1, 1)).any(dim=0)].size()[0] # ty Amin_Jun
         n_overlap = values_grid_sub0_ixs.size()[0] + self.dataset.values_DP_grid_sub0_ixs.size()[0] - n_intersect
-
-        FIp = (values_grid_sub0_ixs.size()[0] - n_intersect) / values_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
+        
+        if values_grid_sub0_ixs.size()[0] > 0:
+            FIp = (values_grid_sub0_ixs.size()[0] - n_intersect) / values_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
+        else:
+            FIp = 1.
         FEp = (self.dataset.values_DP_grid_sub0_ixs.size()[0] - n_intersect) / self.dataset.values_DP_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
         JIp = n_intersect / n_overlap
 
@@ -660,7 +695,10 @@ class DeepReach2D(Experiment):
             n_intersect = values_grid_sub0_ixs[(values_grid_sub0_ixs.view(1, -1) == values_DP_grid_sub0_ixs.view(-1, 1)).any(dim=0)].size()[0] # ty Amin_Jun
             n_overlap = values_grid_sub0_ixs.size()[0] + values_DP_grid_sub0_ixs.size()[0] - n_intersect
 
-            FIps[i] = (values_grid_sub0_ixs.size()[0] - n_intersect) / values_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: self.dataset.n_grid_pts
+            if values_grid_sub0_ixs.size()[0] > 0:
+                FIps[i] = (values_grid_sub0_ixs.size()[0] - n_intersect) / values_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: self.dataset.n_grid_pts
+            else:
+                FIps[i]  = 1.
             FEps[i] = (values_DP_grid_sub0_ixs.size()[0] - n_intersect) / values_DP_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: self.dataset.n_grid_pts
             JIps[i] = n_intersect / n_overlap
 
