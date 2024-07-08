@@ -19,12 +19,12 @@ p.add_argument('--mode', type=str, default="train", choices=['all', 'train', 'te
 
 # save/load directory options
 p.add_argument('--experiments_dir', type=str, default='./runs', help='Where to save the experiment subdirectory.')
-p.add_argument('--experiment_name', type=str, default='test_run', help='Name of the experient subdirectory.') #FIXME: required=True instead of default
+p.add_argument('--experiment_name', type=str, default='test', help='Name of the experient subdirectory.') #FIXME: required=True instead of default
 p.add_argument('--use_wandb', default=False, action='store_true', help='use wandb for logging')
 
 use_wandb = p.parse_known_args()[0].use_wandb
 if use_wandb:
-    p.add_argument('--wandb_project', type=str, default='deepreach_hopf', required=False, help='wandb project')
+    p.add_argument('--wandb_project', type=str, default='deepreach_hopf_sweep', required=False, help='wandb project')
     p.add_argument('--wandb_entity', type=str, default='sas-lab', required=False, help='wandb entity')
     p.add_argument('--wandb_group', type=str, default='LessLinear2D', required=False, help='wandb group')
     p.add_argument('--wandb_name', type=str, default='test_run', required=False, help='name of wandb run')
