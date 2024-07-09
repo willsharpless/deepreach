@@ -116,7 +116,8 @@ def main():
         p.add_argument('--model_mode', type=str, default='mlp', required=False, choices=['mlp', 'rbf', 'pinn'], help='Whether to use uniform velocity parameter')
         p.add_argument('--num_hl', type=int, default=3, required=False, help='The number of hidden layers')
         p.add_argument('--num_nl', type=int, default=512, required=False, help='Number of neurons per hidden layer.')
-
+        p.add_argument('--deepreach_model', type=str, default='exact', required=False, choices=['exact', 'diff', 'vanilla'], help='deepreach model')
+        
         # training options
         p.add_argument('--epochs_til_ckpt', type=int, default=1000, help='Time interval in seconds until checkpoint is saved.')
         p.add_argument('--steps_til_summary', type=int, default=100, help='Time interval in seconds until tensorboard summary is saved.')
@@ -239,6 +240,7 @@ def main():
 
     dynamics_class = getattr(dynamics, opt.dynamics_class)
     dynamics = dynamics_class(**{argname: getattr(opt, argname) for argname in inspect.signature(dynamics_class).parameters.keys() if argname != 'self'})
+    dynamics.deepreach_model=opt.deepreach_model
     if opt.hopf_loss != 'none':
         dynamics.loss_type = 'brt_hjivi_hopf'
 

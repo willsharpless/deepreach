@@ -15,7 +15,7 @@ class Dynamics(ABC):
     control_dim:int, disturbance_dim:int, 
     state_mean:list, state_var:list, 
     value_mean:float, value_var:float, value_normto:float, 
-    diff_model:bool):
+    deepreach_model:str):
         self.loss_type = loss_type
         self.set_mode = set_mode
         self.state_dim = state_dim 
@@ -27,7 +27,7 @@ class Dynamics(ABC):
         self.value_mean = value_mean
         self.value_var = value_var
         self.value_normto = value_normto
-        self.diff_model = diff_model
+        self.deepreach_model = deepreach_model
         assert self.loss_type in ['brt_hjivi', 'brat_hjivi'], f'loss type {self.loss_type} not recognized'
         if self.loss_type == 'brat_hjivi':
             assert callable(self.reach_fn) and callable(self.avoid_fn)
@@ -53,8 +53,10 @@ class Dynamics(ABC):
 
     # convert model io to real value
     def io_to_value(self, input, output):
-        if self.diff_model:
+        if self.deepreach_model=="diff":
             return (output * self.value_var / self.value_normto) + self.boundary_fn(self.input_to_coord(input)[..., 1:])
+        elif self.deepreach_model=="exact":
+            return (output * input[..., 0] * self.value_var / self.value_normto) + self.boundary_fn(self.input_to_coord(input)[..., 1:])
         else:
             return (output * self.value_var / self.value_normto) + self.value_mean
 
@@ -62,14 +64,23 @@ class Dynamics(ABC):
     def io_to_dv(self, input, output):
         dodi = diff_operators.jacobian(output.unsqueeze(dim=-1), input)[0].squeeze(dim=-2)
 
-        if self.diff_model:
+        if self.deepreach_model=="diff":
             dvdt = (self.value_var / self.value_normto) * dodi[..., 0]
 
             dvds_term1 = (self.value_var / self.value_normto / self.state_var.to(device=dodi.device)) * dodi[..., 1:]
             state = self.input_to_coord(input)[..., 1:]
             dvds_term2 = diff_operators.jacobian(self.boundary_fn(state).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
             dvds = dvds_term1 + dvds_term2
-        
+        elif self.deepreach_model=="exact":
+            dvdt = (self.value_var / self.value_normto) * \
+                (input[..., 0]*dodi[..., 0] + output)
+
+            dvds_term1 = (self.value_var / self.value_normto /
+                          self.state_var.to(device=dodi.device)) * dodi[..., 1:] * input[..., 0].unsqueeze(-1)
+            state = self.input_to_coord(input)[..., 1:]
+            dvds_term2 = diff_operators.jacobian(self.boundary_fn(
+                state).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
+            dvds = dvds_term1 + dvds_term2
         else:
             dvdt = (self.value_var / self.value_normto) * dodi[..., 0]
             dvds = (self.value_var / self.value_normto / self.state_var.to(device=dodi.device)) * dodi[..., 1:]
@@ -131,7 +142,7 @@ class ParameterizedVertDrone2D(Dynamics):
             value_mean=0.25,
             value_var=0.5,
             value_normto=0.02,
-            diff_model=True,
+            deepreach_model="exact",
         )
 
     def state_test_range(self):
@@ -199,7 +210,7 @@ class Air3D(Dynamics):
             value_mean=0.25, 
             value_var=0.5, 
             value_normto=0.02,
-            diff_model=True,
+            deepreach_model="exact",
         )
 
     def state_test_range(self):
@@ -271,7 +282,7 @@ class Dubins3D(Dynamics):
             value_mean=0.25, 
             value_var=0.5, 
             value_normto=0.02,
-            diff_model=True
+            deepreach_model="exact"
         )
 
     def state_test_range(self):
@@ -351,7 +362,7 @@ class Linear2D(Dynamics):
             value_mean=0.25, 
             value_var=0.5, 
             value_normto=0.02,
-            diff_model=True
+            deepreach_model="exact",
         )
 
     def state_test_range(self):
@@ -441,7 +452,7 @@ class LessLinear2D(Dynamics):
             value_mean=0.25, 
             value_var=0.5, 
             value_normto=0.02,
-            diff_model=True
+            deepreach_model="exact",
         )
 
     def state_test_range(self):
@@ -545,7 +556,7 @@ class Dubins4D(Dynamics):
             value_mean=13,
             value_var=14,
             value_normto=0.02,
-            diff_model=True,
+            deepreach_model="exact",
         )
 
     def state_test_range(self):
@@ -640,7 +651,7 @@ class NarrowPassage(Dynamics):
             value_mean=0.25*8.0,
             value_var=0.5*8.0,
             value_normto=0.02,
-            diff_model=True,
+            deepreach_model="exact",
         )
 
     def state_test_range(self):
@@ -806,7 +817,7 @@ class ReachAvoidRocketLanding(Dynamics):
             value_mean=0.0,
             value_var=1.0,
             value_normto=0.02,
-            diff_model=True,
+            deepreach_model="exact",
         )
 
     def state_test_range(self):
@@ -927,7 +938,7 @@ class RocketLanding(Dynamics):
             value_mean=0.0,
             value_var=1.0,
             value_normto=0.02,
-            diff_model=True,
+            deepreach_model="exact",
         )
 
     # convert model input to real coord
@@ -946,7 +957,7 @@ class RocketLanding(Dynamics):
 
     # convert model io to real value
     def io_to_value(self, input, output):
-        if self.diff_model:
+        if self.deepreach_model=="diff":
             return (output * self.value_var / self.value_normto) + self.boundary_fn(self.input_to_coord(input)[..., 1:])
         else:
             return (output * self.value_var / self.value_normto) + self.value_mean
@@ -955,7 +966,7 @@ class RocketLanding(Dynamics):
     def io_to_dv(self, input, output):
         dodi = diff_operators.jacobian(output.unsqueeze(dim=-1), input)[0].squeeze(dim=-2)[..., :-1]
 
-        if self.diff_model:
+        if self.deepreach_model=="diff":
             dvdt = (self.value_var / self.value_normto) * dodi[..., 0]
 
             dvds_term1 = (self.value_var / self.value_normto / self.state_var.to(device=dodi.device)) * dodi[..., 1:]
@@ -1074,7 +1085,7 @@ class Quadrotor(Dynamics):
             value_mean=(math.sqrt(1.5**2+1.5**2+1.5**2)-2*self.collisionR)/2, 
             value_var=math.sqrt(1.5**2+1.5**2+1.5**2), 
             value_normto=0.02,
-            diff_model=True
+            deepreach_model="exact"
         )
 
     def state_test_range(self):
@@ -1256,7 +1267,7 @@ class MultiVehicleCollision(Dynamics):
             value_mean=0.25,
             value_var=0.5,
             value_normto=0.02,
-            diff_model=True
+            deepreach_model="exact"
         )
 
     def state_test_range(self):

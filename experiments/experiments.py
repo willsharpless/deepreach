@@ -172,12 +172,12 @@ class Experiment(ABC):
                     dirichlet_masks = gt['dirichlet_masks']
 
                     if self.dataset.dynamics.loss_type == 'brt_hjivi':
-                        losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks)
+                        losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'])
                     elif self.dataset.dynamics.loss_type == 'brt_hjivi_hopf':
                         hopf_values = gt['hopf_values']
-                        losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, hopf_values, self.dataset.hopf_pretrain)
+                        losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, self.dataset.hopf_pretrain)
                     elif self.dataset.dynamics.loss_type == 'brat_hjivi':
-                        losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, reach_values, avoid_values, dirichlet_masks)
+                        losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, reach_values, avoid_values, dirichlet_masks, model_results['model_out'])
                     else:
                         raise NotImplementedError
                     
@@ -197,7 +197,7 @@ class Experiment(ABC):
                         optim.step(closure)
 
                     # Adjust the relative magnitude of the losses if required
-                    if adjust_relative_grads:
+                    if self.dataset.dynamics.deepreach_model in ['vanilla', 'diff'] and adjust_relative_grads:
                         if losses['diff_constraint_hom'] > 0.01:
                             params = OrderedDict(self.model.named_parameters())
                             # Gradients with respect to the PDE loss
