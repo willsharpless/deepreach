@@ -98,7 +98,7 @@ def init_brt_hjivi_hopf_loss(dynamics, minWith, dirichlet_loss_divisor, hopf_los
                     diff_constraint_hom = torch.max(diff_constraint_hom, value - boundary_value)
 
                 if dynamics.deepreach_model == 'exact':
-                    dirichlet = torch.Tensor([0])
+                    dirichlet = torch.Tensor([0]).cuda()
 
             return {'dirichlet': torch.abs(dirichlet).sum() / dirichlet_loss_divisor,
                     'hopf': torch.abs(hopf_loss).sum()  / hopf_loss_divisor,
