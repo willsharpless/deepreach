@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 class ReachabilityDataset(Dataset):
     def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, 
                  use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0, hopf_loss_decay=False, hopf_loss_decay_w=0., diff_con_loss_incr=False, record_set_metrics=False,
-                 manual_load=False, load_packet=None):
+                 manual_load=False, load_packet=None, no_curriculum=False):
         
         # print("Into the dataset!")
 
@@ -31,6 +31,7 @@ class ReachabilityDataset(Dataset):
         self.hopf_loss_decay_w = hopf_loss_decay_w
         self.diff_con_loss_incr = hopf_loss_decay and diff_con_loss_incr
         self.record_set_metrics = record_set_metrics
+        self.no_curriculum = no_curriculum
 
         if manual_load:
             self.V_hopf_itp, self.fast_interp, self.V_hopf, self.V_DP_itp, self.V_DP = load_packet
@@ -132,7 +133,7 @@ class ReachabilityDataset(Dataset):
             times = torch.full((self.numpoints, 1), self.tMin)
         else:
             # slowly grow time values from start time (unless Hopf)
-            if self.hopf_pretrain or self.hopf_pretrained:
+            if self.hopf_pretrain or self.hopf_pretrained or self.no_curriculum:
                 # times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * ((self.counter + self.hopf_pretrain_counter)/(self.counter_end + self.hopf_pretrain_iters)))
                 times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin)) # during hopf pt, sample across all time?
             else:

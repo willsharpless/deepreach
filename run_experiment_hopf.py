@@ -72,6 +72,7 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--use_lbfgs', default=False, type=bool, help='use L-BFGS.')
     p.add_argument('--adj_rel_grads', default=False, type=bool, help='adjust the relative magnitude of the losses') # adds 0.05s/it FYI
     p.add_argument('--dirichlet_loss_divisor', default=1.0, required=False, type=float, help='What to divide the dirichlet loss by for loss reweighting')
+    p.add_argument('--no_curr', default=False, action='store_true', help='Flag to turn off curriculum sampling')
 
     # cost-supervised learning (CSL) options
     p.add_argument('--use_CSL', default=False, action='store_true', help='use cost-supervised learning (CSL)')
@@ -195,7 +196,7 @@ dataset = dataio.ReachabilityDataset(
     use_hopf=orig_opt.hopf_loss != 'none',
     hopf_pretrain=orig_opt.hopf_pretrain, hopf_pretrain_iters=orig_opt.hopf_pretrain_iters,
     hopf_loss_decay=orig_opt.hopf_loss_decay, hopf_loss_decay_w=orig_opt.hopf_loss_decay_w,
-    diff_con_loss_incr=orig_opt.diff_con_loss_incr,
+    diff_con_loss_incr=orig_opt.diff_con_loss_incr, no_curriculum=orig_opt.no_curr,
     record_set_metrics=orig_opt.set_metrics)
 
 model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
