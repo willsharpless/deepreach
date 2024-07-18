@@ -44,15 +44,11 @@ class ReachabilityDataset(Dataset):
             jl.seval("using JLD2, Interpolations")
             self.V_hopf_itp = jl.load("lin2d_hopf_interp_linear.jld")["V_itp"]
             fast_interp_exec = """
-            function fast_interp(_V_itp, tXg, method="grid")
+            function fast_interp(_V_itp, tXg)
                 # assumes tXg has time in first row
-                if method == "grid"
-                    Vg = zeros(size(tXg,2))
-                    for i=1:length(Vg)
-                        Vg[i] = _V_itp(tXg[:,i][end:-1:1]...)
-                    end
-                else
-                    Vg = ScatteredInterpolation.evaluate(_V_itp, tXg)
+                Vg = zeros(size(tXg,2))
+                for i=1:length(Vg)
+                    Vg[i] = _V_itp(tXg[:,i][end:-1:1]...)
                 end
                 return Vg
             end
@@ -68,16 +64,13 @@ class ReachabilityDataset(Dataset):
                 # self.V_DP_itp = jl.load("llin2d_g20_m0_a0_DP_interp_linear.jld")["V_itp"]
                 self.V_DP_itp = jl.load("llin2d_g20_m-20_a1_DP_interp_linear.jld")["V_itp"]
                 # self.V_DP_itp = jl.load("llin2d_g20_m20_a-20_DP_interp_linear.jld")["V_itp"]
+                
                 fast_interp_exec = """
-                function fast_interp(_V_itp, tXg, method="grid")
+                function fast_interp(_V_itp, tXg)
                     # assumes tXg has time in first row
-                    if method == "grid"
-                        Vg = zeros(size(tXg,2))
-                        for i=1:length(Vg)
-                            Vg[i] = _V_itp(tXg[:,i][end:-1:1]...)
-                        end
-                    else
-                        Vg = ScatteredInterpolation.evaluate(_V_itp, tXg)
+                    Vg = zeros(size(tXg,2))
+                    for i=1:length(Vg)
+                        Vg[i] = _V_itp(tXg[:,i][end:-1:1]...)
                     end
                     return Vg
                 end
@@ -85,6 +78,7 @@ class ReachabilityDataset(Dataset):
                 if not(hasattr(self, 'fast_interp')):
                     self.fast_interp = jl.seval(fast_interp_exec)
                 self.V_DP = lambda tXg: torch.from_numpy(self.fast_interp(self.V_DP_itp, tXg.numpy()).to_numpy())
+                
 
             self.n_grid_t_pts, self.n_grid_t_pts_hi = 5, 20
             xig = torch.arange(-0.99, 1.01, 0.02) # 100 x 100
@@ -108,10 +102,10 @@ class ReachabilityDataset(Dataset):
 
             # print("About to move stuff to CUDA")
 
-            self.values_DP_grid = 2 * self.V_DP(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
+            self.values_DP_grid = self.V_DP(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
             self.values_DP_grid_sub0_ixs = torch.argwhere(self.values_DP_grid <= 0).flatten().cuda()
 
-            self.values_DP_grid_hi = 2 * self.V_DP(self.dynamics.input_to_coord(self.model_coords_grid_allt_hi).t()).cuda()
+            self.values_DP_grid_hi = self.V_DP(self.dynamics.input_to_coord(self.model_coords_grid_allt_hi).t()).cuda()
             self.values_DP_grid_sub0_ixs_hi = torch.argwhere(self.values_DP_grid_hi <= 0).flatten().cuda()
 
             self.model_coords_grid_allt = self.model_coords_grid_allt.cuda()
@@ -154,10 +148,10 @@ class ReachabilityDataset(Dataset):
         # compute find/solve value at model_coords with Hopf (from preloaded interpolation for now)
         if self.use_hopf:
             try:
-                hopf_values = 2 * self.V_hopf(self.dynamics.input_to_coord(model_coords).t()) # 2x for diff in val fn
+                hopf_values = self.V_hopf(self.dynamics.input_to_coord(model_coords).t()) # 2x for diff in val fn
             except:
                 # TODO: interpolate outside of range in future (FP issue)
-                hopf_values = 2 * self.V_hopf(0.999 * self.dynamics.input_to_coord(model_coords).t())
+                hopf_values = self.V_hopf(0.999 * self.dynamics.input_to_coord(model_coords).t())
 
         
         if self.pretrain:

@@ -386,7 +386,8 @@ class Linear2D(Dynamics):
         return dsdt
     
     def boundary_fn(self, state):
-        return torch.norm(state[..., :2], dim=-1) - self.goalR
+        # return torch.norm(state[..., :2], dim=-1) - self.goalR
+        return 0.5 * (torch.square(torch.norm(state[..., :2], dim=-1)) - torch.square(self.goalR))
 
     def sample_target_state(self, num_samples):
         raise NotImplementedError
@@ -478,7 +479,8 @@ class LessLinear2D(Dynamics):
         return dsdt
     
     def boundary_fn(self, state):
-        return torch.norm(state[..., :2], dim=-1) - self.goalR
+        # return torch.norm(state[..., :2], dim=-1) - self.goalR
+        return 0.5 * (torch.square(torch.norm(state[..., :2], dim=-1)) - torch.square(self.goalR))
 
     def sample_target_state(self, num_samples):
         raise NotImplementedError
@@ -496,20 +498,12 @@ class LessLinear2D(Dynamics):
             return pAx - self.u_max * pb + self.d_max * pc
         elif self.set_mode == 'avoid':
             return pAx + self.u_max * pb - self.d_max * pc
-        # if self.set_mode == 'reach':
-        #     return self.velocity*(torch.cos(state[..., 2]) * dvds[..., 0] + torch.sin(state[..., 2]) * dvds[..., 1]) - self.omega_max * torch.abs(dvds[..., 2]) 
-        # elif self.set_mode == 'avoid':
-        #     return self.velocity*(torch.cos(state[..., 2]) * dvds[..., 0] + torch.sin(state[..., 2]) * dvds[..., 1]) + self.omega_max * torch.abs(dvds[..., 2])
 
     def optimal_control(self, state, dvds):
         if self.set_mode == 'reach':
             return torch.cat((-self.u_max * torch.sign(dvds[..., 0]), -self.u_max * torch.sign(dvds[..., 1])), dim=-1)
         elif self.set_mode == 'avoid':
             return torch.cat((self.u_max * torch.sign(dvds[..., 0]), self.u_max * torch.sign(dvds[..., 1])), dim=-1)
-        # if self.set_mode == 'reach':
-        #     return (-self.omega_max*torch.sign(dvds[..., 2]))[..., None]
-        # elif self.set_mode == 'avoid':
-        #     return (self.omega_max*torch.sign(dvds[..., 2]))[..., None]
 
     def optimal_disturbance(self, state, dvds):
         if self.set_mode == 'reach':
@@ -520,6 +514,111 @@ class LessLinear2D(Dynamics):
     def plot_config(self):
         return {
             'state_slices': [0, 0],
+            'state_labels': ['x', 'y'],
+            'x_axis_idx': 0,
+            'y_axis_idx': 1,
+            'z_axis_idx': 2,
+        }
+
+class LessLinearHD(Dynamics):
+    def __init__(self, N:int, gamma:float, mu:float, alpha:float):
+        # __init__(self):
+        # __init__(self, goalR:float, u_max:float, d_max:float, A:tensor, B:tensor, C:tensor, set_mode:str) #FIXME
+        # gamma, mu, alpha = 20, -20, 1
+        self.N = N
+        goalR, u_max, d_max, set_mode = 0.25, 0.5, 0.3, "reach" 
+        self.A = -0.5 * torch.eye(N) - torch.cat((torch.cat((torch.zeros(1,1),torch.ones(N-1,1)),0),torch.zeros(N,N-1)),1)
+        self.B = torch.cat((torch.zeros(1,N-1), 0.4*torch.eye(N-1)), 0)
+        self.C = torch.cat((torch.zeros(1,N-1), 0.1*torch.eye(N-1)), 0)
+        self.gamma, self.mu, self.alpha = gamma, mu, alpha
+
+        self.goalR = (N-1) * goalR # accounts for N-dimensional combination
+        self.ellipse_params = torch.cat((torch.sqrt(self.N-1)*torch.ones(1,1),torch.ones(self.N-1,1)),0) # accounts for N-dimensional combination
+
+        self.u_max, self.d_max = u_max, d_max
+        super().__init__(
+            loss_type='brt_hjivi', set_mode=set_mode,
+            state_dim=2, input_dim=3, control_dim=2, disturbance_dim=2, # TODO What is input_dim and what should it be?
+            state_mean=[0, 0], 
+            state_var=[1, 1],
+            value_mean=0.25, 
+            value_var=0.5, 
+            value_normto=0.02,
+            deepreach_model="exact",
+        )
+
+    def state_test_range(self):
+        return [
+            [-1, 1],
+            [-1, 1],
+        ]
+
+    def equivalent_wrapped_state(self, state):
+        wrapped_state = torch.clone(state)
+        # wrapped_state[..., 2] = (wrapped_state[..., 2] + math.pi) % (2*math.pi) - math.pi
+        return wrapped_state
+        
+    # Linear dynamics
+    # \dot x    = a11 x + a12 y + b1 * u1 + c1 * d1
+    # \dot y    = a21 x + a22 y + b2 * u2 + c2 * d2
+    def dsdt(self, state, control, disturbance):
+        dsdt = torch.zeros_like(state)
+        # nl_term =  - self.gamma * state[..., 1] * state[..., 0] * state[..., 0]
+        # nl_term2 =  self.mu * torch.sin(self.alpha * state[..., 0]) * state[..., 1] * state[..., 1]
+        # dsdt[..., 0] = self.a11 * state[..., 0] + self.a12 * state[..., 1] + self.b1 * control[..., 0] + self.c1 * disturbance[..., 0] + nl_term2
+        # dsdt[..., 1] = self.a21 * state[..., 0] + self.a22 * state[..., 1] + self.b2 * control[..., 1] + self.c2 * disturbance[..., 1] + nl_term
+        nl_term_N = self.mu * torch.sin(self.alpha * state[..., 0]) * state[..., 0] * state[..., 0]
+        nl_term_i = torch.multiply(-self.gamma * state[..., 0] * state[..., 0], state[..., 1:])
+        dsdt[..., :] = torch.matmul(self.A, state[..., :]) + torch.matmul(self.B, control[..., :]) + torch.matmul(self.C, disturbance[..., :]) + torch.cat((nl_term_N, nl_term_i), 0)
+        return dsdt
+    
+    def boundary_fn(self, state):
+        # return torch.norm(torch.multiply(torch.cat((torch.sqrt(self.N-1)*torch.ones(1,1),torch.ones(self.N-1,1)),0), state[..., :self.N+1]), dim=-1) - self.goalR
+        return 0.5 * (torch.square(torch.norm(torch.multiply(self.ellipse_params, state[..., :]), dim=-1)) - (self.goalR ** 2))
+
+    def sample_target_state(self, num_samples):
+        raise NotImplementedError
+    
+    def cost_fn(self, state_traj):
+        return torch.min(self.boundary_fn(state_traj), dim=-1).values
+    
+    def hamiltonian(self, state, dvds):
+        # nl_term =  - self.gamma * state[..., 1] * state[..., 0] * state[..., 0]
+        # nl_term2 =  self.mu * torch.sin(self.alpha * state[..., 0]) * state[..., 1] * state[..., 1]
+        # pAx = dvds[..., 0] * (self.a11 * state[..., 0] + self.a12 * state[..., 1] + nl_term2) + dvds[..., 1] * (self.a21 * state[..., 0] + self.a22 * state[..., 1] + nl_term)
+        # pb = self.b1 * torch.abs(dvds[..., 0]) + self.b2 * torch.abs(dvds[..., 1])
+        # pc = self.c1 * torch.abs(dvds[..., 0]) + self.c2 * torch.abs(dvds[..., 1])
+
+        nl_term_N = self.mu * torch.sin(self.alpha * state[..., 0]) * state[..., 0] * state[..., 0]
+        nl_term_i = torch.multiply(-self.gamma * state[..., 0] * state[..., 0], state[..., 1:])
+        pAx = torch.matmul(dvds[..., :].t(), torch.matmul(self.A, state[..., 0]) + torch.cat((nl_term_N, nl_term_i), 0))
+        pb = torch.matmul(torch.abs(dvds[..., :]).t(), torch.matmul(self.B, torch.ones(self.N-1)))
+        pc = torch.matmul(torch.abs(dvds[..., :]).t(), torch.matmul(self.C, torch.ones(self.N-1)))
+
+        if self.set_mode == 'reach':
+            return pAx - self.u_max * pb + self.d_max * pc
+        elif self.set_mode == 'avoid':
+            return pAx + self.u_max * pb - self.d_max * pc
+
+    def optimal_control(self, state, dvds):
+        if self.set_mode == 'reach':
+            # return torch.cat((-self.u_max * torch.sign(dvds[..., 0]), -self.u_max * torch.sign(dvds[..., 1])), dim=-1)
+            return -self.u_max * torch.sign(dvds[..., :])
+        elif self.set_mode == 'avoid':
+            # return torch.cat((self.u_max * torch.sign(dvds[..., 0]), self.u_max * torch.sign(dvds[..., 1])), dim=-1)
+            return self.u_max * torch.sign(dvds[..., :])
+
+    def optimal_disturbance(self, state, dvds):
+        if self.set_mode == 'reach':
+            # return torch.cat((self.d_max * torch.sign(dvds[..., 0]), self.d_max * torch.sign(dvds[..., 1])), dim=-1)
+            return self.d_max * torch.sign(dvds[..., :])
+        elif self.set_mode == 'avoid':
+            # return torch.cat((-self.d_max * torch.sign(dvds[..., 0]), -self.d_max * torch.sign(dvds[..., 1])), dim=-1)
+            return -self.d_max * torch.sign(dvds[..., :])
+    
+    def plot_config(self):
+        return {
+            'state_slices': [0, 0, 0],
             'state_labels': ['x', 'y'],
             'x_axis_idx': 0,
             'y_axis_idx': 1,
