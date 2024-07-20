@@ -32,75 +32,123 @@ class ReachabilityDataset(Dataset):
         self.diff_con_loss_incr = hopf_loss_decay and diff_con_loss_incr
         self.record_set_metrics = record_set_metrics
         self.no_curriculum = no_curriculum
+        self.N = dynamics.state_dim
 
-        if manual_load:
+        if manual_load: # added this to skirt WandB sweep + PyCall imcompatibility (not working)
             self.V_hopf_itp, self.fast_interp, self.V_hopf, self.V_DP_itp, self.V_DP = load_packet
-
-        # print("About to call julia")
-
-        ## compute Hopf value interpolant (if hopf loss)
+        
+        ## Compute Hopf value from interpolant (if hopf loss)
         # using dynamics load/solve corresponding HopfReachability.jl code to get interpolation solution
         if use_hopf and not(manual_load):
-            jl.seval("using JLD2, Interpolations")
-            self.V_hopf_itp = jl.load("lin2d_hopf_interp_linear.jld")["V_itp"]
+            jl.seval("using JLD, JLD2, Interpolations")
             fast_interp_exec = """
             function fast_interp(_V_itp, tXg)
-                # assumes tXg has time in first row
                 Vg = zeros(size(tXg,2))
-                for i=1:length(Vg)
-                    Vg[i] = _V_itp(tXg[:,i][end:-1:1]...)
-                end
+                for i=1:length(Vg); Vg[i] = _V_itp(tXg[:,i][end:-1:1]...); end # (assumes t in first row)
                 return Vg
             end
             """
             self.fast_interp = jl.seval(fast_interp_exec)
-            self.V_hopf = lambda tXg: torch.from_numpy(self.fast_interp(self.V_hopf_itp, tXg.numpy()).to_numpy())
             
-        # print("About to call julia again")
-
+            if self.N == 2:
+                self.V_hopf_itp = jl.load("lin2d_hopf_interp_linear.jld")["V_itp"]
+                self.V_hopf = lambda tXg: torch.from_numpy(self.fast_interp(self.V_hopf_itp, tXg.numpy()).to_numpy())
+            
+            ## FIXME : using DP right now for early Ndim testing, switch to hopf solution in future
+            elif self.N > 2:
+                LessLinear2D_interpolations = jl.load("LessLinear2D1i_interpolations_res1e-2.jld", "LessLinear2D_interpolations")
+                self.V_DP_itp = LessLinear2D_interpolations["g0_m0_a0"]
+                def V_N_DP_itp(tXg):
+                    V = 0 * tXg[0,:]
+                    for i in range(self.N-1):
+                        V += torch.from_numpy(self.fast_interp(self.V_DP_itp, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
+                    return V
+                self.V_hopf = V_N_DP_itp ## TODO: just use hopf solution (as in N==2 case)
+                
         if record_set_metrics:
             if not(manual_load):
-                jl.seval("using JLD2, Interpolations")
-                # self.V_DP_itp = jl.load("llin2d_g20_m0_a0_DP_interp_linear.jld")["V_itp"]
-                self.V_DP_itp = jl.load("llin2d_g20_m-20_a1_DP_interp_linear.jld")["V_itp"]
-                # self.V_DP_itp = jl.load("llin2d_g20_m20_a-20_DP_interp_linear.jld")["V_itp"]
-                
+                jl.seval("using JLD, JLD2, Interpolations")
                 fast_interp_exec = """
                 function fast_interp(_V_itp, tXg)
-                    # assumes tXg has time in first row
                     Vg = zeros(size(tXg,2))
-                    for i=1:length(Vg)
-                        Vg[i] = _V_itp(tXg[:,i][end:-1:1]...)
-                    end
+                    for i=1:length(Vg); Vg[i] = _V_itp(tXg[:,i][end:-1:1]...); end # (assumes t in first row)
                     return Vg
                 end
                 """
                 if not(hasattr(self, 'fast_interp')):
                     self.fast_interp = jl.seval(fast_interp_exec)
-                self.V_DP = lambda tXg: torch.from_numpy(self.fast_interp(self.V_DP_itp, tXg.numpy()).to_numpy())
                 
+                if self.N == 2:
+                    self.V_DP_itp = jl.load("llin2d_g20_m-20_a1_DP_interp_linear.jld")["V_itp"]
+                    self.V_DP = lambda tXg: torch.from_numpy(self.fast_interp(self.V_DP_itp, tXg.numpy()).to_numpy())
+                
+                elif self.N > 2:
+                    LessLinear2D_interpolations = jl.load("LessLinear2D1i_interpolations_res1e-2.jld", "LessLinear2D_interpolations")
+                    self.V_DP_itp = LessLinear2D_interpolations["g0_m0_a0"] #linear
+                    def V_N_DP_itp(tXg):
+                        V = 0 * tXg[0,:]
+                        for i in range(self.N-1):
+                            V += torch.from_numpy(self.fast_interp(self.V_DP_itp, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
+                        return V
+                    self.V_DP = V_N_DP_itp
+
+            ## Define a fixed spatiotemporal grid to score Jaccard
 
             self.n_grid_t_pts, self.n_grid_t_pts_hi = 5, 20
             xig = torch.arange(-0.99, 1.01, 0.02) # 100 x 100
-            X1g, X2g = torch.meshgrid(xig, xig)
-            self.model_states_grid = torch.cat((X1g.ravel().reshape((1,xig.size()[0]**2)), X2g.ravel().reshape((1,xig.size()[0]**2))), dim=0).t()
+            # xig = torch.arange(-1., 1.01, 0.01) # 201 x 201
+            self.X1g, self.X2g = torch.meshgrid(xig, xig)
+            self.model_states_grid = torch.cat((self.X1g.ravel().reshape((1,xig.size()[0]**2)), self.X2g.ravel().reshape((1,xig.size()[0]**2))), dim=0).t()
             self.n_grid_pts = xig.size()[0]**2
 
-            times = torch.full((self.n_grid_pts, 1), self.tMin)
-            self.model_coords_grid_allt = torch.cat((times, self.model_states_grid), dim=1) 
-            self.model_coords_grid_allt_hi = torch.cat((times, self.model_states_grid), dim=1) 
+            ## Make a low and high res grids wrt time
 
-            for i in range(self.n_grid_t_pts-1):
-                times = torch.full((self.n_grid_pts, 1), (i+1)*(self.tMax - self.tMin)/(self.n_grid_t_pts-1))
-                new_coords = torch.cat((times, self.model_states_grid), dim=1) 
-                self.model_coords_grid_allt = torch.cat((self.model_coords_grid_allt, new_coords), dim=0) 
-                
-            for i in range(self.n_grid_t_pts_hi-1):
-                times = torch.full((self.n_grid_pts, 1), (i+1)*(self.tMax - self.tMin)/(self.n_grid_t_pts_hi-1))
-                new_coords = torch.cat((times, self.model_states_grid), dim=1) 
-                self.model_coords_grid_allt_hi = torch.cat((self.model_coords_grid_allt_hi, new_coords), dim=0) 
+            if self.N == 2:
 
-            # print("About to move stuff to CUDA")
+                times = torch.full((self.n_grid_pts, 1), self.tMin) # TODO: remove first time-point if model='exact'
+                self.model_coords_grid_allt = torch.cat((times, self.model_states_grid), dim=1) 
+                self.model_coords_grid_allt_hi = torch.cat((times, self.model_states_grid), dim=1) 
+
+                for i in range(self.n_grid_t_pts-1):
+                    times = torch.full((self.n_grid_pts, 1), (i+1)*(self.tMax - self.tMin)/(self.n_grid_t_pts-1))
+                    new_coords = torch.cat((times, self.model_states_grid), dim=1) 
+                    self.model_coords_grid_allt = torch.cat((self.model_coords_grid_allt, new_coords), dim=0) 
+                for i in range(self.n_grid_t_pts_hi-1):
+                    times = torch.full((self.n_grid_pts, 1), (i+1)*(self.tMax - self.tMin)/(self.n_grid_t_pts_hi-1))
+                    new_coords = torch.cat((times, self.model_states_grid), dim=1) 
+                    self.model_coords_grid_allt_hi = torch.cat((self.model_coords_grid_allt_hi, new_coords), dim=0) 
+            
+            ## In N dimension, using same 2D grid on 3 slices of total space
+
+            elif self.N > 2:
+
+                xnxi_plane = torch.zeros(self.n_grid_pts, self.N)
+                xnxi_plane[:, 0] = self.model_states_grid[:, 0]
+                xnxi_plane[:, 1] = self.model_states_grid[:, 1]
+                xixj_plane = torch.zeros(self.n_grid_pts, self.N)
+                xixj_plane[:, 1] = self.model_states_grid[:, 0]
+                xixj_plane[:, 2] = self.model_states_grid[:, 1]
+                xnxixj_plane = torch.zeros(self.n_grid_pts, self.N)
+                xnxixj_plane[:, 0] = self.model_states_grid[:, 0]
+                xnxixj_plane[:, 1:] = (self.model_states_grid[:, 1]* torch.ones(self.N-1, self.n_grid_pts)).t()
+
+                self.model_states_grid = torch.cat((xnxi_plane, xixj_plane, xnxixj_plane), dim=0)
+                self.n_grid_pts = 3 * self.n_grid_pts
+
+                times = torch.full((self.n_grid_pts, 1), self.tMin) # TODO: remove first time-point if model='exact'
+                self.model_coords_grid_allt = torch.cat((times, self.model_states_grid), dim=1) 
+                self.model_coords_grid_allt_hi = torch.cat((times, self.model_states_grid), dim=1) 
+
+                for i in range(self.n_grid_t_pts-1):
+                    times = torch.full((self.n_grid_pts, 1), (i+1)*(self.tMax - self.tMin)/(self.n_grid_t_pts-1))
+                    new_coords = torch.cat((times, self.model_states_grid), dim=1) 
+                    self.model_coords_grid_allt = torch.cat((self.model_coords_grid_allt, new_coords), dim=0) 
+                for i in range(self.n_grid_t_pts_hi-1):
+                    times = torch.full((self.n_grid_pts, 1), (i+1)*(self.tMax - self.tMin)/(self.n_grid_t_pts_hi-1))
+                    new_coords = torch.cat((times, self.model_states_grid), dim=1) 
+                    self.model_coords_grid_allt_hi = torch.cat((self.model_coords_grid_allt_hi, new_coords), dim=0) 
+
+            ## Precompute value & safe-set on grid for ground truth
 
             self.values_DP_grid = self.V_DP(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
             self.values_DP_grid_sub0_ixs = torch.argwhere(self.values_DP_grid <= 0).flatten().cuda()
