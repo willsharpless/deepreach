@@ -576,11 +576,16 @@ class DeepReach(Experiment):
     def init_special(self):
         pass
 
-class DeepReach2D(Experiment):
-    def init_special(self):
+class DeepReachHopf(Experiment):
+    def init_special(self, N=2):
+        self.N = N
+        if N == 2:
+            self.validate = self.validate2D
+        elif N > 2:
+            self.validate = self.validateND
         pass        
     
-    def validate(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution):
+    def validate2D(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution):
         was_training = self.model.training
         self.model.eval()
         self.model.requires_grad_(False)
@@ -628,41 +633,105 @@ class DeepReach2D(Experiment):
         plt.close()
 
         if self.dataset.record_set_metrics:
-            with torch.no_grad():
-                JIps, FIps, FEps = self.set_metrics_eachtime()
-            
-            if not(hasattr(self, 't_ep_acc_fig')):
-                self.t_ep_acc_fig, (self.t_ep_acc_fig_ax1, self.t_ep_acc_fig_ax2, self.t_ep_acc_fig_ax3) = plt.subplots(1, 3, figsize=(5*len(times), 5*1), subplot_kw={'projection': '3d'})
-
-                for axi, ax in enumerate([self.t_ep_acc_fig_ax1, self.t_ep_acc_fig_ax2, self.t_ep_acc_fig_ax3]):
-                    ax.set_xlim(self.dataset.tMin, self.dataset.tMax)
-                    ax.set_ylim(1, self.dataset.counter_end/100)
-                    ax.set_zlim(0, 1)
-                    ax.set_xlabel('Time')
-                    ax.set_ylabel('Epoch (C)')
-                    ax.set_zlabel(['JI', 'FI%', 'FE%'][axi])
-                    ax.view_init(elev=20., azim=-35, roll=0)
-
-            time_data = torch.linspace(self.dataset.tMin, self.dataset.tMax, self.dataset.n_grid_t_pts_hi)
-            epoch_data = epoch*torch.ones(self.dataset.n_grid_t_pts_hi)/100
-
-            lw = 1
-            self.t_ep_acc_fig_ax1.plot(time_data, epoch_data, JIps, lw=lw, color="blue")
-            self.t_ep_acc_fig_ax2.plot(time_data, epoch_data, FIps, lw=lw, color="green")
-            self.t_ep_acc_fig_ax3.plot(time_data, epoch_data, FEps, lw=lw, color="red")
-
+            self.plot_set_metrics_eachtime(epoch, times)
             if self.use_wandb:
-                wandb.log({
-                    'Time vs. Epoch vs. Set Accuracy compared to DP': wandb.Image(self.t_ep_acc_fig),
-                })
+                wandb.log({'Time vs. Epoch vs. Set Accuracy compared to DP': wandb.Image(self.t_ep_acc_fig),})
             plt.close()
 
         if was_training:
             self.model.train()
             self.model.requires_grad_(True)
     
+    def validateND(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution):
+        was_training = self.model.training
+        self.model.eval()
+        self.model.requires_grad_(False)
+
+        plot_config = self.dataset.dynamics.plot_config()
+
+        state_test_range = self.dataset.dynamics.state_test_range()
+        x_min, x_max = state_test_range[plot_config['x_axis_idx']]
+        y_min, y_max = state_test_range[plot_config['y_axis_idx']]
+        # z_min, z_max = state_test_range[plot_config['z_axis_idx']]
+
+        times = torch.linspace(0, self.dataset.tMax, time_resolution)
+        xs = torch.linspace(x_min, x_max, x_resolution)
+        ys = torch.linspace(y_min, y_max, y_resolution)
+        # zs = torch.linspace(z_min, z_max, z_resolution)
+        xys = torch.cartesian_prod(xs, ys)
+        
+        fig = plt.figure(figsize=(5*len(times), 3*5*1))
+        for i in range(3*len(times)):
+            # for j in range(len(zs)):
+            j = 0
+            coords = torch.zeros(x_resolution*y_resolution, self.dataset.dynamics.state_dim + 1)
+            coords[:, 0] = times[i % len(times)]
+            coords[:, 1:] = torch.tensor(plot_config['state_slices']) # initialized to zero (nothing else to set!)
+            if i < 3: # xN - xi plane
+                coords[:, 1 + plot_config['x_axis_idx']] = xys[:, 0]
+                coords[:, 1 + plot_config['y_axis_idx']] = xys[:, 1]
+            elif i < 6: # xi - xj plane
+                coords[:, 1 + plot_config['y_axis_idx']] = xys[:, 0]
+                coords[:, 1 + plot_config['z_axis_idx']] = xys[:, 1]
+            else: # xN - (xi = xj) plane
+                coords[:, 1 + plot_config['x_axis_idx']] = xys[:, 0]
+                coords[:, 1 + plot_config['y_axis_idx']] = xys[:, 1]
+                coords[:, 1 + plot_config['z_axis_idx']] = xys[:, 1]
+
+            with torch.no_grad():
+                model_results = self.model({'coords': self.dataset.dynamics.coord_to_input(coords.cuda())})
+                values = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach())
+            
+            ax = fig.add_subplot(3, len(times), (j+1) + i)
+            ax.set_title('t = %0.2f' % (times[i % len(times)])) #, plot_config['state_labels'][plot_config['z_axis_idx']], zs[j]))
+            if i < 3: # xN - xi plane
+                ax.set_xlabel("xN")
+                ax.set_ylabel("xi")
+            elif i < 6: # xi - xj plane
+                ax.set_xlabel("xi")
+                ax.set_ylabel("xj")
+            else: # xN - (xi = xj) plane
+                ax.set_xlabel("xN")
+                ax.set_ylabel("xi=xj")
+
+            ## Plot Inside vs. Outside zero-level set of NN
+            s = ax.imshow(1*(values.detach().cpu().numpy().reshape(x_resolution, y_resolution).T <= 0), cmap='bwr', origin='lower', extent=(-1., 1., -1., 1.))
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes("right", size="5%", pad=0.05)
+            fig.colorbar(s, cax=cax)
+
+            ## Plot ground-truth zero-level contour
+            n_grid_plane_pts = int(self.dataset.n_grid_pts/3)
+            n_grid_len = int(n_grid_plane_pts ** 0.5)
+            pix_start = (i // len(times)) * n_grid_plane_pts
+            tix_start = (i % len(times)) * self.dataset.n_grid_pts
+            ix = pix_start + tix_start
+            if (i % len(times)) > 0: # FIXME this breaks if the std grid times qty changes (=5 atm)
+                tix_start += (i % len(times)) * self.dataset.n_grid_pts
+            Vg = self.dataset.values_DP_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len)
+            ax.contour(self.dataset.X1g, self.dataset.X2g, Vg.cpu(), [0.])
+
+        fig.savefig(save_path)
+        if self.use_wandb:
+            wandb.log({
+                'step': epoch,
+                'val_plot': wandb.Image(fig),
+            })
+        plt.close()
+
+        if self.dataset.record_set_metrics:
+            self.plot_set_metrics_eachtime(epoch, times)
+            if self.use_wandb:
+                wandb.log({'Time vs. Epoch vs. Set Accuracy compared to DP': wandb.Image(self.t_ep_acc_fig),})
+            plt.close()
+
+        if was_training:
+            self.model.train()
+            self.model.requires_grad_(True)
+
     def set_metrics_overtime(self):
 
+        # if self.N == 2: do whats here, else: use grid only on slices / actually jk, just fill .dataset loads with proper grids (full for 2D, slices for ND)
         model_results_grid = self.model({'coords': self.dataset.model_coords_grid_allt})
         values_grid = self.dataset.dynamics.io_to_value(model_results_grid['model_in'].detach(), model_results_grid['model_out'].squeeze(dim=-1))
         values_grid_sub0_ixs = torch.argwhere(values_grid <= 0).flatten()
@@ -703,3 +772,27 @@ class DeepReach2D(Experiment):
             JIps[i] = n_intersect / n_overlap
 
         return JIps, FIps, FEps
+
+    def plot_set_metrics_eachtime(self, epoch, times):
+        with torch.no_grad():
+            JIps, FIps, FEps = self.set_metrics_eachtime()
+        
+        if not(hasattr(self, 't_ep_acc_fig')):
+            self.t_ep_acc_fig, (self.t_ep_acc_fig_ax1, self.t_ep_acc_fig_ax2, self.t_ep_acc_fig_ax3) = plt.subplots(1, 3, figsize=(5*len(times), 5*1), subplot_kw={'projection': '3d'})
+
+            for axi, ax in enumerate([self.t_ep_acc_fig_ax1, self.t_ep_acc_fig_ax2, self.t_ep_acc_fig_ax3]):
+                ax.set_xlim(self.dataset.tMin, self.dataset.tMax)
+                ax.set_ylim(1, self.dataset.counter_end/100)
+                ax.set_zlim(0, 1)
+                ax.set_xlabel('Time')
+                ax.set_ylabel('Epoch (C)')
+                ax.set_zlabel(['JI', 'FI%', 'FE%'][axi])
+                ax.view_init(elev=20., azim=-35, roll=0)
+
+        time_data = torch.linspace(self.dataset.tMin, self.dataset.tMax, self.dataset.n_grid_t_pts_hi)
+        epoch_data = epoch*torch.ones(self.dataset.n_grid_t_pts_hi)/100
+
+        lw = 1
+        self.t_ep_acc_fig_ax1.plot(time_data, epoch_data, JIps, lw=lw, color="blue")
+        self.t_ep_acc_fig_ax2.plot(time_data, epoch_data, FIps, lw=lw, color="green")
+        self.t_ep_acc_fig_ax3.plot(time_data, epoch_data, FEps, lw=lw, color="red")
