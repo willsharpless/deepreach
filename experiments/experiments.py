@@ -705,9 +705,9 @@ class DeepReachHopf(Experiment):
             n_grid_len = int(n_grid_plane_pts ** 0.5)
             pix_start = (i // len(times)) * n_grid_plane_pts
             tix_start = (i % len(times)) * self.dataset.n_grid_pts
-            ix = pix_start + tix_start
             if (i % len(times)) > 0: # FIXME this breaks if the std grid times qty changes (=5 atm)
                 tix_start += (i % len(times)) * self.dataset.n_grid_pts
+            ix = pix_start + tix_start
             Vg = self.dataset.values_DP_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len)
             ax.contour(self.dataset.X1g, self.dataset.X2g, Vg.cpu(), [0.])
 

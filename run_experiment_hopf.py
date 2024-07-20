@@ -106,7 +106,7 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--dual_lr', action='store_true', default=True, required=False, help='Use separate lr for Hopf Pretraining and Training')
     p.add_argument('--lr_hopf', default=2e-5, required=False, type=float, help='Learning Rate in Hopf Pretraining')
     p.add_argument('--lr_hopf_decay_w', default=1, required=False, type=float, help='LR Exponential Decay Rate in Hopf Pretraining')
-    p.add_argument('--N', default=3, required=False, type=int, help='Dimension of validation model') # only needed if in the debugger
+    # p.add_argument('--N', default=3, required=False, type=int, help='Dimension of validation model') # only needed if in the debugger
 
     # record set metrics
     p.add_argument('--set_metrics', action='store_true', default=True, required=False, help='Compute and Score the Learned Set Similarity (Needs Ground Truth)')
