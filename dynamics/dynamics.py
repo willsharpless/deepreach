@@ -434,10 +434,10 @@ class Linear2D(Dynamics):
         }
 
 class LessLinear2D(Dynamics):
-    def __init__(self, gamma:float, mu:float, alpha:float):
-        # __init__(self):
+    # def __init__(self, gamma:float, mu:float, alpha:float):
+    def __init__(self):
         # __init__(self, goalR:float, u_max:float, d_max:float, A:tensor, B:tensor, C:tensor, set_mode:str) #FIXME
-        # gamma, mu, alpha = 20, -20, 1
+        gamma, mu, alpha = 20, -20, 1
         goalR, u_max, d_max, set_mode = 0.25, 0.5, 0.3, "reach" 
         self.a11, self.a12, self.a21, self.a22 = 0., .5, -1., -1. # FIXME lin algebra will be faster and cleaner
         self.b1, self.b2, self.c1, self.c2 = .4, .1, 0., .1
@@ -467,9 +467,9 @@ class LessLinear2D(Dynamics):
         # wrapped_state[..., 2] = (wrapped_state[..., 2] + math.pi) % (2*math.pi) - math.pi
         return wrapped_state
         
-    # Linear dynamics
-    # \dot x    = a11 x + a12 y + b1 * u1 + c1 * d1
-    # \dot y    = a21 x + a22 y + b2 * u2 + c2 * d2
+    # LessLinear dynamics
+    # \dot x    = a11 x + a12 y + b1 * u1 + c1 * d1 + mu * sin(alpha * x1) * x2^2
+    # \dot y    = a21 x + a22 y + b2 * u2 + c2 * d2 - gamma * x2 * x1^2
     def dsdt(self, state, control, disturbance):
         dsdt = torch.zeros_like(state)
         nl_term =  - self.gamma * state[..., 1] * state[..., 0] * state[..., 0]
@@ -480,7 +480,7 @@ class LessLinear2D(Dynamics):
     
     def boundary_fn(self, state):
         # return torch.norm(state[..., :2], dim=-1) - self.goalR
-        return 0.5 * (torch.square(torch.norm(state[..., :2], dim=-1)) - torch.square(self.goalR))
+        return 0.5 * (torch.square(torch.norm(state[..., :2], dim=-1)) - self.goalR ** 2)
 
     def sample_target_state(self, num_samples):
         raise NotImplementedError
@@ -520,27 +520,29 @@ class LessLinear2D(Dynamics):
             'z_axis_idx': 2,
         }
 
-class LessLinearHD(Dynamics):
-    def __init__(self, N:int, gamma:float, mu:float, alpha:float):
-        # __init__(self):
-        # __init__(self, goalR:float, u_max:float, d_max:float, A:tensor, B:tensor, C:tensor, set_mode:str) #FIXME
-        # gamma, mu, alpha = 20, -20, 1
-        self.N = N
+class LessLinearND(Dynamics):
+    # def __init__(self, N:int, gamma:float, mu:float, alpha:float):
+    def __init__(self):
+        gamma, mu, alpha = 0, 0, 0 # gamma, mu, alpha = 20, -20, 1
+        N = 3
+        self.N = N 
         goalR, u_max, d_max, set_mode = 0.25, 0.5, 0.3, "reach" 
-        self.A = -0.5 * torch.eye(N) - torch.cat((torch.cat((torch.zeros(1,1),torch.ones(N-1,1)),0),torch.zeros(N,N-1)),1)
+        self.A = (-0.5 * torch.eye(N) - torch.cat((torch.cat((torch.zeros(1,1),torch.ones(N-1,1)),0),torch.zeros(N,N-1)),1)).cuda()
         self.B = torch.cat((torch.zeros(1,N-1), 0.4*torch.eye(N-1)), 0)
+        self.Bumax = u_max * torch.matmul(self.B, torch.ones(self.N-1)).unsqueeze(0).unsqueeze(0).cuda()
         self.C = torch.cat((torch.zeros(1,N-1), 0.1*torch.eye(N-1)), 0)
+        self.Cdmax = d_max * torch.matmul(self.C, torch.ones(self.N-1)).unsqueeze(0).unsqueeze(0).cuda()
         self.gamma, self.mu, self.alpha = gamma, mu, alpha
 
         self.goalR = (N-1) * goalR # accounts for N-dimensional combination
-        self.ellipse_params = torch.cat((torch.sqrt(self.N-1)*torch.ones(1,1),torch.ones(self.N-1,1)),0) # accounts for N-dimensional combination
+        self.ellipse_params = torch.cat((((self.N-1)**0.5)*torch.ones(1),torch.ones(self.N-1)),0) # accounts for N-dimensional combination
 
         self.u_max, self.d_max = u_max, d_max
         super().__init__(
             loss_type='brt_hjivi', set_mode=set_mode,
-            state_dim=2, input_dim=3, control_dim=2, disturbance_dim=2, # TODO What is input_dim and what should it be?
-            state_mean=[0, 0], 
-            state_var=[1, 1],
+            state_dim=self.N, input_dim=self.N+1, control_dim=self.N-1, disturbance_dim=self.N-1, # TODO What is input_dim and what should it be?
+            state_mean=[0 for _ in range(self.N)], 
+            state_var=[1 for _ in range(self.N)],
             value_mean=0.25, 
             value_var=0.5, 
             value_normto=0.02,
@@ -548,19 +550,18 @@ class LessLinearHD(Dynamics):
         )
 
     def state_test_range(self):
-        return [
-            [-1, 1],
-            [-1, 1],
-        ]
+        return [[-1, 1] for _ in range(self.N)]
 
     def equivalent_wrapped_state(self, state):
         wrapped_state = torch.clone(state)
         # wrapped_state[..., 2] = (wrapped_state[..., 2] + math.pi) % (2*math.pi) - math.pi
         return wrapped_state
         
-    # Linear dynamics
-    # \dot x    = a11 x + a12 y + b1 * u1 + c1 * d1
-    # \dot y    = a21 x + a22 y + b2 * u2 + c2 * d2
+    # LessLinear dynamics
+    # \dot xN    = (aN \cdot x) + (no ctrl or dist) + mu * sin(alpha * xN) * xN^2
+    # \dot xi    = (ai \cdot x) + bi * ui + ci * di - gamma * xi * xN^2
+    # i.e.
+    # \dot x = Ax + Bu + Cd + NLterm(x, gamma, mu, alpha)
     def dsdt(self, state, control, disturbance):
         dsdt = torch.zeros_like(state)
         # nl_term =  - self.gamma * state[..., 1] * state[..., 0] * state[..., 0]
@@ -573,8 +574,13 @@ class LessLinearHD(Dynamics):
         return dsdt
     
     def boundary_fn(self, state):
-        # return torch.norm(torch.multiply(torch.cat((torch.sqrt(self.N-1)*torch.ones(1,1),torch.ones(self.N-1,1)),0), state[..., :self.N+1]), dim=-1) - self.goalR
-        return 0.5 * (torch.square(torch.norm(torch.multiply(self.ellipse_params, state[..., :]), dim=-1)) - (self.goalR ** 2))
+        if self.ellipse_params.device != state.device: # FIXME: Patch to cover de/attached state bug
+            if state.device.type == 'cuda':
+                self.ellipse_params = self.ellipse_params.cuda()
+            else:
+                self.ellipse_params = self.ellipse_params.cpu()
+        return 0.5 * (torch.square(torch.norm(self.ellipse_params * state[..., :], dim=-1)) - (self.goalR ** 2))
+        # return 0.5 * (torch.square(torch.norm(torch.cat((((self.N-1)**0.5)*torch.ones(1),torch.ones(self.N-1)),0) * state[..., :], dim=-1)) - (self.goalR ** 2))
 
     def sample_target_state(self, num_samples):
         raise NotImplementedError
@@ -589,16 +595,16 @@ class LessLinearHD(Dynamics):
         # pb = self.b1 * torch.abs(dvds[..., 0]) + self.b2 * torch.abs(dvds[..., 1])
         # pc = self.c1 * torch.abs(dvds[..., 0]) + self.c2 * torch.abs(dvds[..., 1])
 
-        nl_term_N = self.mu * torch.sin(self.alpha * state[..., 0]) * state[..., 0] * state[..., 0]
-        nl_term_i = torch.multiply(-self.gamma * state[..., 0] * state[..., 0], state[..., 1:])
-        pAx = torch.matmul(dvds[..., :].t(), torch.matmul(self.A, state[..., 0]) + torch.cat((nl_term_N, nl_term_i), 0))
-        pb = torch.matmul(torch.abs(dvds[..., :]).t(), torch.matmul(self.B, torch.ones(self.N-1)))
-        pc = torch.matmul(torch.abs(dvds[..., :]).t(), torch.matmul(self.C, torch.ones(self.N-1)))
+        nl_term_N = (self.mu * torch.sin(self.alpha * state[..., 0]) * state[..., 0] * state[..., 0]).unsqueeze(-1)
+        nl_term_i = (-self.gamma * state[..., 0] * state[..., 0]).t() * state[..., 1:]
+        pAx = (dvds * (torch.matmul(state, self.A) + torch.cat((nl_term_N, nl_term_i), 2))).sum(2)
+        pBumax = (torch.abs(dvds) * self.Bumax).sum(2)
+        pCdmax = (torch.abs(dvds) * self.Cdmax).sum(2)
 
         if self.set_mode == 'reach':
-            return pAx - self.u_max * pb + self.d_max * pc
+            return pAx - pBumax + pCdmax
         elif self.set_mode == 'avoid':
-            return pAx + self.u_max * pb - self.d_max * pc
+            return pAx + pBumax - pCdmax
 
     def optimal_control(self, state, dvds):
         if self.set_mode == 'reach':
@@ -616,10 +622,10 @@ class LessLinearHD(Dynamics):
             # return torch.cat((-self.d_max * torch.sign(dvds[..., 0]), -self.d_max * torch.sign(dvds[..., 1])), dim=-1)
             return -self.d_max * torch.sign(dvds[..., :])
     
-    def plot_config(self):
+    def plot_config(self): # FIXME
         return {
-            'state_slices': [0, 0, 0],
-            'state_labels': ['x', 'y'],
+            'state_slices': [0 for _ in range(self.N)],
+            'state_labels': ['xN'] + ['x' + str(i) for i in range(1, self.N)],
             'x_axis_idx': 0,
             'y_axis_idx': 1,
             'z_axis_idx': 2,
