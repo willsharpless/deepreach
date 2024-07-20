@@ -93,7 +93,7 @@ def main():
 
         # load experiment_class choices dynamically from experiments module
         experiment_classes_dict = {name: clss for name, clss in inspect.getmembers(experiments, inspect.isclass) if clss.__bases__[0] == experiments.Experiment}
-        p.add_argument('--experiment_class', type=str, default='DeepReach2D', choices=experiment_classes_dict.keys(), help='Experiment class to use.') #FIXME: default='DeepReach' instead of 2D
+        p.add_argument('--experiment_class', type=str, default='DeepReachHopf', choices=experiment_classes_dict.keys(), help='Experiment class to use.') #FIXME: default='DeepReach' instead of 2D
         # load special experiment_class arguments dynamically from chosen experiment class
         experiment_class = experiment_classes_dict[p.parse_known_args()[0].experiment_class]
         experiment_params = {name: param for name, param in inspect.signature(experiment_class.init_special).parameters.items() if name != 'self'}

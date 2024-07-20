@@ -24,9 +24,9 @@ p.add_argument('--use_wandb', default=False, action='store_true', help='use wand
 
 use_wandb = p.parse_known_args()[0].use_wandb
 if use_wandb:
-    p.add_argument('--wandb_project', type=str, default='deepreach_hopf', required=False, help='wandb project')
+    p.add_argument('--wandb_project', type=str, default='deepreach_hopf_LND', required=False, help='wandb project')
     p.add_argument('--wandb_entity', type=str, default='sas-lab', required=False, help='wandb entity')
-    p.add_argument('--wandb_group', type=str, default='LessLinear2D', required=False, help='wandb group')
+    p.add_argument('--wandb_group', type=str, default='LessLinearND', required=False, help='wandb group')
     p.add_argument('--wandb_name', type=str, default='test_run', required=False, help='name of wandb run')
 
 mode = p.parse_known_args()[0].mode
@@ -36,11 +36,12 @@ if (mode == 'all') or (mode == 'train'):
 
     # load experiment_class choices dynamically from experiments module
     experiment_classes_dict = {name: clss for name, clss in inspect.getmembers(experiments, inspect.isclass) if clss.__bases__[0] == experiments.Experiment}
-    p.add_argument('--experiment_class', type=str, default='DeepReach2D', choices=experiment_classes_dict.keys(), help='Experiment class to use.') #FIXME: default='DeepReach' instead of 2D
+    p.add_argument('--experiment_class', type=str, default='DeepReachHopf', choices=experiment_classes_dict.keys(), help='Experiment class to use.')
     # load special experiment_class arguments dynamically from chosen experiment class
     experiment_class = experiment_classes_dict[p.parse_known_args()[0].experiment_class]
     experiment_params = {name: param for name, param in inspect.signature(experiment_class.init_special).parameters.items() if name != 'self'}
     for param in experiment_params.keys():
+        if param == 'N': continue
         p.add_argument('--' + param, type=experiment_params[param].annotation, required=True, help='special experiment_class argument')
 
     # simulation data source options
@@ -98,20 +99,21 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--hopf_loss', type=str, default='lindiff', choices=['none', 'lindiff', 'grad'], help='Method for using Hopf data')
     p.add_argument('--hopf_loss_divisor', default=5, required=False, type=float, help='What to divide the hopf loss by for loss reweighting')
     p.add_argument('--hopf_pretrain', action='store_true', default=True, required=False, help='Pretrain hopf conditions')
-    p.add_argument('--hopf_pretrain_iters', type=int, default=10000, required=False, help='Number of pretrain iterations with Hopf loss')
+    p.add_argument('--hopf_pretrain_iters', type=int, default=4000, required=False, help='Number of pretrain iterations with Hopf loss')
     p.add_argument('--hopf_loss_decay', action='store_true', default=True, required=False, help='Hopf loss weight decay')
     p.add_argument('--hopf_loss_decay_w', default=0.9998, required=False, type=float, help='Hopf loss weight decay rate')
     p.add_argument('--diff_con_loss_incr', action='store_true', default=False, required=False, help='Incremental Diff Cons loss weight of (1 - hopf decay)')
     p.add_argument('--dual_lr', action='store_true', default=True, required=False, help='Use separate lr for Hopf Pretraining and Training')
     p.add_argument('--lr_hopf', default=2e-5, required=False, type=float, help='Learning Rate in Hopf Pretraining')
     p.add_argument('--lr_hopf_decay_w', default=1, required=False, type=float, help='LR Exponential Decay Rate in Hopf Pretraining')
+    p.add_argument('--N', default=3, required=False, type=int, help='Dimension of validation model') # only needed if in the debugger
 
     # record set metrics
     p.add_argument('--set_metrics', action='store_true', default=True, required=False, help='Compute and Score the Learned Set Similarity (Needs Ground Truth)')
 
     # load dynamics_class choices dynamically from dynamics module
     dynamics_classes_dict = {name: clss for name, clss in inspect.getmembers(dynamics, inspect.isclass) if clss.__bases__[0] == dynamics.Dynamics}
-    p.add_argument('--dynamics_class', type=str, default="LessLinear2D", choices=dynamics_classes_dict.keys(), help='Dynamics class to use.') #FIXME: required=True instead of default
+    p.add_argument('--dynamics_class', type=str, default="LessLinearND", choices=dynamics_classes_dict.keys(), help='Dynamics class to use.') #FIXME: required=True instead of default
     # load special dynamics_class arguments dynamically from chosen dynamics class
     dynamics_class = dynamics_classes_dict[p.parse_known_args()[0].dynamics_class]
     dynamics_params = {name: param for name, param in inspect.signature(dynamics_class).parameters.items() if name != 'self'}
