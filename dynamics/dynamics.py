@@ -589,15 +589,10 @@ class LessLinearND(Dynamics):
         return torch.min(self.boundary_fn(state_traj), dim=-1).values
     
     def hamiltonian(self, state, dvds):
-        # nl_term =  - self.gamma * state[..., 1] * state[..., 0] * state[..., 0]
-        # nl_term2 =  self.mu * torch.sin(self.alpha * state[..., 0]) * state[..., 1] * state[..., 1]
-        # pAx = dvds[..., 0] * (self.a11 * state[..., 0] + self.a12 * state[..., 1] + nl_term2) + dvds[..., 1] * (self.a21 * state[..., 0] + self.a22 * state[..., 1] + nl_term)
-        # pb = self.b1 * torch.abs(dvds[..., 0]) + self.b2 * torch.abs(dvds[..., 1])
-        # pc = self.c1 * torch.abs(dvds[..., 0]) + self.c2 * torch.abs(dvds[..., 1])
 
         nl_term_N = (self.mu * torch.sin(self.alpha * state[..., 0]) * state[..., 0] * state[..., 0]).unsqueeze(-1)
         nl_term_i = (-self.gamma * state[..., 0] * state[..., 0]).t() * state[..., 1:]
-        pAx = (dvds * (torch.matmul(state, self.A) + torch.cat((nl_term_N, nl_term_i), 2))).sum(2)
+        pAx = (dvds * (torch.matmul(state, self.A.t()) + torch.cat((nl_term_N, nl_term_i), 2))).sum(2)
         pBumax = (torch.abs(dvds) * self.Bumax).sum(2)
         pCdmax = (torch.abs(dvds) * self.Cdmax).sum(2)
 
