@@ -330,7 +330,7 @@ class Experiment(ABC):
                                 log_dict["Max Smooth Jaccard Index over Time"] = JIp_s_max
                                 log_dict["Falsely Included percent over Time"] = FIp
                                 log_dict["Falsely Excluded percent over Time"] = FEp
-                                log_dict["Mean Absolute Spatial Gradient"] = torch.abs(dvs[..., 1:]).sum() / self.dataset.numpoints
+                                log_dict["Mean Absolute Spatial Gradient"] = torch.abs(dvs[..., 1:]).sum() / (self.dataset.numpoints * self.N)
                             wandb.log(log_dict)
 
                     total_steps += 1
