@@ -32,7 +32,7 @@ class ReachabilityDataset(Dataset):
         self.diff_con_loss_incr = hopf_loss_decay and diff_con_loss_incr
         self.record_set_metrics = record_set_metrics
         self.no_curriculum = no_curriculum
-        self.N = dynamics.state_dim
+        self.N = dynamics.N
 
         if manual_load: # added this to skirt WandB sweep + PyCall imcompatibility (not working)
             self.V_hopf_itp, self.fast_interp, self.V_hopf, self.V_DP_itp, self.V_DP = load_packet

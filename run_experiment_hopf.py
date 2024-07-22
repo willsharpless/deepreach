@@ -21,6 +21,7 @@ p.add_argument('--mode', type=str, default="train", choices=['all', 'train', 'te
 p.add_argument('--experiments_dir', type=str, default='./runs', help='Where to save the experiment subdirectory.')
 p.add_argument('--experiment_name', type=str, default='test_run', help='Name of the experient subdirectory.') #FIXME: required=True instead of default
 p.add_argument('--use_wandb', default=False, action='store_true', help='use wandb for logging')
+p.add_argument('--N', default=4, required=False, type=int, help='Dimension of validation model')
 
 use_wandb = p.parse_known_args()[0].use_wandb
 if use_wandb:
@@ -106,7 +107,6 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--dual_lr', action='store_true', default=True, required=False, help='Use separate lr for Hopf Pretraining and Training')
     p.add_argument('--lr_hopf', default=2e-5, required=False, type=float, help='Learning Rate in Hopf Pretraining')
     p.add_argument('--lr_hopf_decay_w', default=1, required=False, type=float, help='LR Exponential Decay Rate in Hopf Pretraining')
-    # p.add_argument('--N', default=3, required=False, type=int, help='Dimension of validation model') # only needed if in the debugger
 
     # record set metrics
     p.add_argument('--set_metrics', action='store_true', default=True, required=False, help='Compute and Score the Learned Set Similarity (Needs Ground Truth)')
@@ -118,6 +118,7 @@ if (mode == 'all') or (mode == 'train'):
     dynamics_class = dynamics_classes_dict[p.parse_known_args()[0].dynamics_class]
     dynamics_params = {name: param for name, param in inspect.signature(dynamics_class).parameters.items() if name != 'self'}
     for param in dynamics_params.keys():
+        if param == 'N': continue
         if dynamics_params[param].annotation is bool:
             p.add_argument('--' + param, type=dynamics_params[param].annotation, default=False, help='special dynamics_class argument')
         else:

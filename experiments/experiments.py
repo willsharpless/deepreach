@@ -676,8 +676,7 @@ class DeepReachHopf(Experiment):
                 coords[:, 1 + plot_config['z_axis_idx']] = xys[:, 1]
             else: # xN - (xi = xj) plane
                 coords[:, 1 + plot_config['x_axis_idx']] = xys[:, 0]
-                coords[:, 1 + plot_config['y_axis_idx']] = xys[:, 1]
-                coords[:, 1 + plot_config['z_axis_idx']] = xys[:, 1]
+                coords[:, 2:] = (xys[:, 1] * torch.ones(self.N-1, xys.size()[0])).t()
 
             with torch.no_grad():
                 model_results = self.model({'coords': self.dataset.dynamics.coord_to_input(coords.cuda())})

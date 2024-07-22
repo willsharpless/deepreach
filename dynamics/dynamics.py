@@ -521,10 +521,9 @@ class LessLinear2D(Dynamics):
         }
 
 class LessLinearND(Dynamics):
-    def __init__(self, N:int, gamma:float, mu:float, alpha:float):
-    # def __init__(self):
-    #     gamma, mu, alpha = 0, 0, 0 # gamma, mu, alpha = 20, -20, 1
-    #     N = 3
+    # def __init__(self, N:int, gamma:float, mu:float, alpha:float):
+    def __init__(self, N:int):
+        gamma, mu, alpha = 0, 0, 0 # gamma, mu, alpha = 20, -20, 1
         self.N = N 
         goalR, u_max, d_max, set_mode = 0.25, 0.5, 0.3, "reach" 
         self.A = (-0.5 * torch.eye(N) - torch.cat((torch.cat((torch.zeros(1,1),torch.ones(N-1,1)),0),torch.zeros(N,N-1)),1)).cuda()
@@ -535,14 +534,14 @@ class LessLinearND(Dynamics):
         self.gamma, self.mu, self.alpha = gamma, mu, alpha
 
         self.goalR = ((N-1) ** 0.5) * goalR # accounts for N-dimensional combination
-        self.ellipse_params = torch.cat((((self.N-1)**0.5)*torch.ones(1),torch.ones(self.N-1)),0) # accounts for N-dimensional combination
+        self.ellipse_params = torch.cat((((N-1) ** 0.5) * torch.ones(1), torch.ones(N-1)),0) # accounts for N-dimensional combination
 
         self.u_max, self.d_max = u_max, d_max
         super().__init__(
             loss_type='brt_hjivi', set_mode=set_mode,
-            state_dim=self.N, input_dim=self.N+1, control_dim=self.N-1, disturbance_dim=self.N-1, # TODO What is input_dim and what should it be?
-            state_mean=[0 for _ in range(self.N)], 
-            state_var=[1 for _ in range(self.N)],
+            state_dim=N, input_dim=N+1, control_dim=N-1, disturbance_dim=N-1, # TODO What is input_dim and what should it be?
+            state_mean=[0 for _ in range(N)], 
+            state_var=[1 for _ in range(N)],
             value_mean=0.25, 
             value_var=0.5, 
             value_normto=0.02,
