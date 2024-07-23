@@ -56,7 +56,7 @@ class ReachabilityDataset(Dataset):
             
             ## FIXME : using DP right now for early Ndim testing, switch to hopf solution in future
             elif self.N > 2:
-                LessLinear2D_interpolations = jl.load("LessLinear2D1i_interpolations_res1e-2.jld", "LessLinear2D_interpolations")
+                LessLinear2D_interpolations = jl.load("LessLinear2D1i_interpolations_res1e-2_r15e-2.jld", "LessLinear2D_interpolations")
                 self.V_DP_itp = LessLinear2D_interpolations["g0_m0_a0"]
                 def V_N_DP_itp(tXg):
                     V = 0 * tXg[0,:]
@@ -83,8 +83,9 @@ class ReachabilityDataset(Dataset):
                     self.V_DP = lambda tXg: torch.from_numpy(self.fast_interp(self.V_DP_itp, tXg.numpy()).to_numpy())
                 
                 elif self.N > 2:
-                    LessLinear2D_interpolations = jl.load("LessLinear2D1i_interpolations_res1e-2.jld", "LessLinear2D_interpolations")
-                    self.V_DP_itp = LessLinear2D_interpolations["g0_m0_a0"] #linear
+                    LessLinear2D_interpolations = jl.load("LessLinear2D1i_interpolations_res1e-2_r15e-2.jld", "LessLinear2D_interpolations")
+                    # self.V_DP_itp = LessLinear2D_interpolations["g0_m0_a0"] #linear
+                    self.V_DP_itp = LessLinear2D_interpolations["g20_m-20_a1"] 
                     def V_N_DP_itp(tXg):
                         V = 0 * tXg[0,:]
                         for i in range(self.N-1):
