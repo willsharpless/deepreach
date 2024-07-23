@@ -21,7 +21,9 @@ p.add_argument('--mode', type=str, default="train", choices=['all', 'train', 'te
 p.add_argument('--experiments_dir', type=str, default='./runs', help='Where to save the experiment subdirectory.')
 p.add_argument('--experiment_name', type=str, default='test_run', help='Name of the experient subdirectory.') #FIXME: required=True instead of default
 p.add_argument('--use_wandb', default=False, action='store_true', help='use wandb for logging')
-p.add_argument('--N', default=4, required=False, type=int, help='Dimension of validation model')
+
+p.add_argument('--N', default=15, required=False, type=int, help='Dimension of validation model')
+p.add_argument('--timing', action='store_true', default=False, required=False, help='Gives detailed computation times')
 
 use_wandb = p.parse_known_args()[0].use_wandb
 if use_wandb:
@@ -42,7 +44,7 @@ if (mode == 'all') or (mode == 'train'):
     experiment_class = experiment_classes_dict[p.parse_known_args()[0].experiment_class]
     experiment_params = {name: param for name, param in inspect.signature(experiment_class.init_special).parameters.items() if name != 'self'}
     for param in experiment_params.keys():
-        if param == 'N': continue
+        if param == 'N' or param == "timing": continue
         p.add_argument('--' + param, type=experiment_params[param].annotation, required=True, help='special experiment_class argument')
 
     # simulation data source options
@@ -67,7 +69,7 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--epochs_til_ckpt', type=int, default=1000, help='Time interval in seconds until checkpoint is saved.')
     p.add_argument('--steps_til_summary', type=int, default=100, help='Time interval in seconds until tensorboard summary is saved.')
     p.add_argument('--batch_size', type=int, default=1, help='Batch size used during training (irrelevant, since len(dataset) == 1).')
-    p.add_argument('--lr', type=float, default=2e-5, help='learning rate. default=2e-5')
+    p.add_argument('--lr', type=float, default=2e-6, help='learning rate. default=2e-6')
     p.add_argument('--lr_decay_w', default=1, required=False, type=float, help='LR Exponential Decay Rate')
     p.add_argument('--num_epochs', type=int, default=40000, help='Number of epochs to train for.')
     p.add_argument('--clip_grad', default=0.0, type=float, help='Clip gradient.')
@@ -91,7 +93,7 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--val_x_resolution', type=int, default=200, help='x-axis resolution of validation plot during training')
     p.add_argument('--val_y_resolution', type=int, default=200, help='y-axis resolution of validation plot during training')
     p.add_argument('--val_z_resolution', type=int, default=5, help='z-axis resolution of validation plot during training')
-    p.add_argument('--val_time_resolution', type=int, default=3, help='time-axis resolution of validation plot during training')
+    p.add_argument('--val_time_resolution', type=int, default=5, help='time-axis resolution of validation plot during training')
 
     # loss options
     p.add_argument('--minWith', type=str, default='target', choices=['none', 'zero', 'target'], help='BRS vs BRT computation (typically should be using target for BRT)') #FIXME: required=True instead of default

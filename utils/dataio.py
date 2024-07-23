@@ -1,6 +1,7 @@
 from juliacall import Main as jl, convert as jlconvert
 import torch
 from torch.utils.data import Dataset
+import time
 
 # uses model input and real boundary fn
 class ReachabilityDataset(Dataset):
@@ -57,13 +58,24 @@ class ReachabilityDataset(Dataset):
             ## FIXME : using DP right now for early Ndim testing, switch to hopf solution in future
             elif self.N > 2:
                 LessLinear2D_interpolations = jl.load("LessLinear2D1i_interpolations_res1e-2_r15e-2.jld", "LessLinear2D_interpolations")
-                self.V_DP_itp = LessLinear2D_interpolations["g0_m0_a0"]
-                def V_N_DP_itp(tXg):
+                self.V_hopf_itp = LessLinear2D_interpolations["g0_m0_a0"]
+                def V_N_hopf_itp(tXg):
                     V = 0 * tXg[0,:]
                     for i in range(self.N-1):
-                        V += torch.from_numpy(self.fast_interp(self.V_DP_itp, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
+                        V += torch.from_numpy(self.fast_interp(self.V_hopf_itp, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
                     return V
-                self.V_hopf = V_N_DP_itp ## TODO: just use hopf solution (as in N==2 case)
+                self.V_hopf = V_N_hopf_itp ## TODO: just use hopf solution (as in N==2 case)                
+                # fast_interp_exec = """
+                # function fast_interp_N(_V_itp, tXg)
+                #     Vg = zeros(size(tXg,2))
+                #     for i=1:length(Vg); 
+                #     Vg[i] = sum(_V_itp(tXg[[1,2,2+j],i][end:-1:1]...) for j=1:size(tXg,1)-3); end # (assumes t in first row)
+                #     return Vg
+                # end
+                # """
+                # self.fast_interp = jl.seval(fast_interp_exec)
+                # self.V_hopf = lambda tXg: torch.from_numpy(self.fast_interp(self.V_hopf_itp, tXg.numpy()).to_numpy())
+
                 
         if record_set_metrics:
             if not(manual_load):
@@ -195,13 +207,15 @@ class ReachabilityDataset(Dataset):
         
         ## Compute Hopf value
         # compute find/solve value at model_coords with Hopf (from preloaded interpolation for now)
+        
+        # start_time = time.time()
         if self.use_hopf:
             try:
                 hopf_values = self.V_hopf(self.dynamics.input_to_coord(model_coords).t()) # 2x for diff in val fn
             except:
                 # TODO: interpolate outside of range in future (FP issue)
                 hopf_values = self.V_hopf(0.999 * self.dynamics.input_to_coord(model_coords).t())
-
+        # print("Hopf evaluation takes:", time.time() - start_time)
         
         if self.pretrain:
             dirichlet_masks = torch.ones(model_coords.shape[0]) > 0

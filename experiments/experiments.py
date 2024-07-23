@@ -142,8 +142,6 @@ class Experiment(ABC):
 
         JIp_s_max, JIp_s = 0., 0.
 
-        # print("About to train...")
-
         with tqdm(total=len(train_dataloader) * epochs) as pbar:
             train_losses = []
             last_CSL_epoch = -1
@@ -157,11 +155,14 @@ class Experiment(ABC):
                 for step, (model_input, gt) in enumerate(train_dataloader):
                     start_time = time.time()
                 
+                    if self.timing: start_time_2 = time.time()
                     model_input = {key: value.cuda() for key, value in model_input.items()}
                     gt = {key: value.cuda() for key, value in gt.items()}
 
                     model_results = self.model({'coords': model_input['model_coords']})
+                    if self.timing: print("Sample Evaluation took:", time.time() - start_time_2)
 
+                    if self.timing: start_time_2 = time.time()
                     states = self.dataset.dynamics.input_to_coord(model_results['model_in'].detach())[..., 1:]
                     values = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1))
                     dvs = self.dataset.dynamics.io_to_dv(model_results['model_in'], model_results['model_out'].squeeze(dim=-1))
@@ -170,7 +171,9 @@ class Experiment(ABC):
                         reach_values = gt['reach_values']
                         avoid_values = gt['avoid_values']
                     dirichlet_masks = gt['dirichlet_masks']
+                    if self.timing: print("Pre-loss Computation took:", time.time() - start_time_2)
 
+                    if self.timing: start_time_2 = time.time()
                     if self.dataset.dynamics.loss_type == 'brt_hjivi':
                         losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'])
                     elif self.dataset.dynamics.loss_type == 'brt_hjivi_hopf':
@@ -180,11 +183,14 @@ class Experiment(ABC):
                         losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, reach_values, avoid_values, dirichlet_masks, model_results['model_out'])
                     else:
                         raise NotImplementedError
+                    if self.timing: print("Loss Computation took:", time.time() - start_time_2)
                     
+                    if self.timing: start_time_2 = time.time()
                     ## Switch Optimizers/Rates (after Hopf Pretraining)
                     if dual_lr and not(self.dataset.hopf_pretrain) and self.dataset.hopf_pretrained:
                         optim = optim_std
                         lr_scheduler = lr_scheduler_std
+                    if self.timing: print("Loss Scheduler took:", time.time() - start_time_2)
                     
                     if use_lbfgs:
                         def closure():
@@ -205,8 +211,6 @@ class Experiment(ABC):
                             losses['diff_constraint_hom'].backward(retain_graph=True)
                             grads_PDE = []
                             for key, param in params.items():
-                                # print(key, param)
-                                # print(key, param.grad)
                                 grads_PDE.append(param.grad.view(-1))
                             grads_PDE = torch.cat(grads_PDE)
 
@@ -266,7 +270,7 @@ class Experiment(ABC):
                     if self.dataset.hopf_loss_decay and self.dataset.dynamics.loss_type == 'brt_hjivi_hopf': # and not(self.dataset.pretrain): # and not(self.dataset.hopf_pretrain):
                         losses['hopf'] = new_weight_hopf * losses['hopf']
                         new_weight_hopf = self.dataset.hopf_loss_decay_w * new_weight_hopf
-                    
+
                     ## Incrementally Introduce Differential Constraint Loss (After All Pretraining)
                     if self.dataset.diff_con_loss_incr and not(self.dataset.pretrain) and not(self.dataset.hopf_pretrain):
                         # losses['diff_constraint_hom'] = (1-new_weight_hopf) * losses['diff_constraint_hom']
@@ -275,6 +279,7 @@ class Experiment(ABC):
 
                     # import ipdb; ipdb.set_trace()
 
+                    if self.timing: start_time_2 = time.time()
                     train_loss = 0.
                     for loss_name, loss in losses.items():
                         single_loss = loss.mean()
@@ -289,6 +294,7 @@ class Experiment(ABC):
 
                     train_losses.append(train_loss.item())
                     writer.add_scalar("total_train_loss", train_loss, total_steps)
+                    if self.timing: print("Loss Combination took:", time.time() - start_time_2)
 
                     if not total_steps % steps_til_summary:
                         torch.save(self.model.state_dict(),
@@ -296,21 +302,25 @@ class Experiment(ABC):
                         # summary_fn(model, model_input, gt, model_output, writer, total_steps)
 
                     if not use_lbfgs:
+                        if self.timing: start_time_2 = time.time()
                         optim.zero_grad()
                         train_loss.backward()
+                        if self.timing: print("Grad Comp took:", time.time() - start_time_2)
 
+                        if self.timing: start_time_2 = time.time()
                         if clip_grad:
                             if isinstance(clip_grad, bool):
                                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.)
                             else:
                                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=clip_grad)
+                        if self.timing: print("Grad Clip took:", time.time() - start_time_2)
 
+                        if self.timing: start_time_2 = time.time()
                         optim.step()
                         lr_scheduler.step()
+                        if self.timing: print("Grad/Sched step took:", time.time() - start_time_2)
 
                     pbar.update(1)
-
-                    # print("About to write to WandB on epoch:", epoch)
 
                     if not total_steps % steps_til_summary:
                         tqdm.write("Epoch %d, Total loss %0.6f, iteration time %0.6f" % (epoch, train_loss, time.time() - start_time))
@@ -335,192 +345,9 @@ class Experiment(ABC):
 
                     total_steps += 1
 
-                # cost-supervised learning (CSL) phase
-                if use_CSL and not self.dataset.pretrain and (epoch-last_CSL_epoch) >= epochs_til_CSL:
-                    last_CSL_epoch = epoch
-                    
-                    # generate CSL datasets
-                    self.model.eval()
+                ## cost-supervised learning (CSL) used to be here (removed because not using)
 
-                    CSL_dataset = scenario_optimization(
-                        model=self.model, policy=self.model, dynamics=self.dataset.dynamics,
-                        tMin=self.dataset.tMin, tMax=CSL_tMax, dt=CSL_dt,
-                        set_type="BRT", control_type="value", # TODO: implement option for BRS too
-                        scenario_batch_size=min(num_CSL_samples, 100000), sample_batch_size=min(10*num_CSL_samples, 1000000),
-                        sample_generator=SliceSampleGenerator(dynamics=self.dataset.dynamics, slices=[None]*self.dataset.dynamics.state_dim),
-                        sample_validator=ValueThresholdValidator(v_min=float('-inf'), v_max=float('inf')),
-                        violation_validator=ValueThresholdValidator(v_min=0.0, v_max=0.0),
-                        max_scenarios=num_CSL_samples, tStart_generator=lambda n : torch.zeros(n).uniform_(self.dataset.tMin, CSL_tMax)
-                    )
-                    CSL_coords = torch.cat((CSL_dataset['times'].unsqueeze(-1), CSL_dataset['states']), dim=-1)
-                    CSL_costs = CSL_dataset['costs']
-
-                    num_CSL_val_samples = int(0.1*num_CSL_samples)
-                    CSL_val_dataset = scenario_optimization(
-                        model=self.model, policy=self.model, dynamics=self.dataset.dynamics,
-                        tMin=self.dataset.tMin, tMax=CSL_tMax, dt=CSL_dt,
-                        set_type="BRT", control_type="value", # TODO: implement option for BRS too
-                        scenario_batch_size=min(num_CSL_val_samples, 100000), sample_batch_size=min(10*num_CSL_val_samples, 1000000),
-                        sample_generator=SliceSampleGenerator(dynamics=self.dataset.dynamics, slices=[None]*self.dataset.dynamics.state_dim),
-                        sample_validator=ValueThresholdValidator(v_min=float('-inf'), v_max=float('inf')),
-                        violation_validator=ValueThresholdValidator(v_min=0.0, v_max=0.0),
-                        max_scenarios=num_CSL_val_samples, tStart_generator=lambda n : torch.zeros(n).uniform_(self.dataset.tMin, CSL_tMax)
-                    )
-                    CSL_val_coords = torch.cat((CSL_val_dataset['times'].unsqueeze(-1), CSL_val_dataset['states']), dim=-1)
-                    CSL_val_costs = CSL_val_dataset['costs']
-
-                    CSL_val_tMax_dataset = scenario_optimization(
-                        model=self.model, policy=self.model, dynamics=self.dataset.dynamics,
-                        tMin=self.dataset.tMin, tMax=self.dataset.tMax, dt=CSL_dt,
-                        set_type="BRT", control_type="value", # TODO: implement option for BRS too
-                        scenario_batch_size=min(num_CSL_val_samples, 100000), sample_batch_size=min(10*num_CSL_val_samples, 1000000),
-                        sample_generator=SliceSampleGenerator(dynamics=self.dataset.dynamics, slices=[None]*self.dataset.dynamics.state_dim),
-                        sample_validator=ValueThresholdValidator(v_min=float('-inf'), v_max=float('inf')),
-                        violation_validator=ValueThresholdValidator(v_min=0.0, v_max=0.0),
-                        max_scenarios=num_CSL_val_samples # no tStart_generator, since I want all tMax times
-                    )
-                    CSL_val_tMax_coords = torch.cat((CSL_val_tMax_dataset['times'].unsqueeze(-1), CSL_val_tMax_dataset['states']), dim=-1)
-                    CSL_val_tMax_costs = CSL_val_tMax_dataset['costs']
-                    
-                    self.model.train()
-
-                    # CSL optimizer
-                    CSL_optim = torch.optim.Adam(lr=CSL_lr, params=self.model.parameters())
-
-                    # initial CSL val loss
-                    CSL_val_results = self.model({'coords': self.dataset.dynamics.coord_to_input(CSL_val_coords.cuda())})
-                    CSL_val_preds = self.dataset.dynamics.io_to_value(CSL_val_results['model_in'], CSL_val_results['model_out'].squeeze(dim=-1))
-                    CSL_val_errors = CSL_val_preds - CSL_val_costs.cuda()
-                    CSL_val_loss = torch.mean(torch.pow(CSL_val_errors, 2))
-                    CSL_initial_val_loss = CSL_val_loss
-                    if self.use_wandb:
-                        wandb.log({
-                            "step": epoch,
-                            "CSL_val_loss": CSL_val_loss.item()
-                        })
-
-                    # initial self-supervised learning (SSL) val loss
-                    # right now, just took code from dataio.py and the SSL training loop above; TODO: refactor all this for cleaner modular code
-                    CSL_val_states = CSL_val_coords[..., 1:].cuda()
-                    CSL_val_dvs = self.dataset.dynamics.io_to_dv(CSL_val_results['model_in'], CSL_val_results['model_out'].squeeze(dim=-1))
-                    CSL_val_boundary_values = self.dataset.dynamics.boundary_fn(CSL_val_states)
-                    if self.dataset.dynamics.loss_type == 'brat_hjivi':
-                        CSL_val_reach_values = self.dataset.dynamics.reach_fn(CSL_val_states)
-                        CSL_val_avoid_values = self.dataset.dynamics.avoid_fn(CSL_val_states)
-                    CSL_val_dirichlet_masks = CSL_val_coords[:, 0].cuda() == self.dataset.tMin # assumes time unit in dataset (model) is same as real time units
-                    if self.dataset.dynamics.loss_type == 'brt_hjivi':
-                        SSL_val_losses = loss_fn(CSL_val_states, CSL_val_preds, CSL_val_dvs[..., 0], CSL_val_dvs[..., 1:], CSL_val_boundary_values, CSL_val_dirichlet_masks)
-                    elif self.dataset.dynamics.loss_type == 'brat_hjivi':
-                        SSL_val_losses = loss_fn(CSL_val_states, CSL_val_preds, CSL_val_dvs[..., 0], CSL_val_dvs[..., 1:], CSL_val_boundary_values, CSL_val_reach_values, CSL_val_avoid_values, CSL_val_dirichlet_masks)
-                    else:
-                        NotImplementedError
-                    SSL_val_loss = SSL_val_losses['diff_constraint_hom'].mean() # I assume there is no dirichlet (boundary) loss here, because I do not ever explicitly generate source samples at tMin (i.e. torch.all(CSL_val_dirichlet_masks == False))
-                    if self.use_wandb:
-                        wandb.log({
-                            "step": epoch,
-                            "SSL_val_loss": SSL_val_loss.item()
-                        })
-
-                    # CSL training loop
-                    for CSL_epoch in tqdm(range(max_CSL_epochs)):
-                        CSL_idxs = torch.randperm(num_CSL_samples)
-                        for CSL_batch in range(math.ceil(num_CSL_samples/CSL_batch_size)):
-                            CSL_batch_idxs = CSL_idxs[CSL_batch*CSL_batch_size:(CSL_batch+1)*CSL_batch_size]
-                            CSL_batch_coords = CSL_coords[CSL_batch_idxs]
-
-                            CSL_batch_results = self.model({'coords': self.dataset.dynamics.coord_to_input(CSL_batch_coords.cuda())})
-                            CSL_batch_preds = self.dataset.dynamics.io_to_value(CSL_batch_results['model_in'], CSL_batch_results['model_out'].squeeze(dim=-1))
-                            CSL_batch_costs = CSL_costs[CSL_batch_idxs].cuda()
-                            CSL_batch_errors = CSL_batch_preds - CSL_batch_costs
-                            CSL_batch_loss = CSL_loss_weight*torch.mean(torch.pow(CSL_batch_errors, 2))
-
-                            CSL_batch_states = CSL_batch_coords[..., 1:].cuda()
-                            CSL_batch_dvs = self.dataset.dynamics.io_to_dv(CSL_batch_results['model_in'], CSL_batch_results['model_out'].squeeze(dim=-1))
-                            CSL_batch_boundary_values = self.dataset.dynamics.boundary_fn(CSL_batch_states)
-                            if self.dataset.dynamics.loss_type == 'brat_hjivi':
-                                CSL_batch_reach_values = self.dataset.dynamics.reach_fn(CSL_batch_states)
-                                CSL_batch_avoid_values = self.dataset.dynamics.avoid_fn(CSL_batch_states)
-                            CSL_batch_dirichlet_masks = CSL_batch_coords[:, 0].cuda() == self.dataset.tMin # assumes time unit in dataset (model) is same as real time units
-                            if self.dataset.dynamics.loss_type == 'brt_hjivi':
-                                SSL_batch_losses = loss_fn(CSL_batch_states, CSL_batch_preds, CSL_batch_dvs[..., 0], CSL_batch_dvs[..., 1:], CSL_batch_boundary_values, CSL_batch_dirichlet_masks)
-                            elif self.dataset.dynamics.loss_type == 'brat_hjivi':
-                                SSL_batch_losses = loss_fn(CSL_batch_states, CSL_batch_preds, CSL_batch_dvs[..., 0], CSL_batch_dvs[..., 1:], CSL_batch_boundary_values, CSL_batch_reach_values, CSL_batch_avoid_values, CSL_batch_dirichlet_masks)
-                            else:
-                                NotImplementedError
-                            SSL_batch_loss = SSL_batch_losses['diff_constraint_hom'].mean() # I assume there is no dirichlet (boundary) loss here, because I do not ever explicitly generate source samples at tMin (i.e. torch.all(CSL_batch_dirichlet_masks == False))
-                            
-                            CSL_optim.zero_grad()
-                            SSL_batch_loss.backward(retain_graph=True)
-                            if (not use_lbfgs) and clip_grad: # no adjust_relative_grads, because I assume even with adjustment, the diff_constraint_hom remains unaffected and the only other loss (dirichlet) is zero
-                                if isinstance(clip_grad, bool):
-                                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.)
-                                else:
-                                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=clip_grad)
-                            CSL_batch_loss.backward()
-                            CSL_optim.step()
-                        
-                        # evaluate on CSL_val_dataset
-                        CSL_val_results = self.model({'coords': self.dataset.dynamics.coord_to_input(CSL_val_coords.cuda())})
-                        CSL_val_preds = self.dataset.dynamics.io_to_value(CSL_val_results['model_in'], CSL_val_results['model_out'].squeeze(dim=-1))
-                        CSL_val_errors = CSL_val_preds - CSL_val_costs.cuda()
-                        CSL_val_loss = torch.mean(torch.pow(CSL_val_errors, 2))
-                    
-                        CSL_val_states = CSL_val_coords[..., 1:].cuda()
-                        CSL_val_dvs = self.dataset.dynamics.io_to_dv(CSL_val_results['model_in'], CSL_val_results['model_out'].squeeze(dim=-1))
-                        CSL_val_boundary_values = self.dataset.dynamics.boundary_fn(CSL_val_states)
-                        if self.dataset.dynamics.loss_type == 'brat_hjivi':
-                            CSL_val_reach_values = self.dataset.dynamics.reach_fn(CSL_val_states)
-                            CSL_val_avoid_values = self.dataset.dynamics.avoid_fn(CSL_val_states)
-                        CSL_val_dirichlet_masks = CSL_val_coords[:, 0].cuda() == self.dataset.tMin # assumes time unit in dataset (model) is same as real time units
-                        if self.dataset.dynamics.loss_type == 'brt_hjivi':
-                            SSL_val_losses = loss_fn(CSL_val_states, CSL_val_preds, CSL_val_dvs[..., 0], CSL_val_dvs[..., 1:], CSL_val_boundary_values, CSL_val_dirichlet_masks)
-                        elif self.dataset.dynamics.loss_type == 'brat_hjivi':
-                            SSL_val_losses = loss_fn(CSL_val_states, CSL_val_preds, CSL_val_dvs[..., 0], CSL_val_dvs[..., 1:], CSL_val_boundary_values, CSL_val_reach_values, CSL_val_avoid_values, CSL_val_dirichlet_masks)
-                        else:
-                            raise NotImplementedError
-                        SSL_val_loss = SSL_val_losses['diff_constraint_hom'].mean() # I assume there is no dirichlet (boundary) loss here, because I do not ever explicitly generate source samples at tMin (i.e. torch.all(CSL_val_dirichlet_masks == False))
-                    
-                        CSL_val_tMax_results = self.model({'coords': self.dataset.dynamics.coord_to_input(CSL_val_tMax_coords.cuda())})
-                        CSL_val_tMax_preds = self.dataset.dynamics.io_to_value(CSL_val_tMax_results['model_in'], CSL_val_tMax_results['model_out'].squeeze(dim=-1))
-                        CSL_val_tMax_errors = CSL_val_tMax_preds - CSL_val_tMax_costs.cuda()
-                        CSL_val_tMax_loss = torch.mean(torch.pow(CSL_val_tMax_errors, 2))
-                        
-                        # log CSL losses, recovered_safe_set_fracs
-                        if self.dataset.dynamics.set_mode == 'reach':
-                            CSL_train_batch_theoretically_recoverable_safe_set_frac = torch.sum(CSL_batch_costs.cuda() < 0) / len(CSL_batch_preds)
-                            CSL_train_batch_recovered_safe_set_frac = torch.sum(CSL_batch_preds < torch.min(CSL_batch_preds[CSL_batch_costs.cuda() > 0])) / len(CSL_batch_preds)
-                            CSL_val_theoretically_recoverable_safe_set_frac = torch.sum(CSL_val_costs.cuda() < 0) / len(CSL_val_preds)
-                            CSL_val_recovered_safe_set_frac = torch.sum(CSL_val_preds < torch.min(CSL_val_preds[CSL_val_costs.cuda() > 0])) / len(CSL_val_preds)
-                            CSL_val_tMax_theoretically_recoverable_safe_set_frac = torch.sum(CSL_val_tMax_costs.cuda() < 0) / len(CSL_val_tMax_preds)
-                            CSL_val_tMax_recovered_safe_set_frac = torch.sum(CSL_val_tMax_preds < torch.min(CSL_val_tMax_preds[CSL_val_tMax_costs.cuda() > 0])) / len(CSL_val_tMax_preds)
-                        elif self.dataset.dynamics.set_mode == 'avoid':
-                            CSL_train_batch_theoretically_recoverable_safe_set_frac = torch.sum(CSL_batch_costs.cuda() > 0) / len(CSL_batch_preds)
-                            CSL_train_batch_recovered_safe_set_frac = torch.sum(CSL_batch_preds > torch.max(CSL_batch_preds[CSL_batch_costs.cuda() < 0])) / len(CSL_batch_preds)
-                            CSL_val_theoretically_recoverable_safe_set_frac = torch.sum(CSL_val_costs.cuda() > 0) / len(CSL_val_preds)
-                            CSL_val_recovered_safe_set_frac = torch.sum(CSL_val_preds > torch.max(CSL_val_preds[CSL_val_costs.cuda() < 0])) / len(CSL_val_preds)
-                            CSL_val_tMax_theoretically_recoverable_safe_set_frac = torch.sum(CSL_val_tMax_costs.cuda() > 0) / len(CSL_val_tMax_preds)
-                            CSL_val_tMax_recovered_safe_set_frac = torch.sum(CSL_val_tMax_preds > torch.max(CSL_val_tMax_preds[CSL_val_tMax_costs.cuda() < 0])) / len(CSL_val_tMax_preds)
-                        else:
-                            raise NotImplementedError
-                        if self.use_wandb:
-                            wandb.log({
-                                "step": epoch+(CSL_epoch+1)*int(0.5*epochs_til_CSL/max_CSL_epochs),
-                                "CSL_train_batch_loss": CSL_batch_loss.item(),
-                                "SSL_train_batch_loss": SSL_batch_loss.item(),
-                                "CSL_val_loss": CSL_val_loss.item(),
-                                "SSL_val_loss": SSL_val_loss.item(),
-                                "CSL_val_tMax_loss": CSL_val_tMax_loss.item(),
-                                "CSL_train_batch_theoretically_recoverable_safe_set_frac": CSL_train_batch_theoretically_recoverable_safe_set_frac.item(),
-                                "CSL_val_theoretically_recoverable_safe_set_frac": CSL_val_theoretically_recoverable_safe_set_frac.item(),
-                                "CSL_val_tMax_theoretically_recoverable_safe_set_frac": CSL_val_tMax_theoretically_recoverable_safe_set_frac.item(),
-                                "CSL_train_batch_recovered_safe_set_frac": CSL_train_batch_recovered_safe_set_frac.item(),
-                                "CSL_val_recovered_safe_set_frac": CSL_val_recovered_safe_set_frac.item(),
-                                "CSL_val_tMax_recovered_safe_set_frac": CSL_val_tMax_recovered_safe_set_frac.item(),
-                            })
-
-                        if CSL_val_loss < CSL_loss_frac_cutoff*CSL_initial_val_loss:
-                            break
-
+                if self.timing: start_time_2 = time.time()
                 if not (epoch+1) % epochs_til_checkpoint:
                     # Saving the optimizer state is important to produce consistent results
                     checkpoint = { 
@@ -534,6 +361,7 @@ class Experiment(ABC):
                     self.validate(
                         epoch=epoch+1, save_path=os.path.join(checkpoints_dir, 'BRS_validation_plot_epoch_%04d.png' % (epoch+1)),
                         x_resolution = val_x_resolution, y_resolution = val_y_resolution, z_resolution=val_z_resolution, time_resolution=val_time_resolution)
+                if self.timing: print("Checkpointing took:", time.time() - start_time_2)
 
         if was_eval:
             self.model.eval()
@@ -578,8 +406,9 @@ class DeepReach(Experiment):
         pass
 
 class DeepReachHopf(Experiment):
-    def init_special(self, N=2):
+    def init_special(self, N=2, timing=False):
         self.N = N
+        self.timing = timing
         if N == 2:
             self.validate = self.validate2D
         elif N > 2:
@@ -668,10 +497,10 @@ class DeepReachHopf(Experiment):
             coords = torch.zeros(x_resolution*y_resolution, self.dataset.dynamics.state_dim + 1)
             coords[:, 0] = times[i % len(times)]
             coords[:, 1:] = torch.tensor(plot_config['state_slices']) # initialized to zero (nothing else to set!)
-            if i < 3: # xN - xi plane
+            if i < len(times): # xN - xi plane
                 coords[:, 1 + plot_config['x_axis_idx']] = xys[:, 0]
                 coords[:, 1 + plot_config['y_axis_idx']] = xys[:, 1]
-            elif i < 6: # xi - xj plane
+            elif i < 2*len(times): # xi - xj plane
                 coords[:, 1 + plot_config['y_axis_idx']] = xys[:, 0]
                 coords[:, 1 + plot_config['z_axis_idx']] = xys[:, 1]
             else: # xN - (xi = xj) plane
@@ -684,10 +513,10 @@ class DeepReachHopf(Experiment):
             
             ax = fig.add_subplot(3, len(times), (j+1) + i)
             ax.set_title('t = %0.2f' % (times[i % len(times)])) #, plot_config['state_labels'][plot_config['z_axis_idx']], zs[j]))
-            if i < 3: # xN - xi plane
+            if i < len(times): # xN - xi plane
                 ax.set_xlabel("xN")
                 ax.set_ylabel("xi")
-            elif i < 6: # xi - xj plane
+            elif i < 2*len(times): # xi - xj plane
                 ax.set_xlabel("xi")
                 ax.set_ylabel("xj")
             else: # xN - (xi = xj) plane
@@ -705,8 +534,8 @@ class DeepReachHopf(Experiment):
             n_grid_len = int(n_grid_plane_pts ** 0.5)
             pix_start = (i // len(times)) * n_grid_plane_pts
             tix_start = (i % len(times)) * self.dataset.n_grid_pts
-            if (i % len(times)) > 0: # FIXME this breaks if the std grid times qty changes (=5 atm)
-                tix_start += (i % len(times)) * self.dataset.n_grid_pts
+            # if (i % len(times)) > 0: # FIXME this breaks if the std grid times qty changes (=5 atm)
+            #     tix_start += (i % len(times)) * self.dataset.n_grid_pts
             ix = pix_start + tix_start
             Vg = self.dataset.values_DP_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len)
             ax.contour(self.dataset.X1g, self.dataset.X2g, Vg.cpu(), [0.])
