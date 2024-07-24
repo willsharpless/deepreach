@@ -22,8 +22,11 @@ p.add_argument('--experiments_dir', type=str, default='./runs', help='Where to s
 p.add_argument('--experiment_name', type=str, default='test_run', help='Name of the experient subdirectory.') #FIXME: required=True instead of default
 p.add_argument('--use_wandb', default=False, action='store_true', help='use wandb for logging')
 
+# general options
 p.add_argument('--N', default=15, required=False, type=int, help='Dimension of validation model')
 p.add_argument('--timing', action='store_true', default=False, required=False, help='Gives detailed computation times')
+p.add_argument('--use_bank', action='store_true', default=True, required=False, help='Makes/loads a state & value bank to reduce compute')
+p.add_argument('--bank_name', type=str, default='none', required=False, help='Name of the state & value bank file (if none and using bank, will make)')
 
 use_wandb = p.parse_known_args()[0].use_wandb
 if use_wandb:
@@ -202,7 +205,8 @@ dataset = dataio.ReachabilityDataset(
     hopf_pretrain=orig_opt.hopf_pretrain, hopf_pretrain_iters=orig_opt.hopf_pretrain_iters,
     hopf_loss_decay=orig_opt.hopf_loss_decay, hopf_loss_decay_w=orig_opt.hopf_loss_decay_w,
     diff_con_loss_incr=orig_opt.diff_con_loss_incr, no_curriculum=orig_opt.no_curr,
-    record_set_metrics=orig_opt.set_metrics)
+    record_set_metrics=orig_opt.set_metrics,
+    use_bank=orig_opt.use_bank, bank_name=orig_opt.bank_name,)
 
 model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
                              final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl)
