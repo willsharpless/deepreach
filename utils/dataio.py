@@ -88,7 +88,6 @@ class ReachabilityDataset(Dataset):
                 # """
                 # self.fast_interp = jl.seval(fast_interp_exec)
                 # self.V_hopf = lambda tXg: torch.from_numpy(self.fast_interp(self.V_hopf_itp, tXg.numpy()).to_numpy())
-
                 
         if record_set_metrics:
             if not(manual_load):
@@ -111,7 +110,10 @@ class ReachabilityDataset(Dataset):
                 elif self.N > 2:
                     LessLinear2D_interpolations = jl.load("LessLinear2D1i_interpolations_res1e-2_r15e-2.jld", "LessLinear2D_interpolations")
                     # self.V_DP_itp = LessLinear2D_interpolations["g0_m0_a0"] #linear
-                    self.V_DP_itp = LessLinear2D_interpolations["g20_m-20_a1"] 
+                    # self.V_DP_itp = LessLinear2D_interpolations["g20_m-20_a1"] #level 2
+                    # self.V_DP_itp = LessLinear2D_interpolations["g20_m0_a0"] #level 1
+                    model_key = "g" + str(int(self.dynamics.gamma)) + "_m" + str(int(self.dynamics.mu)) + "_a"  + str(int(self.dynamics.alpha))
+                    self.V_DP_itp = LessLinear2D_interpolations[model_key]
                     def V_N_DP_itp(tXg):
                         V = 0 * tXg[0,:]
                         for i in range(self.N-1):
@@ -190,7 +192,8 @@ class ReachabilityDataset(Dataset):
 
             print("\nMaking a Bank of Evaluated Points ...")
             bank = torch.zeros(self.bank_total, self.N+3) # cols: time (1), state (2 - N+1), boundary value (N+2), value (N+3)
-            bank[:, 1:self.N+1] = torch.zeros(self.bank_total, self.N).uniform_(-1, 1) # TODO: latin hypercube?
+            bank[:, 1:self.N+1] = torch.zeros(self.bank_total, self.N).uniform_(-1, 1) 
+            # TODO better sampling: latin hypercube? sparse grid? near boundary? on scored planes (is this cheating)?
 
             step = self.numpoints 
             with tqdm(total=self.numblocks) as pbar:
@@ -223,60 +226,61 @@ class ReachabilityDataset(Dataset):
 
     def __getitem__(self, idx):
         
-        ## Sample Points and Evaluate
-        if not(self.use_bank) or self.pretrain:
+        # ## Sample Points and Evaluate
+        # if not(self.use_bank) or self.pretrain:
 
-            # uniformly sample domain and include coordinates where source is non-zero 
-            model_states = torch.zeros(self.numpoints, self.dynamics.state_dim).uniform_(-1, 1)
-            if self.num_target_samples > 0:
-                target_state_samples = self.dynamics.sample_target_state(self.num_target_samples)
-                model_states[-self.num_target_samples:] = self.dynamics.coord_to_input(torch.cat((torch.zeros(self.num_target_samples, 1), target_state_samples), dim=-1))[:, 1:self.dynamics.state_dim+1]
+        # uniformly sample domain and include coordinates where source is non-zero 
+        model_states = torch.zeros(self.numpoints, self.dynamics.state_dim).uniform_(-1, 1)
+        if self.num_target_samples > 0:
+            target_state_samples = self.dynamics.sample_target_state(self.num_target_samples)
+            model_states[-self.num_target_samples:] = self.dynamics.coord_to_input(torch.cat((torch.zeros(self.num_target_samples, 1), target_state_samples), dim=-1))[:, 1:self.dynamics.state_dim+1]
 
-            if self.pretrain:
-                # only sample in time around the initial condition
-                times = torch.full((self.numpoints, 1), self.tMin)
+        if self.pretrain:
+            # only sample in time around the initial condition
+            times = torch.full((self.numpoints, 1), self.tMin)
+        else:
+            # slowly grow time values from start time (unless Hopf)
+            if self.hopf_pretrain or self.hopf_pretrained or self.no_curriculum:
+                # times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * ((self.counter + self.hopf_pretrain_counter)/(self.counter_end + self.hopf_pretrain_iters)))
+                times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin)) # during hopf pt, sample across all time?
             else:
-                # slowly grow time values from start time (unless Hopf)
-                if self.hopf_pretrain or self.hopf_pretrained or self.no_curriculum:
-                    # times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * ((self.counter + self.hopf_pretrain_counter)/(self.counter_end + self.hopf_pretrain_iters)))
-                    times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin)) # during hopf pt, sample across all time?
-                else:
-                    times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * (self.counter/self.counter_end))
-                # make sure we always have training samples at the initial time
-                times[-self.num_src_samples:, 0] = self.tMin
+                times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * (self.counter/self.counter_end))
+            # make sure we always have training samples at the initial time
+            times[-self.num_src_samples:, 0] = self.tMin
 
-            model_coords = torch.cat((times, model_states), dim=1)        
-            if self.dynamics.input_dim > self.dynamics.state_dim + 1: # temporary workaround for having to deal with dynamics classes for parametrized models with extra inputs
-                model_coords = torch.cat((model_coords, torch.zeros(self.numpoints, self.dynamics.input_dim - self.dynamics.state_dim - 1)), dim=1)      
+        model_coords = torch.cat((times, model_states), dim=1)        
+        if self.dynamics.input_dim > self.dynamics.state_dim + 1: # temporary workaround for having to deal with dynamics classes for parametrized models with extra inputs
+            model_coords = torch.cat((model_coords, torch.zeros(self.numpoints, self.dynamics.input_dim - self.dynamics.state_dim - 1)), dim=1)      
 
-            boundary_values = self.dynamics.boundary_fn(self.dynamics.input_to_coord(model_coords)[..., 1:])
-            if self.dynamics.loss_type == 'brat_hjivi':
-                reach_values = self.dynamics.reach_fn(self.dynamics.input_to_coord(model_coords)[..., 1:])
-                avoid_values = self.dynamics.avoid_fn(self.dynamics.input_to_coord(model_coords)[..., 1:])
+        ## Solve Hopf value
+        if self.use_hopf:   
+
+            if self.pretrain: # or when hopf loss is not being used (once turned off in regular training)
+                hopf_values = torch.zeros(self.numpoints) #saves time
+
+            ## Sample Bank of Hopf-Evaluated Points
+            elif self.use_bank:
+
+                sample_index = self.bank_index[self.block_counter*self.numpoints:(self.block_counter+1)*self.numpoints]
+                bank_sample = torch.from_numpy(self.bank[sample_index, :])
+
+                model_coords_hopf = bank_sample[:, 0:self.N+1] # separate states so pde loss is not restricted to small bank
+                hopf_values = bank_sample[:, self.N+2]
+
+                self.block_counter += 1
+                if self.block_counter == self.numblocks:
+                    self.bank_index = torch.from_numpy(np.random.permutation(self.bank_total)) # reshuffle
+                    self.block_counter = 0
             
-            ## Compute Hopf value            
-            if self.use_hopf and not(self.pretrain):
-                try:
-                    hopf_values = self.V_hopf(self.dynamics.input_to_coord(model_coords).t()) # is slow in high d :///
-                except:
-                    hopf_values = self.V_hopf(0.999 * self.dynamics.input_to_coord(model_coords).t()) # rare FP issue
-            elif self.use_hopf and self.pretrain:
-                hopf_values = 0 * boundary_values
-        
-        ## Sample Bank of Evaluated
-        elif self.use_bank:
-
-            sample_index = self.bank_index[self.block_counter*self.numpoints:(self.block_counter+1)*self.numpoints]
-            bank_sample = torch.from_numpy(self.bank[sample_index, :])
-
-            model_coords = bank_sample[:, 0:self.N+1]
-            boundary_values = bank_sample[:, self.N+1]
-            hopf_values = bank_sample[:, self.N+2]
-
-            self.block_counter += 1
-            if self.block_counter == self.numblocks:
-                self.bank_index = torch.from_numpy(np.random.permutation(self.bank_total)) # reshuffle
-                self.block_counter = 0
+            ## Compute Value from Hopf-Interpolation
+            else:
+                try: hopf_values = self.V_hopf(self.dynamics.input_to_coord(model_coords).t()) # is slow in high d (yields)
+                except: hopf_values = self.V_hopf(0.999 * self.dynamics.input_to_coord(model_coords).t()) # rare FP issue
+            
+        boundary_values = self.dynamics.boundary_fn(self.dynamics.input_to_coord(model_coords)[..., 1:])
+        if self.dynamics.loss_type == 'brat_hjivi':
+            reach_values = self.dynamics.reach_fn(self.dynamics.input_to_coord(model_coords)[..., 1:])
+            avoid_values = self.dynamics.avoid_fn(self.dynamics.input_to_coord(model_coords)[..., 1:])
 
         if self.pretrain:
             dirichlet_masks = torch.ones(model_coords.shape[0]) > 0
@@ -300,7 +304,10 @@ class ReachabilityDataset(Dataset):
         if self.dynamics.loss_type == 'brt_hjivi':
             return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks}
         elif self.dynamics.loss_type == 'brt_hjivi_hopf':
-            return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks, 'hopf_values': hopf_values}
+            if not(self.use_bank) or self.hopf_pretrain_counter == 0:
+                return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks, 'hopf_values': hopf_values}
+            else:
+                return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks, 'hopf_values': hopf_values, 'model_coords_hopf': model_coords_hopf}
         elif self.dynamics.loss_type == 'brat_hjivi':
             return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'reach_values': reach_values, 'avoid_values': avoid_values, 'dirichlet_masks': dirichlet_masks}
         else:

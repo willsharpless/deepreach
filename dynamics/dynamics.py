@@ -521,10 +521,10 @@ class LessLinear2D(Dynamics):
         }
 
 class LessLinearND(Dynamics):
-    # def __init__(self, N:int, gamma:float, mu:float, alpha:float):
-    def __init__(self, N:int):
-        # gamma, mu, alpha = 0, 0, 0 
-        gamma, mu, alpha = 20, -20, 1
+    def __init__(self, N:int, gamma:float, mu:float, alpha:float):
+    # def __init__(self, N:int):
+    #     gamma, mu, alpha = 0, 0, 0 
+        # gamma, mu, alpha = 20, -20, 1
         self.N = N 
         goalR, u_max, d_max, set_mode = 0.15, 0.5, 0.3, "reach" 
         self.A = (-0.5 * torch.eye(N) - torch.cat((torch.cat((torch.zeros(1,1),torch.ones(N-1,1)),0),torch.zeros(N,N-1)),1)).cuda()

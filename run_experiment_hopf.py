@@ -72,9 +72,9 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--epochs_til_ckpt', type=int, default=1000, help='Time interval in seconds until checkpoint is saved.')
     p.add_argument('--steps_til_summary', type=int, default=100, help='Time interval in seconds until tensorboard summary is saved.')
     p.add_argument('--batch_size', type=int, default=1, help='Batch size used during training (irrelevant, since len(dataset) == 1).')
-    p.add_argument('--lr', type=float, default=2e-6, help='learning rate. default=2e-6')
-    p.add_argument('--lr_decay_w', default=1, required=False, type=float, help='LR Exponential Decay Rate')
-    p.add_argument('--num_epochs', type=int, default=40000, help='Number of epochs to train for.')
+    p.add_argument('--lr', type=float, default=2e-5, help='learning rate. default=2e-6')
+    p.add_argument('--lr_decay_w', default=1., required=False, type=float, help='LR Exponential Decay Rate') # 1 or 0.9999
+    p.add_argument('--num_epochs', type=int, default=110000, help='Number of epochs to train for.')
     p.add_argument('--clip_grad', default=0.0, type=float, help='Clip gradient.')
     p.add_argument('--use_lbfgs', default=False, type=bool, help='use L-BFGS.')
     p.add_argument('--adj_rel_grads', default=False, type=bool, help='adjust the relative magnitude of the losses') # adds 0.05s/it FYI
@@ -105,13 +105,15 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--hopf_loss', type=str, default='lindiff', choices=['none', 'lindiff', 'grad'], help='Method for using Hopf data')
     p.add_argument('--hopf_loss_divisor', default=5, required=False, type=float, help='What to divide the hopf loss by for loss reweighting')
     p.add_argument('--hopf_pretrain', action='store_true', default=True, required=False, help='Pretrain hopf conditions')
-    p.add_argument('--hopf_pretrain_iters', type=int, default=2000, required=False, help='Number of pretrain iterations with Hopf loss')
+    p.add_argument('--hopf_pretrain_iters', type=int, default=5000, required=False, help='Number of pretrain iterations with Hopf loss')
     p.add_argument('--hopf_loss_decay', action='store_true', default=True, required=False, help='Hopf loss weight decay')
     p.add_argument('--hopf_loss_decay_w', default=0.9998, required=False, type=float, help='Hopf loss weight decay rate')
     p.add_argument('--diff_con_loss_incr', action='store_true', default=False, required=False, help='Incremental Diff Cons loss weight of (1 - hopf decay)')
     p.add_argument('--dual_lr', action='store_true', default=True, required=False, help='Use separate lr for Hopf Pretraining and Training')
     p.add_argument('--lr_hopf', default=2e-5, required=False, type=float, help='Learning Rate in Hopf Pretraining')
     p.add_argument('--lr_hopf_decay_w', default=1, required=False, type=float, help='LR Exponential Decay Rate in Hopf Pretraining')
+    p.add_argument('--nl_scale', action='store_true', default=False, required=False, help='Whether to scale the amount of nonlinearity over training') # TODO: add choice of epochs, add correct contour
+    p.add_argument('--nl_scale_e_step', type=int, default=10000, required=False, help='Number of iterations to step the linear scale')
 
     # record set metrics
     p.add_argument('--set_metrics', action='store_true', default=True, required=False, help='Compute and Score the Learned Set Similarity (Needs Ground Truth)')
@@ -231,7 +233,7 @@ if (mode == 'all') or (mode == 'train'):
         loss_fn=loss_fn, clip_grad=orig_opt.clip_grad, use_lbfgs=orig_opt.use_lbfgs, adjust_relative_grads=orig_opt.adj_rel_grads,
         val_x_resolution=orig_opt.val_x_resolution, val_y_resolution=orig_opt.val_y_resolution, val_z_resolution=orig_opt.val_z_resolution, val_time_resolution=orig_opt.val_time_resolution,
         use_CSL=orig_opt.use_CSL, CSL_lr=orig_opt.CSL_lr, CSL_dt=orig_opt.CSL_dt, epochs_til_CSL=orig_opt.epochs_til_CSL, num_CSL_samples=orig_opt.num_CSL_samples, CSL_loss_frac_cutoff=orig_opt.CSL_loss_frac_cutoff, max_CSL_epochs=orig_opt.max_CSL_epochs, CSL_loss_weight=orig_opt.CSL_loss_weight, CSL_batch_size=orig_opt.CSL_batch_size,
-        dual_lr=orig_opt.dual_lr, lr_decay_w=orig_opt.lr_decay_w, lr_hopf=orig_opt.lr_hopf, lr_hopf_decay_w=orig_opt.lr_hopf_decay_w)
+        dual_lr=orig_opt.dual_lr, lr_decay_w=orig_opt.lr_decay_w, lr_hopf=orig_opt.lr_hopf, lr_hopf_decay_w=orig_opt.lr_hopf_decay_w, nonlin_scale=orig_opt.nl_scale, nonlin_scale_e_step=orig_opt.nl_scale_e_step)
 
 if (mode == 'all') or (mode == 'test'):
     experiment.test(

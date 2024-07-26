@@ -69,13 +69,13 @@ def init_brt_hjivi_hopf_loss(dynamics, minWith, dirichlet_loss_divisor, hopf_los
     ## Include a Linear Differencing Term
     if hopf_loss == 'lindiff':
 
-        def brt_hjivi_loss_hopf(state, value, dvdt, dvds, boundary_value, dirichlet_mask, output, hopf_value, hopf_pretrain):
+        def brt_hjivi_loss_hopf(state, value, dvdt, dvds, boundary_value, dirichlet_mask, output, hopf_value, learned_hopf_value, hopf_pretrain):
 
             dirichlet = value[dirichlet_mask] - boundary_value[dirichlet_mask]
             if dynamics.deepreach_model == 'exact':
                     dirichlet = output.squeeze(dim=-1)[dirichlet_mask]-0.0
 
-            hopf_loss = value - hopf_value
+            hopf_loss = learned_hopf_value - hopf_value
             ## TODO: add thresholding for nonlin, based on conservative error?
 
             if torch.all(dirichlet_mask):

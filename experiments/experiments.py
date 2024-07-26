@@ -97,7 +97,8 @@ class Experiment(ABC):
             loss_fn, clip_grad, use_lbfgs, adjust_relative_grads, 
             val_x_resolution, val_y_resolution, val_z_resolution, val_time_resolution,
             use_CSL, CSL_lr, CSL_dt, epochs_til_CSL, num_CSL_samples, CSL_loss_frac_cutoff, max_CSL_epochs, CSL_loss_weight, CSL_batch_size,
-            dual_lr=False, lr_decay_w=1., lr_hopf=2e-5, lr_hopf_decay_w=1., smoothing_factor=0.8
+            dual_lr=False, lr_decay_w=1., lr_hopf=2e-5, lr_hopf_decay_w=1., smoothing_factor=0.8, 
+            nonlin_scale=False, nonlin_scale_e_step=10000,
         ):
         was_eval = not self.model.training
         self.model.train()
@@ -135,12 +136,11 @@ class Experiment(ABC):
         writer = SummaryWriter(summaries_dir)
 
         total_steps = 0
-
         new_weight = 1
         new_weight_hopf = 1
         new_weight_diff_con = 1
-
         JIp_s_max, JIp_s = 0., 0.
+        gamma_orig, mu_orig, alpha_orig = self.dataset.dynamics.gamma, self.dataset.dynamics.mu, self.dataset.dynamics.alpha
 
         with tqdm(total=len(train_dataloader) * epochs) as pbar:
             train_losses = []
@@ -150,6 +150,13 @@ class Experiment(ABC):
                     last_CSL_epoch = epoch
                 time_interval_length = (self.dataset.counter/self.dataset.counter_end)*(self.dataset.tMax-self.dataset.tMin)
                 CSL_tMax = self.dataset.tMin + int(time_interval_length/CSL_dt)*CSL_dt
+
+                ## FIXME: make it better
+                if nonlin_scale and not(self.dataset.pretrain) and not(self.dataset.hopf_pretrain) and epoch % nonlin_scale_e_step:
+                    e_perc = ((epoch - nonlin_scale_e_step)/(epochs - nonlin_scale_e_step)) # instead of epoch/epochs, this gives 1 step to switch from hopf to pde loss
+                    self.dataset.dynamics.gamma = e_perc * gamma_orig
+                    self.dataset.dynamics.mu = e_perc * mu_orig
+                    self.dataset.dynamics.alpha = e_perc * alpha_orig
                 
                 # self-supervised learning
                 for step, (model_input, gt) in enumerate(train_dataloader):
@@ -178,7 +185,12 @@ class Experiment(ABC):
                         losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'])
                     elif self.dataset.dynamics.loss_type == 'brt_hjivi_hopf':
                         hopf_values = gt['hopf_values']
-                        losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, self.dataset.hopf_pretrain)
+                        if not(self.dataset.use_bank) or self.dataset.hopf_pretrain_counter == 0:
+                            learned_hopf_values = values
+                        else:
+                            model_results_hopf = self.model({'coords': gt['model_coords_hopf']})
+                            learned_hopf_values = self.dataset.dynamics.io_to_value(model_results_hopf['model_in'].detach(), model_results_hopf['model_out'].squeeze(dim=-1))   
+                        losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, learned_hopf_values, self.dataset.hopf_pretrain)
                     elif self.dataset.dynamics.loss_type == 'brat_hjivi':
                         losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, reach_values, avoid_values, dirichlet_masks, model_results['model_out'])
                     else:
