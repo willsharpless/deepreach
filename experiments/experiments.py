@@ -98,6 +98,7 @@ class Experiment(ABC):
             val_x_resolution, val_y_resolution, val_z_resolution, val_time_resolution,
             use_CSL, CSL_lr, CSL_dt, epochs_til_CSL, num_CSL_samples, CSL_loss_frac_cutoff, max_CSL_epochs, CSL_loss_weight, CSL_batch_size,
             dual_lr=False, lr_decay_w=1., lr_hopf=2e-5, lr_hopf_decay_w=1., smoothing_factor=0.8, 
+            hopf_loss_decay_early = True, hopf_loss_decay=True, hopf_loss_decay_w=0.9998, diff_con_loss_incr=False,
             nonlin_scale=False, nonlin_scale_e_step=10000,
         ):
         was_eval = not self.model.training
@@ -279,15 +280,16 @@ class Experiment(ABC):
                             writer.add_scalar('weight_scaling_hopf', new_weight_hopf, total_steps)
 
                     ## Decay Hopf Loss (Works Better if Started in Pretraining)
-                    if self.dataset.hopf_loss_decay and self.dataset.dynamics.loss_type == 'brt_hjivi_hopf': # and not(self.dataset.pretrain): # and not(self.dataset.hopf_pretrain):
-                        losses['hopf'] = new_weight_hopf * losses['hopf']
-                        new_weight_hopf = self.dataset.hopf_loss_decay_w * new_weight_hopf
+                    if hopf_loss_decay and self.dataset.dynamics.loss_type == 'brt_hjivi_hopf': # 
+                        if (not(self.dataset.pretrain) and not(self.dataset.hopf_pretrain)) or hopf_loss_decay_early:
+                            losses['hopf'] = new_weight_hopf * losses['hopf']
+                            new_weight_hopf = hopf_loss_decay_w * new_weight_hopf
 
                     ## Incrementally Introduce Differential Constraint Loss (After All Pretraining)
-                    if self.dataset.diff_con_loss_incr and not(self.dataset.pretrain) and not(self.dataset.hopf_pretrain):
+                    if diff_con_loss_incr and not(self.dataset.pretrain) and not(self.dataset.hopf_pretrain):
                         # losses['diff_constraint_hom'] = (1-new_weight_hopf) * losses['diff_constraint_hom']
                         losses['diff_constraint_hom'] = (1-new_weight_diff_con) * losses['diff_constraint_hom']
-                        new_weight_diff_con = self.dataset.hopf_loss_decay_w * new_weight_diff_con
+                        new_weight_diff_con = hopf_loss_decay_w * new_weight_diff_con
 
                     # import ipdb; ipdb.set_trace()
 

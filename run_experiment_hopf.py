@@ -25,7 +25,7 @@ p.add_argument('--use_wandb', default=False, action='store_true', help='use wand
 # general options
 p.add_argument('--N', default=15, required=False, type=int, help='Dimension of validation model')
 p.add_argument('--timing', action='store_true', default=False, required=False, help='Gives detailed computation times')
-p.add_argument('--use_bank', action='store_true', default=True, required=False, help='Makes/loads a state & value bank to reduce compute')
+p.add_argument('--use_bank', action='store_true', default=False, required=False, help='Makes/loads a state & value bank to reduce compute')
 p.add_argument('--bank_name', type=str, default='none', required=False, help='Name of the state & value bank file (if none and using bank, will make)')
 
 use_wandb = p.parse_known_args()[0].use_wandb
@@ -53,7 +53,7 @@ if (mode == 'all') or (mode == 'train'):
     # simulation data source options
     p.add_argument('--numpoints', type=int, default=65000, help='Number of points in simulation data source __getitem__.')
     p.add_argument('--pretrain', action='store_true', default=True, required=False, help='Pretrain dirichlet conditions')
-    p.add_argument('--pretrain_iters', type=int, default=2000, required=False, help='Number of pretrain iterations')
+    p.add_argument('--pretrain_iters', type=int, default=5000, required=False, help='Number of pretrain iterations')
     p.add_argument('--tMin', type=float, default=0.0, required=False, help='Start time of the simulation')
     p.add_argument('--tMax', type=float, default=1.0, required=False, help='End time of the simulation')
     p.add_argument('--counter_start', type=int, default=0, required=False, help='Defines the initial time for the curriculum training')
@@ -72,9 +72,9 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--epochs_til_ckpt', type=int, default=1000, help='Time interval in seconds until checkpoint is saved.')
     p.add_argument('--steps_til_summary', type=int, default=100, help='Time interval in seconds until tensorboard summary is saved.')
     p.add_argument('--batch_size', type=int, default=1, help='Batch size used during training (irrelevant, since len(dataset) == 1).')
-    p.add_argument('--lr', type=float, default=2e-5, help='learning rate. default=2e-6')
+    p.add_argument('--lr', type=float, default=1e-5, help='learning rate. default=2e-6')
     p.add_argument('--lr_decay_w', default=1., required=False, type=float, help='LR Exponential Decay Rate') # 1 or 0.9999
-    p.add_argument('--num_epochs', type=int, default=110000, help='Number of epochs to train for.')
+    p.add_argument('--num_epochs', type=int, default=105000, help='Number of epochs to train for.')
     p.add_argument('--clip_grad', default=0.0, type=float, help='Clip gradient.')
     p.add_argument('--use_lbfgs', default=False, type=bool, help='use L-BFGS.')
     p.add_argument('--adj_rel_grads', default=False, type=bool, help='adjust the relative magnitude of the losses') # adds 0.05s/it FYI
@@ -108,6 +108,7 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--hopf_pretrain_iters', type=int, default=5000, required=False, help='Number of pretrain iterations with Hopf loss')
     p.add_argument('--hopf_loss_decay', action='store_true', default=True, required=False, help='Hopf loss weight decay')
     p.add_argument('--hopf_loss_decay_w', default=0.9998, required=False, type=float, help='Hopf loss weight decay rate')
+    p.add_argument('--hopf_loss_decay_early', action='store_true', default=False, required=False, help='Hopf loss weight decay')
     p.add_argument('--diff_con_loss_incr', action='store_true', default=False, required=False, help='Incremental Diff Cons loss weight of (1 - hopf decay)')
     p.add_argument('--dual_lr', action='store_true', default=True, required=False, help='Use separate lr for Hopf Pretraining and Training')
     p.add_argument('--lr_hopf', default=2e-5, required=False, type=float, help='Learning Rate in Hopf Pretraining')
@@ -205,9 +206,7 @@ dataset = dataio.ReachabilityDataset(
     num_src_samples=orig_opt.num_src_samples, num_target_samples=orig_opt.num_target_samples,
     use_hopf=orig_opt.hopf_loss != 'none',
     hopf_pretrain=orig_opt.hopf_pretrain, hopf_pretrain_iters=orig_opt.hopf_pretrain_iters,
-    hopf_loss_decay=orig_opt.hopf_loss_decay, hopf_loss_decay_w=orig_opt.hopf_loss_decay_w,
-    diff_con_loss_incr=orig_opt.diff_con_loss_incr, no_curriculum=orig_opt.no_curr,
-    record_set_metrics=orig_opt.set_metrics,
+    no_curriculum=orig_opt.no_curr, record_set_metrics=orig_opt.set_metrics,
     use_bank=orig_opt.use_bank, bank_name=orig_opt.bank_name,)
 
 model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
@@ -233,7 +232,9 @@ if (mode == 'all') or (mode == 'train'):
         loss_fn=loss_fn, clip_grad=orig_opt.clip_grad, use_lbfgs=orig_opt.use_lbfgs, adjust_relative_grads=orig_opt.adj_rel_grads,
         val_x_resolution=orig_opt.val_x_resolution, val_y_resolution=orig_opt.val_y_resolution, val_z_resolution=orig_opt.val_z_resolution, val_time_resolution=orig_opt.val_time_resolution,
         use_CSL=orig_opt.use_CSL, CSL_lr=orig_opt.CSL_lr, CSL_dt=orig_opt.CSL_dt, epochs_til_CSL=orig_opt.epochs_til_CSL, num_CSL_samples=orig_opt.num_CSL_samples, CSL_loss_frac_cutoff=orig_opt.CSL_loss_frac_cutoff, max_CSL_epochs=orig_opt.max_CSL_epochs, CSL_loss_weight=orig_opt.CSL_loss_weight, CSL_batch_size=orig_opt.CSL_batch_size,
-        dual_lr=orig_opt.dual_lr, lr_decay_w=orig_opt.lr_decay_w, lr_hopf=orig_opt.lr_hopf, lr_hopf_decay_w=orig_opt.lr_hopf_decay_w, nonlin_scale=orig_opt.nl_scale, nonlin_scale_e_step=orig_opt.nl_scale_e_step)
+        dual_lr=orig_opt.dual_lr, lr_decay_w=orig_opt.lr_decay_w, lr_hopf=orig_opt.lr_hopf, lr_hopf_decay_w=orig_opt.lr_hopf_decay_w, 
+        hopf_loss_decay_early=orig_opt.hopf_loss_decay_early, hopf_loss_decay=orig_opt.hopf_loss_decay, hopf_loss_decay_w=orig_opt.hopf_loss_decay_w, diff_con_loss_incr=orig_opt.diff_con_loss_incr,
+        nonlin_scale=orig_opt.nl_scale, nonlin_scale_e_step=orig_opt.nl_scale_e_step)
 
 if (mode == 'all') or (mode == 'test'):
     experiment.test(

@@ -10,7 +10,7 @@ from tqdm.autonotebook import tqdm
 # uses model input and real boundary fn
 class ReachabilityDataset(Dataset):
     def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, 
-                 use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0, hopf_loss_decay=False, hopf_loss_decay_w=0., diff_con_loss_incr=False, record_set_metrics=False,
+                 use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0, record_set_metrics=False,
                  manual_load=False, load_packet=None, no_curriculum=False, use_bank=False, bank_name=None):
         
         # print("Into the dataset!")
@@ -32,9 +32,6 @@ class ReachabilityDataset(Dataset):
         self.hopf_pretrained = use_hopf and hopf_pretrain
         self.hopf_pretrain_counter = 0
         self.hopf_pretrain_iters = hopf_pretrain_iters
-        self.hopf_loss_decay = hopf_loss_decay
-        self.hopf_loss_decay_w = hopf_loss_decay_w
-        self.diff_con_loss_incr = hopf_loss_decay and diff_con_loss_incr
         self.record_set_metrics = record_set_metrics
         self.no_curriculum = no_curriculum
         self.N = dynamics.N
