@@ -521,9 +521,10 @@ class LessLinear2D(Dynamics):
         }
 
 class LessLinearND(Dynamics):
-    def __init__(self, N:int, gamma:float, mu:float, alpha:float):
-    # def __init__(self, N:int):
+    # def __init__(self, N:int, gamma:float, mu:float, alpha:float):
+    def __init__(self, N:int):
         # gamma, mu, alpha = 0, 0, 0 
+        gamma, mu, alpha = 20, 0, 0
         # gamma, mu, alpha = 20, -20, 1
         self.N = N 
         goalR, u_max, d_max, set_mode = 0.15, 0.5, 0.3, "reach" 

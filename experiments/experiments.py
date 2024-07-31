@@ -503,11 +503,10 @@ class DeepReachHopf(Experiment):
         ys = torch.linspace(y_min, y_max, y_resolution)
         # zs = torch.linspace(z_min, z_max, z_resolution)
         xys = torch.cartesian_prod(xs, ys)
+        Xg, Yg = torch.meshgrid(xs, ys)
         
         fig = plt.figure(figsize=(5*len(times), 3*5*1))
         for i in range(3*len(times)):
-            # for j in range(len(zs)):
-            j = 0
             coords = torch.zeros(x_resolution*y_resolution, self.dataset.dynamics.state_dim + 1)
             coords[:, 0] = times[i % len(times)]
             coords[:, 1:] = torch.tensor(plot_config['state_slices']) # initialized to zero (nothing else to set!)
@@ -525,8 +524,8 @@ class DeepReachHopf(Experiment):
                 model_results = self.model({'coords': self.dataset.dynamics.coord_to_input(coords.cuda())})
                 values = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach())
             
-            ax = fig.add_subplot(3, len(times), (j+1) + i)
-            ax.set_title('t = %0.2f' % (times[i % len(times)])) #, plot_config['state_labels'][plot_config['z_axis_idx']], zs[j]))
+            ax = fig.add_subplot(3, len(times), 1+i)
+            ax.set_title('t = %0.2f' % (times[i % len(times)]))
             if i < len(times): # xN - xi plane
                 ax.set_xlabel("xN")
                 ax.set_ylabel("xi")
@@ -559,6 +558,67 @@ class DeepReachHopf(Experiment):
             wandb.log({
                 'step': epoch,
                 'val_plot': wandb.Image(fig),
+            })
+        plt.close()
+
+        fig = plt.figure(figsize=(5*len(times), 3*5*1))
+        # fig = plt.figure(figsize=(15,5)) #debug
+        for i in range(3*len(times)):
+            # if i > 2: continue #debug
+            # ax = fig.add_subplot(1, 3, 1+i, projection='3d') #debug
+            ax = fig.add_subplot(3, len(times), 1+i, projection='3d')
+            ax.set_title('t = %0.2f' % (times[i % len(times)]))
+
+            coords = torch.zeros(x_resolution*y_resolution, self.dataset.dynamics.state_dim + 1)
+            coords[:, 0] = times[i % len(times)]
+            coords[:, 1:] = torch.tensor(plot_config['state_slices']) # initialized to zero (nothing else to set!)
+
+            if i < len(times): # xN - xi plane
+                ax.set_xlabel("xN")
+                ax.set_ylabel("xi")
+                coords[:, 1 + plot_config['x_axis_idx']] = xys[:, 0]
+                coords[:, 1 + plot_config['y_axis_idx']] = xys[:, 1]
+
+            elif i < 2*len(times): # xi - xj plane
+                ax.set_xlabel("xi")
+                ax.set_ylabel("xj")
+                coords[:, 1 + plot_config['y_axis_idx']] = xys[:, 0]
+                coords[:, 1 + plot_config['z_axis_idx']] = xys[:, 1]
+
+            else: # xN - (xi = xj) plane
+                ax.set_xlabel("xN")
+                ax.set_ylabel("xi=xj")
+                coords[:, 1 + plot_config['x_axis_idx']] = xys[:, 0]
+                coords[:, 2:] = (xys[:, 1] * torch.ones(self.N-1, xys.size()[0])).t()
+
+            with torch.no_grad():
+                model_results = self.model({'coords': self.dataset.dynamics.coord_to_input(coords.cuda())})
+                values = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach())
+            
+            learned_value = values.detach().cpu().numpy().reshape(x_resolution, y_resolution)
+
+            if learned_value.min() > 0:
+                RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', [(1,1,1), (0.5,0.5,1), (0,0,1), (0,0,1)])
+            elif learned_value.max() < 0:
+                RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', [(1,0,0), (1,0,0), (1,0.5,0.5), (1,1,1)])
+            else:
+                n_bins_high = int(256 * (learned_value.max()/(learned_value.max() - learned_value.min())) // 1)
+                RdWh = matplotlib.colors.LinearSegmentedColormap.from_list('RdWh', [(1,0,0), (1,0,0), (1,0.5,0.5), (1,1,1)])
+                WhBl = matplotlib.colors.LinearSegmentedColormap.from_list('WhBl', [(1,1,1), (0.5,0.5,1), (0,0,1), (0,0,1)])
+                colors = np.vstack((RdWh(np.linspace(0., 1, 256-n_bins_high)), WhBl(np.linspace(0., 1, n_bins_high))))
+                RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', colors)
+            
+            ax.view_init(elev=15, azim=-60)
+            surf = ax.plot_surface(Xg, Yg, learned_value, cmap=RdWhBl_vscaled) #cmap='bwr_r')
+            fig.colorbar(surf, ax=ax, fraction=0.02, pad=0.1)
+            ax.set_zlim(-max(ax.get_zlim()[1]/5, 0.5))
+            ax.contour(Xg, Yg, learned_value, zdir='z', offset=ax.get_zlim()[0], cmap=RdWh, levels=[0.]) #cmap='bwr_r')
+
+        fig.savefig(save_path.split('_epoch')[0] + '_Vfn' + save_path.split('_epoch')[1])
+        if self.use_wandb:
+            wandb.log({
+                'step': epoch,
+                'val_fn_plot': wandb.Image(fig),
             })
         plt.close()
 

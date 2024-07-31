@@ -23,9 +23,9 @@ p.add_argument('--experiment_name', type=str, default='test_run', help='Name of 
 p.add_argument('--use_wandb', default=False, action='store_true', help='use wandb for logging')
 
 # general options
-p.add_argument('--N', default=15, required=False, type=int, help='Dimension of validation model')
+p.add_argument('--N', default=7, required=False, type=int, help='Dimension of validation model')
 p.add_argument('--timing', action='store_true', default=False, required=False, help='Gives detailed computation times')
-p.add_argument('--use_bank', action='store_true', default=False, required=False, help='Makes/loads a state & value bank to reduce compute')
+p.add_argument('--use_bank', action='store_true', default=True, required=False, help='Makes/loads a state & value bank to reduce compute')
 p.add_argument('--bank_name', type=str, default='none', required=False, help='Name of the state & value bank file (if none and using bank, will make)')
 
 use_wandb = p.parse_known_args()[0].use_wandb
@@ -105,9 +105,9 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--hopf_loss', type=str, default='lindiff', choices=['none', 'lindiff', 'grad'], help='Method for using Hopf data')
     p.add_argument('--hopf_loss_divisor', default=5, required=False, type=float, help='What to divide the hopf loss by for loss reweighting')
     p.add_argument('--hopf_pretrain', action='store_true', default=True, required=False, help='Pretrain hopf conditions')
-    p.add_argument('--hopf_pretrain_iters', type=int, default=5000, required=False, help='Number of pretrain iterations with Hopf loss')
+    p.add_argument('--hopf_pretrain_iters', type=int, default=10000, required=False, help='Number of pretrain iterations with Hopf loss')
     p.add_argument('--hopf_loss_decay', action='store_true', default=True, required=False, help='Hopf loss weight decay')
-    p.add_argument('--hopf_loss_decay_w', default=0.9998, required=False, type=float, help='Hopf loss weight decay rate')
+    p.add_argument('--hopf_loss_decay_w', default=0.9999, required=False, type=float, help='Hopf loss weight decay rate')
     p.add_argument('--hopf_loss_decay_early', action='store_true', default=False, required=False, help='Hopf loss weight decay')
     p.add_argument('--diff_con_loss_incr', action='store_true', default=False, required=False, help='Incremental Diff Cons loss weight of (1 - hopf decay)')
     p.add_argument('--dual_lr', action='store_true', default=True, required=False, help='Use separate lr for Hopf Pretraining and Training')
