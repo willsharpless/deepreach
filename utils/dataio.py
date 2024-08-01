@@ -107,8 +107,8 @@ class ReachabilityDataset(Dataset):
                 elif self.N > 2:
                     LessLinear2D_interpolations = jl.load("LessLinear2D1i_interpolations_res1e-2_r15e-2.jld", "LessLinear2D_interpolations")
                     # self.V_DP_itp = LessLinear2D_interpolations["g0_m0_a0"] #linear
-                    # self.V_DP_itp = LessLinear2D_interpolations["g20_m-20_a1"] #level 2
                     # self.V_DP_itp = LessLinear2D_interpolations["g20_m0_a0"] #level 1
+                    # self.V_DP_itp = LessLinear2D_interpolations["g20_m-20_a1"] #level 2
                     model_key = "g" + str(int(self.dynamics.gamma)) + "_m" + str(int(self.dynamics.mu)) + "_a"  + str(int(self.dynamics.alpha))
                     self.V_DP_itp = LessLinear2D_interpolations[model_key]
                     def V_N_DP_itp(tXg):

@@ -99,7 +99,7 @@ class Experiment(ABC):
             use_CSL, CSL_lr, CSL_dt, epochs_til_CSL, num_CSL_samples, CSL_loss_frac_cutoff, max_CSL_epochs, CSL_loss_weight, CSL_batch_size,
             dual_lr=False, lr_decay_w=1., lr_hopf=2e-5, lr_hopf_decay_w=1., smoothing_factor=0.8, 
             hopf_loss_decay_early = True, hopf_loss_decay=True, hopf_loss_decay_w=0.9998, diff_con_loss_incr=False,
-            nonlin_scale=False, nonlin_scale_e_step=10000,
+            nonlin_scale=False, nl_scale_epoch_step=10000, nl_scale_epoch_post=10000,
         ):
         was_eval = not self.model.training
         self.model.train()
@@ -142,6 +142,7 @@ class Experiment(ABC):
         new_weight_diff_con = 1
         JIp_s_max, JIp_s = 0., 0.
         gamma_orig, mu_orig, alpha_orig = self.dataset.dynamics.gamma, self.dataset.dynamics.mu, self.dataset.dynamics.alpha
+        total_pretrain_iters = self.dataset.pretrain_iters + self.dataset.hopf_pretrain_iters
 
         with tqdm(total=len(train_dataloader) * epochs) as pbar:
             train_losses = []
@@ -152,12 +153,20 @@ class Experiment(ABC):
                 time_interval_length = (self.dataset.counter/self.dataset.counter_end)*(self.dataset.tMax-self.dataset.tMin)
                 CSL_tMax = self.dataset.tMin + int(time_interval_length/CSL_dt)*CSL_dt
 
-                ## FIXME: make it better
-                if nonlin_scale and not(self.dataset.pretrain) and not(self.dataset.hopf_pretrain) and epoch % nonlin_scale_e_step:
-                    e_perc = ((epoch - nonlin_scale_e_step)/(epochs - nonlin_scale_e_step)) # instead of epoch/epochs, this gives 1 step to switch from hopf to pde loss
-                    self.dataset.dynamics.gamma = e_perc * gamma_orig
-                    self.dataset.dynamics.mu = e_perc * mu_orig
-                    self.dataset.dynamics.alpha = e_perc * alpha_orig
+                ## Parameter Scaling for Nonlinearity Curriculum #TODO: generalize
+                not_pretraining = not(self.dataset.pretrain) and not(self.dataset.hopf_pretrain)
+                if nonlin_scale and not_pretraining and ((epoch-total_pretrain_iters) % nl_scale_epoch_step) == 0 and epoch <= (epochs-nl_scale_epoch_post):
+                    nl_perc = ((epoch - nl_scale_epoch_step)/((epochs - nl_scale_epoch_post) - nl_scale_epoch_step)) # instead of epoch/(epochs-post), this gives 1 step to switch from hopf to pde loss w/o changin dynamcis
+                    print("Epoch:", epoch, ", nl perc:", nl_perc)
+                    self.dataset.dynamics.gamma = nl_perc * gamma_orig
+                    self.dataset.dynamics.mu = nl_perc * mu_orig
+                    self.dataset.dynamics.alpha = nl_perc * alpha_orig
+                    print("  Params:", self.dataset.dynamics.gamma, self.dataset.dynamics.mu, self.dataset.dynamics.alpha)
+                elif nonlin_scale and epoch > (epochs - nl_scale_epoch_post): # jic epoch / nl_scale_epoch_step is not an integer
+                    nl_perc = 1
+                    self.dataset.dynamics.gamma = nl_perc * gamma_orig
+                    self.dataset.dynamics.mu = nl_perc * mu_orig
+                    self.dataset.dynamics.alpha = nl_perc * alpha_orig
                 
                 # self-supervised learning
                 for step, (model_input, gt) in enumerate(train_dataloader):
@@ -344,6 +353,8 @@ class Experiment(ABC):
                                 'train_loss': train_loss}
                             for loss_name, loss in losses.items():
                                 log_dict[loss_name + "_loss"] = loss
+                            if nonlin_scale and not(self.dataset.pretrain) and not(self.dataset.hopf_pretrain):
+                                log_dict["Nonlinearity Scale"] = nl_perc
                             if self.dataset.record_set_metrics:
                                 with torch.no_grad():
                                     JIp, FIp, FEp = self.set_metrics_overtime()
@@ -468,6 +479,7 @@ class DeepReachHopf(Experiment):
             divider = make_axes_locatable(ax)
             cax = divider.append_axes("right", size="5%", pad=0.05)
             fig.colorbar(s, cax=cax) 
+
         fig.savefig(save_path)
         if self.use_wandb:
             wandb.log({
@@ -505,89 +517,95 @@ class DeepReachHopf(Experiment):
         xys = torch.cartesian_prod(xs, ys)
         Xg, Yg = torch.meshgrid(xs, ys)
         
-        fig = plt.figure(figsize=(5*len(times), 3*5*1))
-        for i in range(3*len(times)):
-            coords = torch.zeros(x_resolution*y_resolution, self.dataset.dynamics.state_dim + 1)
-            coords[:, 0] = times[i % len(times)]
-            coords[:, 1:] = torch.tensor(plot_config['state_slices']) # initialized to zero (nothing else to set!)
-            if i < len(times): # xN - xi plane
-                coords[:, 1 + plot_config['x_axis_idx']] = xys[:, 0]
-                coords[:, 1 + plot_config['y_axis_idx']] = xys[:, 1]
-            elif i < 2*len(times): # xi - xj plane
-                coords[:, 1 + plot_config['y_axis_idx']] = xys[:, 0]
-                coords[:, 1 + plot_config['z_axis_idx']] = xys[:, 1]
-            else: # xN - (xi = xj) plane
-                coords[:, 1 + plot_config['x_axis_idx']] = xys[:, 0]
-                coords[:, 2:] = (xys[:, 1] * torch.ones(self.N-1, xys.size()[0])).t()
+        # fig = plt.figure(figsize=(5*len(times), 3*5*1))
+        # for i in range(3*len(times)):
+        #     coords = torch.zeros(x_resolution*y_resolution, self.dataset.dynamics.state_dim + 1)
+        #     coords[:, 0] = times[i % len(times)]
+        #     coords[:, 1:] = torch.tensor(plot_config['state_slices']) # initialized to zero (nothing else to set!)
+        #     if i < len(times): # xN - xi plane
+        #         coords[:, 1 + plot_config['x_axis_idx']] = xys[:, 0]
+        #         coords[:, 1 + plot_config['y_axis_idx']] = xys[:, 1]
+        #     elif i < 2*len(times): # xi - xj plane
+        #         coords[:, 1 + plot_config['y_axis_idx']] = xys[:, 0]
+        #         coords[:, 1 + plot_config['z_axis_idx']] = xys[:, 1]
+        #     else: # xN - (xi = xj) plane
+        #         coords[:, 1 + plot_config['x_axis_idx']] = xys[:, 0]
+        #         coords[:, 2:] = (xys[:, 1] * torch.ones(self.N-1, xys.size()[0])).t()
 
-            with torch.no_grad():
-                model_results = self.model({'coords': self.dataset.dynamics.coord_to_input(coords.cuda())})
-                values = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach())
+        #     with torch.no_grad():
+        #         model_results = self.model({'coords': self.dataset.dynamics.coord_to_input(coords.cuda())})
+        #         values = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach())
             
-            ax = fig.add_subplot(3, len(times), 1+i)
-            ax.set_title('t = %0.2f' % (times[i % len(times)]))
-            if i < len(times): # xN - xi plane
-                ax.set_xlabel("xN")
-                ax.set_ylabel("xi")
-            elif i < 2*len(times): # xi - xj plane
-                ax.set_xlabel("xi")
-                ax.set_ylabel("xj")
-            else: # xN - (xi = xj) plane
-                ax.set_xlabel("xN")
-                ax.set_ylabel("xi=xj")
+        #     ax = fig.add_subplot(3, len(times), 1+i)
+        #     ax.set_title('t = %0.2f' % (times[i % len(times)]))
+        #     if i < len(times): # xN - xi plane
+        #         ax.set_xlabel("xN")
+        #         ax.set_ylabel("xi")
+        #     elif i < 2*len(times): # xi - xj plane
+        #         ax.set_xlabel("xi")
+        #         ax.set_ylabel("xj")
+        #     else: # xN - (xi = xj) plane
+        #         ax.set_xlabel("xN")
+        #         ax.set_ylabel("xi=xj")
 
-            ## Plot Inside vs. Outside zero-level set of NN
-            s = ax.imshow(1*(values.detach().cpu().numpy().reshape(x_resolution, y_resolution).T <= 0), cmap='bwr', origin='lower', extent=(-1., 1., -1., 1.))
-            divider = make_axes_locatable(ax)
-            cax = divider.append_axes("right", size="5%", pad=0.05)
-            fig.colorbar(s, cax=cax)
+        #     ## Plot Inside vs. Outside zero-level set of NN
+        #     s = ax.imshow(1*(values.detach().cpu().numpy().reshape(x_resolution, y_resolution).T <= 0), cmap='bwr', origin='lower', extent=(-1., 1., -1., 1.))
+        #     divider = make_axes_locatable(ax)
+        #     cax = divider.append_axes("right", size="5%", pad=0.05)
+        #     fig.colorbar(s, cax=cax)
 
-            ## Plot ground-truth zero-level contour
-            n_grid_plane_pts = int(self.dataset.n_grid_pts/3)
-            n_grid_len = int(n_grid_plane_pts ** 0.5)
-            pix_start = (i // len(times)) * n_grid_plane_pts
-            tix_start = (i % len(times)) * self.dataset.n_grid_pts
-            # if (i % len(times)) > 0: # FIXME this breaks if the std grid times qty changes (=5 atm)
-            #     tix_start += (i % len(times)) * self.dataset.n_grid_pts
-            ix = pix_start + tix_start
-            Vg = self.dataset.values_DP_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len)
-            ax.contour(self.dataset.X1g, self.dataset.X2g, Vg.cpu(), [0.])
+        #     ## Plot ground-truth zero-level contour
+        #     n_grid_plane_pts = int(self.dataset.n_grid_pts/3)
+        #     n_grid_len = int(n_grid_plane_pts ** 0.5)
+        #     pix_start = (i // len(times)) * n_grid_plane_pts
+        #     tix_start = (i % len(times)) * self.dataset.n_grid_pts
+        #     # if (i % len(times)) > 0: # FIXME this breaks if the std grid times qty changes (=5 atm)
+        #     #     tix_start += (i % len(times)) * self.dataset.n_grid_pts
+        #     ix = pix_start + tix_start
+        #     Vg = self.dataset.values_DP_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len)
+        #     ax.contour(self.dataset.X1g, self.dataset.X2g, Vg.cpu(), [0.])
 
-        fig.savefig(save_path)
-        if self.use_wandb:
-            wandb.log({
-                'step': epoch,
-                'val_plot': wandb.Image(fig),
-            })
-        plt.close()
+        # fig.savefig(save_path)
+        # if self.use_wandb:
+        #     wandb.log({
+        #         'step': epoch,
+        #         'val_plot': wandb.Image(fig),
+        #     })
+        # plt.close()
 
-        fig = plt.figure(figsize=(5*len(times), 3*5*1))
-        # fig = plt.figure(figsize=(15,5)) #debug
+        ## Plot Set and Value Fn
+
+        fig_set = plt.figure(figsize=(5*len(times), 3*5*1))
+        fig_val = plt.figure(figsize=(5*len(times), 3*5*1))
+
         for i in range(3*len(times)):
-            # if i > 2: continue #debug
-            # ax = fig.add_subplot(1, 3, 1+i, projection='3d') #debug
-            ax = fig.add_subplot(3, len(times), 1+i, projection='3d')
-            ax.set_title('t = %0.2f' % (times[i % len(times)]))
+            
+            ax_set = fig_set.add_subplot(3, len(times), 1+i)
+            ax_val = fig_val.add_subplot(3, len(times), 1+i, projection='3d')
+            ax_set.set_title('t = %0.2f' % (times[i % len(times)]))
+            ax_val.set_title('t = %0.2f' % (times[i % len(times)]))
+
+            ## Define Grid Slice to Plot
 
             coords = torch.zeros(x_resolution*y_resolution, self.dataset.dynamics.state_dim + 1)
             coords[:, 0] = times[i % len(times)]
             coords[:, 1:] = torch.tensor(plot_config['state_slices']) # initialized to zero (nothing else to set!)
 
             if i < len(times): # xN - xi plane
-                ax.set_xlabel("xN")
-                ax.set_ylabel("xi")
+                ax_set.set_xlabel("xN"); ax_set.set_ylabel("xi")
+                ax_val.set_xlabel("xN"); ax_val.set_ylabel("xi")
                 coords[:, 1 + plot_config['x_axis_idx']] = xys[:, 0]
                 coords[:, 1 + plot_config['y_axis_idx']] = xys[:, 1]
 
             elif i < 2*len(times): # xi - xj plane
-                ax.set_xlabel("xi")
-                ax.set_ylabel("xj")
+                ax_set.set_xlabel("xi"); ax_set.set_ylabel("xj")
+                ax_val.set_xlabel("xi"); ax_val.set_ylabel("xj")
                 coords[:, 1 + plot_config['y_axis_idx']] = xys[:, 0]
                 coords[:, 1 + plot_config['z_axis_idx']] = xys[:, 1]
 
             else: # xN - (xi = xj) plane
-                ax.set_xlabel("xN")
-                ax.set_ylabel("xi=xj")
+                ax_set.set_xlabel("xN"); ax_set.set_ylabel("xi=xj")
+                ax_val.set_xlabel("xN"); ax_val.set_ylabel("xi=xj")
                 coords[:, 1 + plot_config['x_axis_idx']] = xys[:, 0]
                 coords[:, 2:] = (xys[:, 1] * torch.ones(self.N-1, xys.size()[0])).t()
 
@@ -596,6 +614,25 @@ class DeepReachHopf(Experiment):
                 values = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach())
             
             learned_value = values.detach().cpu().numpy().reshape(x_resolution, y_resolution)
+
+            ## Plot Zero-level Set of Learned Value
+
+            s = ax_set.imshow(1*(learned_value.T <= 0), cmap='bwr', origin='lower', extent=(-1., 1., -1., 1.))
+            divider = make_axes_locatable(ax_set)
+            cax = divider.append_axes("right", size="5%", pad=0.05)
+            fig_set.colorbar(s, cax=cax)
+
+            ## Plot ground-truth zero-level contour
+
+            n_grid_plane_pts = int(self.dataset.n_grid_pts/3)
+            n_grid_len = int(n_grid_plane_pts ** 0.5)
+            pix_start = (i // len(times)) * n_grid_plane_pts
+            tix_start = (i % len(times)) * self.dataset.n_grid_pts
+            ix = pix_start + tix_start
+            Vg = self.dataset.values_DP_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len)
+            ax_set.contour(self.dataset.X1g, self.dataset.X2g, Vg.cpu(), [0.])
+
+            ## Plot 3D Value Fn
 
             if learned_value.min() > 0:
                 RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', [(1,1,1), (0.5,0.5,1), (0,0,1), (0,0,1)])
@@ -608,17 +645,19 @@ class DeepReachHopf(Experiment):
                 colors = np.vstack((RdWh(np.linspace(0., 1, 256-n_bins_high)), WhBl(np.linspace(0., 1, n_bins_high))))
                 RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', colors)
             
-            ax.view_init(elev=15, azim=-60)
-            surf = ax.plot_surface(Xg, Yg, learned_value, cmap=RdWhBl_vscaled) #cmap='bwr_r')
-            fig.colorbar(surf, ax=ax, fraction=0.02, pad=0.1)
-            ax.set_zlim(-max(ax.get_zlim()[1]/5, 0.5))
-            ax.contour(Xg, Yg, learned_value, zdir='z', offset=ax.get_zlim()[0], cmap=RdWh, levels=[0.]) #cmap='bwr_r')
+            ax_val.view_init(elev=15, azim=-60)
+            surf = ax_val.plot_surface(Xg, Yg, learned_value, cmap=RdWhBl_vscaled) #cmap='bwr_r')
+            fig_val.colorbar(surf, ax=ax_val, fraction=0.02, pad=0.1)
+            ax_val.set_zlim(-max(ax_val.get_zlim()[1]/5, 0.5))
+            ax_val.contour(Xg, Yg, learned_value, zdir='z', offset=ax_val.get_zlim()[0], cmap=RdWh, levels=[0.]) #cmap='bwr_r')
 
-        fig.savefig(save_path.split('_epoch')[0] + '_Vfn' + save_path.split('_epoch')[1])
+        fig_set.savefig(save_path)
+        fig_val.savefig(save_path.split('_epoch')[0] + '_Vfn' + save_path.split('_epoch')[1])
         if self.use_wandb:
             wandb.log({
                 'step': epoch,
-                'val_fn_plot': wandb.Image(fig),
+                'val_plot': wandb.Image(fig_set), # (silly) legacy name
+                'val_fn_plot': wandb.Image(fig_val),
             })
         plt.close()
 
