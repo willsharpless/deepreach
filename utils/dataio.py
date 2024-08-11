@@ -11,7 +11,7 @@ from tqdm.autonotebook import tqdm
 class ReachabilityDataset(Dataset):
     def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, 
                  use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0, record_set_metrics=False,
-                 manual_load=False, load_packet=None, no_curriculum=False, use_bank=False, bank_name=None):
+                 manual_load=False, load_packet=None, no_curriculum=False, use_bank=False, bank_name=None, capacity_test=False):
         
         # print("Into the dataset!")
 
@@ -35,6 +35,7 @@ class ReachabilityDataset(Dataset):
         self.record_set_metrics = record_set_metrics
         self.no_curriculum = no_curriculum
         self.N = dynamics.N
+        self.capacity_test = capacity_test
 
         self.use_bank = use_bank
         if bank_name is None or bank_name == 'none': bank_name = "Bank_"+str(self.N)+"D_"+str(self.numpoints//10000)+"Mpts.npy"
@@ -68,13 +69,19 @@ class ReachabilityDataset(Dataset):
             elif self.N > 2:
 
                 LessLinear2D_interpolations = jl.load("LessLinear2D1i_interpolations_res1e-2_r15e-2.jld", "LessLinear2D_interpolations")
+
                 self.V_hopf_itp = LessLinear2D_interpolations["g0_m0_a0"]
+                if capacity_test:
+                    model_key = "g" + str(int(self.dynamics.gamma)) + "_m" + str(int(self.dynamics.mu)) + "_a"  + str(int(self.dynamics.alpha))
+                    self.V_hopf_itp = LessLinear2D_interpolations[model_key]
+
                 def V_N_hopf_itp(tXg):
                     V = 0 * tXg[0,:]
                     for i in range(self.N-1):
                         V += torch.from_numpy(self.fast_interp(self.V_hopf_itp, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
                     return V
-                self.V_hopf = V_N_hopf_itp ## TODO: just use hopf solution (as in N==2 case)                
+                self.V_hopf = V_N_hopf_itp ## TODO: actually use hopf solution (as in N==2 case)
+
                 # fast_interp_exec = """
                 # function fast_interp_N(_V_itp, tXg)
                 #     Vg = zeros(size(tXg,2))
@@ -109,14 +116,23 @@ class ReachabilityDataset(Dataset):
                     # self.V_DP_itp = LessLinear2D_interpolations["g0_m0_a0"] #linear
                     # self.V_DP_itp = LessLinear2D_interpolations["g20_m0_a0"] #level 1
                     # self.V_DP_itp = LessLinear2D_interpolations["g20_m-20_a1"] #level 2
+                    
                     model_key = "g" + str(int(self.dynamics.gamma)) + "_m" + str(int(self.dynamics.mu)) + "_a"  + str(int(self.dynamics.alpha))
                     self.V_DP_itp = LessLinear2D_interpolations[model_key]
-                    def V_N_DP_itp(tXg):
+                    def V_N_DP_itp_combo(tXg):
                         V = 0 * tXg[0,:]
                         for i in range(self.N-1):
                             V += torch.from_numpy(self.fast_interp(self.V_DP_itp, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
                         return V
-                    self.V_DP = V_N_DP_itp
+                    self.V_DP = V_N_DP_itp_combo
+
+                    self.V_DP_linear_itp = LessLinear2D_interpolations["g0_m0_a0"]
+                    def V_N_DP_linear_itp_combo(tXg):
+                        V = 0 * tXg[0,:]
+                        for i in range(self.N-1):
+                            V += torch.from_numpy(self.fast_interp(self.V_DP_linear_itp, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
+                        return V
+                    self.V_DP_linear = V_N_DP_linear_itp_combo
 
             ## Define a fixed spatiotemporal grid to score Jaccard
 
@@ -175,6 +191,7 @@ class ReachabilityDataset(Dataset):
             ## Precompute value & safe-set on grid for ground truth
 
             self.values_DP_grid = self.V_DP(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
+            self.values_DP_linear_grid = self.V_DP_linear(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
             self.values_DP_grid_sub0_ixs = torch.argwhere(self.values_DP_grid <= 0).flatten().cuda()
 
             self.values_DP_grid_hi = self.V_DP(self.dynamics.input_to_coord(self.model_coords_grid_allt_hi).t()).cuda()

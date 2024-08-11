@@ -98,8 +98,10 @@ class Experiment(ABC):
             val_x_resolution, val_y_resolution, val_z_resolution, val_time_resolution,
             use_CSL, CSL_lr, CSL_dt, epochs_til_CSL, num_CSL_samples, CSL_loss_frac_cutoff, max_CSL_epochs, CSL_loss_weight, CSL_batch_size,
             dual_lr=False, lr_decay_w=1., lr_hopf=2e-5, lr_hopf_decay_w=1., smoothing_factor=0.8, 
-            hopf_loss_decay_early = True, hopf_loss_decay=True, hopf_loss_decay_w=0.9998, diff_con_loss_incr=False,
-            nonlin_scale=False, nl_scale_epoch_step=10000, nl_scale_epoch_post=10000,
+            hopf_loss_decay_early = True, hopf_loss_decay=True, hopf_loss_decay_w=0.9998, 
+            diff_con_loss_incr=False, hopf_loss_decay_rate = 'exponential',
+            nonlin_scale=False, nl_scale_epoch_step=10000, nl_scale_epoch_post=10000, 
+            record_temporal_loss = False,
         ):
         was_eval = not self.model.training
         self.model.train()
@@ -137,12 +139,15 @@ class Experiment(ABC):
         writer = SummaryWriter(summaries_dir)
 
         total_steps = 0
-        new_weight = 1
-        new_weight_hopf = 1
-        new_weight_diff_con = 1
         JIp_s_max, JIp_s = 0., 0.
         gamma_orig, mu_orig, alpha_orig = self.dataset.dynamics.gamma, self.dataset.dynamics.mu, self.dataset.dynamics.alpha
         total_pretrain_iters = self.dataset.pretrain_iters + self.dataset.hopf_pretrain_iters
+        self.total_pretrain_iters = total_pretrain_iters
+
+        # new_weight, new_weight_hopf, new_weight_diff_con = 1, 1, 0
+        loss_weights = {'dirichlet': 1., 'hopf': 1., 'diff_constraint_hom': 0.}
+        if hopf_loss_decay_rate == 'negative_exponential': 
+            loss_weights['hopf'] = 1 - (hopf_loss_decay_w ** (epochs - 1 - total_pretrain_iters))
 
         with tqdm(total=len(train_dataloader) * epochs) as pbar:
             train_losses = []
@@ -153,34 +158,34 @@ class Experiment(ABC):
                 time_interval_length = (self.dataset.counter/self.dataset.counter_end)*(self.dataset.tMax-self.dataset.tMin)
                 CSL_tMax = self.dataset.tMin + int(time_interval_length/CSL_dt)*CSL_dt
 
-                ## Parameter Scaling for Nonlinearity Curriculum #TODO: generalize
+                ## Parameter Scaling for Nonlinearity Curriculum #TODO: generalize to other dynamics
                 not_pretraining = not(self.dataset.pretrain) and not(self.dataset.hopf_pretrain)
-                if nonlin_scale and not_pretraining and ((epoch-total_pretrain_iters) % nl_scale_epoch_step) == 0 and epoch <= (epochs-nl_scale_epoch_post):
-                    nl_perc = ((epoch - nl_scale_epoch_step)/((epochs - nl_scale_epoch_post) - nl_scale_epoch_step)) # instead of epoch/(epochs-post), this gives 1 step to switch from hopf to pde loss w/o changin dynamcis
-                    print("Epoch:", epoch, ", nl perc:", nl_perc)
+                if nonlin_scale:
+                    if not_pretraining and ((epoch-total_pretrain_iters) % nl_scale_epoch_step) == 0 and epoch <= (epochs-nl_scale_epoch_post):
+                        nl_perc = ((epoch - total_pretrain_iters)/((epochs - nl_scale_epoch_post) - total_pretrain_iters)) # instead of epoch/(epochs-post), this gives 1 step to switch from hopf to pde loss w/o changin dynamcis
+                    elif epoch == (epochs - nl_scale_epoch_post) + 1: # jic epoch / nl_scale_epoch_step is not an integer
+                        nl_perc = 1
                     self.dataset.dynamics.gamma = nl_perc * gamma_orig
                     self.dataset.dynamics.mu = nl_perc * mu_orig
                     self.dataset.dynamics.alpha = nl_perc * alpha_orig
-                    print("  Params:", self.dataset.dynamics.gamma, self.dataset.dynamics.mu, self.dataset.dynamics.alpha)
-                elif nonlin_scale and epoch > (epochs - nl_scale_epoch_post): # jic epoch / nl_scale_epoch_step is not an integer
-                    nl_perc = 1
-                    self.dataset.dynamics.gamma = nl_perc * gamma_orig
-                    self.dataset.dynamics.mu = nl_perc * mu_orig
-                    self.dataset.dynamics.alpha = nl_perc * alpha_orig
+                    # print("Epoch:", epoch, ", nl perc:", nl_perc)
+                    # print("  Params:", self.dataset.dynamics.gamma, self.dataset.dynamics.mu, self.dataset.dynamics.alpha)
                 
                 # self-supervised learning
                 for step, (model_input, gt) in enumerate(train_dataloader):
                     start_time = time.time()
-                
+
+                    ## Evaluate Sample with Learned Model
                     if self.timing: start_time_2 = time.time()
                     model_input = {key: value.cuda() for key, value in model_input.items()}
                     gt = {key: value.cuda() for key, value in gt.items()}
-
                     model_results = self.model({'coords': model_input['model_coords']})
                     if self.timing: print("Sample Evaluation took:", time.time() - start_time_2)
 
+                    ## Pre-Loss Computation
                     if self.timing: start_time_2 = time.time()
-                    states = self.dataset.dynamics.input_to_coord(model_results['model_in'].detach())[..., 1:]
+                    results_coord = self.dataset.dynamics.input_to_coord(model_results['model_in'].detach())
+                    state_times, states = results_coord[..., 0], results_coord[..., 1:]
                     values = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1))
                     dvs = self.dataset.dynamics.io_to_dv(model_results['model_in'], model_results['model_out'].squeeze(dim=-1))
                     boundary_values = gt['boundary_values']
@@ -190,6 +195,7 @@ class Experiment(ABC):
                     dirichlet_masks = gt['dirichlet_masks']
                     if self.timing: print("Pre-loss Computation took:", time.time() - start_time_2)
 
+                    ## Compute Loss
                     if self.timing: start_time_2 = time.time()
                     if self.dataset.dynamics.loss_type == 'brt_hjivi':
                         losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'])
@@ -200,130 +206,77 @@ class Experiment(ABC):
                         else:
                             model_results_hopf = self.model({'coords': gt['model_coords_hopf']})
                             learned_hopf_values = self.dataset.dynamics.io_to_value(model_results_hopf['model_in'].detach(), model_results_hopf['model_out'].squeeze(dim=-1))   
-                        losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, learned_hopf_values, self.dataset.hopf_pretrain)
+                        losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, learned_hopf_values, epoch, state_times)
                     elif self.dataset.dynamics.loss_type == 'brat_hjivi':
                         losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, reach_values, avoid_values, dirichlet_masks, model_results['model_out'])
                     else:
                         raise NotImplementedError
                     if self.timing: print("Loss Computation took:", time.time() - start_time_2)
+
+                    # print("B/C  loss:", losses['dirichlet'])
+                    # print("Hopf loss:", losses['hopf'])
+                    # print("PDE  loss:", losses['diff_constraint_hom'])
+
+                    ## Compute & Record Temporal Loss Distribution
+                    if record_temporal_loss:
+                        losses_t = {}
+                        temporal_loss_times = [0., 0.25, 0.5, 0.75, 1.] 
+                        for ti in range(len(temporal_loss_times)-1):
+                            tp, tm = temporal_loss_times[ti + 1], temporal_loss_times[ti]
+                            t_ix = (state_times < tp) * (state_times >= tm)
+                            state_times_t, states_t, values_t, dvs_t, boundary_values_t = state_times[t_ix, ...].unsqueeze(0), states[t_ix, ...].unsqueeze(0), values[t_ix].unsqueeze(0), dvs[t_ix, ...].unsqueeze(0), boundary_values[t_ix].unsqueeze(0)
+                            dirichlet_masks_t, model_results_t, hopf_values_t, learned_hopf_values_t = dirichlet_masks[t_ix].unsqueeze(0), model_results['model_out'][t_ix].unsqueeze(0), hopf_values[t_ix].unsqueeze(0), learned_hopf_values[t_ix].unsqueeze(0)
+                            losses_t[str(tp)] = loss_fn(states_t, values_t, dvs_t[..., 0], dvs_t[..., 1:], boundary_values_t, dirichlet_masks_t, model_results_t, hopf_values_t, learned_hopf_values_t, epoch, state_times_t)
+                            # print("PDE  loss", tp, ':', losses_t[str(tp)]['diff_constraint_hom'].item())
                     
-                    if self.timing: start_time_2 = time.time()
                     ## Switch Optimizers/Rates (after Hopf Pretraining)
+                    if self.timing: start_time_2 = time.time()
                     if dual_lr and not(self.dataset.hopf_pretrain) and self.dataset.hopf_pretrained:
                         optim = optim_std
                         lr_scheduler = lr_scheduler_std
                     if self.timing: print("Loss Scheduler took:", time.time() - start_time_2)
                     
-                    if use_lbfgs:
-                        def closure():
-                            optim.zero_grad()
-                            train_loss = 0.
-                            for loss_name, loss in losses.items():
-                                train_loss += loss.mean() 
-                            train_loss.backward()
-                            return train_loss
-                        optim.step(closure)
+                    ## Decay Hopf Loss
+                    if hopf_loss_decay and self.dataset.dynamics.loss_type == 'brt_hjivi_hopf': #                         
+                        if epoch >= total_pretrain_iters or hopf_loss_decay_early:
+                            if hopf_loss_decay_rate == 'exponential' and epoch > total_pretrain_iters or hopf_loss_decay_early:
+                                loss_weights['hopf'] = hopf_loss_decay_w * loss_weights['hopf']
+                            elif hopf_loss_decay_rate == 'linear':
+                                loss_weights['hopf'] = 1 - hopf_loss_decay_w * (epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters) 
+                            elif hopf_loss_decay_rate == 'negative_exponential' and epoch > total_pretrain_iters:
+                                loss_weights['hopf'] = 1 - ((1 - loss_weights['hopf']) / hopf_loss_decay_w)
+                            # else:
+                            #     raise NotImplementedError
+                            # print("epoch", epoch, ", loss_weights['hopf']=", loss_weights['hopf'])
+                        loss_weights['hopf'] = min(max(loss_weights['hopf'], 0.), 1.)
 
-                    # Adjust the relative magnitude of the losses if required
-                    if self.dataset.dynamics.deepreach_model in ['vanilla', 'diff'] and adjust_relative_grads:
-                        if losses['diff_constraint_hom'] > 0.01:
-                            params = OrderedDict(self.model.named_parameters())
-                            # Gradients with respect to the PDE loss
-                            optim.zero_grad()
-                            losses['diff_constraint_hom'].backward(retain_graph=True)
-                            grads_PDE = []
-                            for key, param in params.items():
-                                grads_PDE.append(param.grad.view(-1))
-                            grads_PDE = torch.cat(grads_PDE)
-
-                            # Gradients with respect to the boundary loss
-                            optim.zero_grad()
-                            losses['dirichlet'].backward(retain_graph=True)
-                            grads_dirichlet = []
-                            for key, param in params.items():
-                                grads_dirichlet.append(param.grad.view(-1))
-                            grads_dirichlet = torch.cat(grads_dirichlet)
-
-                            # Gradients with respect to the hopf loss
-                            if self.dataset.dynamics.loss_type == 'brt_hjivi_hopf':
-                                optim.zero_grad()
-                                losses['hopf'].backward(retain_graph=True)
-                                grads_hopf = []
-                                for key, param in params.items():
-                                    grads_hopf.append(param.grad.view(-1))
-                                grads_hopf = torch.cat(grads_hopf)
-
-                            # # Plot the gradients
-                            # import seaborn as sns
-                            # import matplotlib.pyplot as plt
-                            # fig = plt.figure(figsize=(5, 5))
-                            # ax = fig.add_subplot(1, 1, 1)
-                            # ax.set_yscale('symlog')
-                            # sns.distplot(grads_PDE.cpu().numpy(), hist=False, kde_kws={"shade": False}, norm_hist=True)
-                            # sns.distplot(grads_dirichlet.cpu().numpy(), hist=False, kde_kws={"shade": False}, norm_hist=True)
-                            # fig.savefig('gradient_visualization.png')
-
-                            # fig = plt.figure(figsize=(5, 5))
-                            # ax = fig.add_subplot(1, 1, 1)
-                            # ax.set_yscale('symlog')
-                            # grads_dirichlet_normalized = grads_dirichlet * torch.mean(torch.abs(grads_PDE))/torch.mean(torch.abs(grads_dirichlet))
-                            # sns.distplot(grads_PDE.cpu().numpy(), hist=False, kde_kws={"shade": False}, norm_hist=True)
-                            # sns.distplot(grads_dirichlet_normalized.cpu().numpy(), hist=False, kde_kws={"shade": False}, norm_hist=True)
-                            # ax.set_xlim([-1000.0, 1000.0])
-                            # fig.savefig('gradient_visualization_normalized.png')
-
-                            # Set the new weight according to the paper
-                            # num = torch.max(torch.abs(grads_PDE))
-                            num = torch.mean(torch.abs(grads_PDE))
-                            den = torch.mean(torch.abs(grads_dirichlet))
-                            new_weight = 0.9*new_weight + 0.1*num/den
-                            losses['dirichlet'] = new_weight*losses['dirichlet']
-
-                            if self.dataset.dynamics.loss_type == 'brt_hjivi_hopf':
-                                den = torch.mean(torch.abs(grads_hopf))
-                                new_weight_hopf = 0.9*new_weight_hopf + 0.1*num/den
-                                losses['hopf'] = new_weight_hopf*losses['hopf']
-
-                        writer.add_scalar('weight_scaling', new_weight, total_steps)
-                        if self.dataset.dynamics.loss_type == 'brt_hjivi_hopf':
-                            writer.add_scalar('weight_scaling_hopf', new_weight_hopf, total_steps)
-
-                    ## Decay Hopf Loss (Works Better if Started in Pretraining)
-                    if hopf_loss_decay and self.dataset.dynamics.loss_type == 'brt_hjivi_hopf': # 
-                        if (not(self.dataset.pretrain) and not(self.dataset.hopf_pretrain)) or hopf_loss_decay_early:
-                            losses['hopf'] = new_weight_hopf * losses['hopf']
-                            new_weight_hopf = hopf_loss_decay_w * new_weight_hopf
-
-                    ## Incrementally Introduce Differential Constraint Loss (After All Pretraining)
-                    if diff_con_loss_incr and not(self.dataset.pretrain) and not(self.dataset.hopf_pretrain):
-                        # losses['diff_constraint_hom'] = (1-new_weight_hopf) * losses['diff_constraint_hom']
-                        losses['diff_constraint_hom'] = (1-new_weight_diff_con) * losses['diff_constraint_hom']
-                        new_weight_diff_con = hopf_loss_decay_w * new_weight_diff_con
-
+                        ## Incrementally Introduce Differential Constraint Loss (After All Pretraining)
+                        if diff_con_loss_incr and epoch >= total_pretrain_iters:
+                            # new_weight_diff_con = 1. - new_weight_hopf
+                            loss_weights['diff_constraint_hom'] = 1 - loss_weights['hopf']
+                            # print("epoch", epoch, ", loss_weights['diff_constraint_hom']=", loss_weights['diff_constraint_hom'])
+                        
                     # import ipdb; ipdb.set_trace()
 
+                    ## Combine Losses
                     if self.timing: start_time_2 = time.time()
                     train_loss = 0.
                     for loss_name, loss in losses.items():
                         single_loss = loss.mean()
-
-                        if loss_name == 'dirichlet':
-                            writer.add_scalar(loss_name, single_loss/new_weight, total_steps)
-                        elif loss_name == 'hopf':
-                            writer.add_scalar(loss_name, single_loss/new_weight_hopf, total_steps)
-                        else:
-                            writer.add_scalar(loss_name, single_loss/(1-new_weight_diff_con), total_steps)
-                        train_loss += single_loss
+                        writer.add_scalar(loss_name, single_loss, total_steps)
+                        train_loss += loss_weights[loss_name] * single_loss
 
                     train_losses.append(train_loss.item())
                     writer.add_scalar("total_train_loss", train_loss, total_steps)
                     if self.timing: print("Loss Combination took:", time.time() - start_time_2)
 
+                    ## Save Checkpoint
                     if not total_steps % steps_til_summary:
                         torch.save(self.model.state_dict(),
                                 os.path.join(checkpoints_dir, 'model_current.pth'))
                         # summary_fn(model, model_input, gt, model_output, writer, total_steps)
 
+                    ## Take Gradient Step
                     if not use_lbfgs:
                         if self.timing: start_time_2 = time.time()
                         optim.zero_grad()
@@ -343,21 +296,24 @@ class Experiment(ABC):
                         lr_scheduler.step()
                         if self.timing: print("Grad/Sched step took:", time.time() - start_time_2)
 
-                    pbar.update(1)
-
+                    ## Record Data Summary
                     if not total_steps % steps_til_summary:
                         tqdm.write("Epoch %d, Total loss %0.6f, iteration time %0.6f" % (epoch, train_loss, time.time() - start_time))
+                        
                         if self.use_wandb:
                             log_dict = {
                                 'step': epoch,
                                 'train_loss': train_loss}
+                            
                             for loss_name, loss in losses.items():
                                 log_dict[loss_name + "_loss"] = loss
+
                             if nonlin_scale and not(self.dataset.pretrain) and not(self.dataset.hopf_pretrain):
                                 log_dict["Nonlinearity Scale"] = nl_perc
+
                             if self.dataset.record_set_metrics:
                                 with torch.no_grad():
-                                    JIp, FIp, FEp = self.set_metrics_overtime()
+                                    JIp, FIp, FEp, Vmse = self.set_metrics_overtime()
                                     JIp_s = smoothing_factor * JIp + (1 - smoothing_factor) * JIp_s
                                     JIp_s_max = max(JIp_s, JIp_s_max)
                                 log_dict["Jaccard Index over Time"] = JIp
@@ -366,8 +322,21 @@ class Experiment(ABC):
                                 log_dict["Falsely Included percent over Time"] = FIp
                                 log_dict["Falsely Excluded percent over Time"] = FEp
                                 log_dict["Mean Absolute Spatial Gradient"] = torch.abs(dvs[..., 1:]).sum() / (self.dataset.numpoints * self.N)
+                                log_dict["Mean Squared Error of Value"] = Vmse
+
+                            if hopf_loss_decay and epoch >= total_pretrain_iters:
+                                log_dict['hopf_weight'] = loss_weights['hopf']
+                                log_dict['pde_weight'] = loss_weights['diff_constraint_hom']
+
+                            if record_temporal_loss:
+                                for ti in range(len(temporal_loss_times)-1):
+                                    tps = str(temporal_loss_times[ti+1])
+                                    for loss_name, loss in losses_t[tps].items():
+                                        log_dict[loss_name + "_loss_t" + tps] = loss
+
                             wandb.log(log_dict)
 
+                    pbar.update(1)
                     total_steps += 1
 
                 ## cost-supervised learning (CSL) used to be here (removed because not using)
@@ -498,7 +467,7 @@ class DeepReachHopf(Experiment):
             self.model.train()
             self.model.requires_grad_(True)
     
-    def validateND(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution):
+    def validateND(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution, plot_value=True):
         was_training = self.model.training
         self.model.eval()
         self.model.requires_grad_(False)
@@ -517,62 +486,6 @@ class DeepReachHopf(Experiment):
         xys = torch.cartesian_prod(xs, ys)
         Xg, Yg = torch.meshgrid(xs, ys)
         
-        # fig = plt.figure(figsize=(5*len(times), 3*5*1))
-        # for i in range(3*len(times)):
-        #     coords = torch.zeros(x_resolution*y_resolution, self.dataset.dynamics.state_dim + 1)
-        #     coords[:, 0] = times[i % len(times)]
-        #     coords[:, 1:] = torch.tensor(plot_config['state_slices']) # initialized to zero (nothing else to set!)
-        #     if i < len(times): # xN - xi plane
-        #         coords[:, 1 + plot_config['x_axis_idx']] = xys[:, 0]
-        #         coords[:, 1 + plot_config['y_axis_idx']] = xys[:, 1]
-        #     elif i < 2*len(times): # xi - xj plane
-        #         coords[:, 1 + plot_config['y_axis_idx']] = xys[:, 0]
-        #         coords[:, 1 + plot_config['z_axis_idx']] = xys[:, 1]
-        #     else: # xN - (xi = xj) plane
-        #         coords[:, 1 + plot_config['x_axis_idx']] = xys[:, 0]
-        #         coords[:, 2:] = (xys[:, 1] * torch.ones(self.N-1, xys.size()[0])).t()
-
-        #     with torch.no_grad():
-        #         model_results = self.model({'coords': self.dataset.dynamics.coord_to_input(coords.cuda())})
-        #         values = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach())
-            
-        #     ax = fig.add_subplot(3, len(times), 1+i)
-        #     ax.set_title('t = %0.2f' % (times[i % len(times)]))
-        #     if i < len(times): # xN - xi plane
-        #         ax.set_xlabel("xN")
-        #         ax.set_ylabel("xi")
-        #     elif i < 2*len(times): # xi - xj plane
-        #         ax.set_xlabel("xi")
-        #         ax.set_ylabel("xj")
-        #     else: # xN - (xi = xj) plane
-        #         ax.set_xlabel("xN")
-        #         ax.set_ylabel("xi=xj")
-
-        #     ## Plot Inside vs. Outside zero-level set of NN
-        #     s = ax.imshow(1*(values.detach().cpu().numpy().reshape(x_resolution, y_resolution).T <= 0), cmap='bwr', origin='lower', extent=(-1., 1., -1., 1.))
-        #     divider = make_axes_locatable(ax)
-        #     cax = divider.append_axes("right", size="5%", pad=0.05)
-        #     fig.colorbar(s, cax=cax)
-
-        #     ## Plot ground-truth zero-level contour
-        #     n_grid_plane_pts = int(self.dataset.n_grid_pts/3)
-        #     n_grid_len = int(n_grid_plane_pts ** 0.5)
-        #     pix_start = (i // len(times)) * n_grid_plane_pts
-        #     tix_start = (i % len(times)) * self.dataset.n_grid_pts
-        #     # if (i % len(times)) > 0: # FIXME this breaks if the std grid times qty changes (=5 atm)
-        #     #     tix_start += (i % len(times)) * self.dataset.n_grid_pts
-        #     ix = pix_start + tix_start
-        #     Vg = self.dataset.values_DP_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len)
-        #     ax.contour(self.dataset.X1g, self.dataset.X2g, Vg.cpu(), [0.])
-
-        # fig.savefig(save_path)
-        # if self.use_wandb:
-        #     wandb.log({
-        #         'step': epoch,
-        #         'val_plot': wandb.Image(fig),
-        #     })
-        # plt.close()
-
         ## Plot Set and Value Fn
 
         fig_set = plt.figure(figsize=(5*len(times), 3*5*1))
@@ -622,7 +535,7 @@ class DeepReachHopf(Experiment):
             cax = divider.append_axes("right", size="5%", pad=0.05)
             fig_set.colorbar(s, cax=cax)
 
-            ## Plot ground-truth zero-level contour
+            ## Plot Ground-Truth Zero-Level Contour
 
             n_grid_plane_pts = int(self.dataset.n_grid_pts/3)
             n_grid_len = int(n_grid_plane_pts ** 0.5)
@@ -632,40 +545,45 @@ class DeepReachHopf(Experiment):
             Vg = self.dataset.values_DP_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len)
             ax_set.contour(self.dataset.X1g, self.dataset.X2g, Vg.cpu(), [0.])
 
+            ## Plot the Linear Ground-Truth (ideal warm-start) Zero-Level Contour
+
+            Vg = self.dataset.values_DP_linear_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len)
+            ax_set.contour(self.dataset.X1g, self.dataset.X2g, Vg.cpu(), [0.], colors='gold', linestyles='dashed')
+
             ## Plot 3D Value Fn
 
-            if learned_value.min() > 0:
-                RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', [(1,1,1), (0.5,0.5,1), (0,0,1), (0,0,1)])
-            elif learned_value.max() < 0:
-                RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', [(1,0,0), (1,0,0), (1,0.5,0.5), (1,1,1)])
-            else:
-                n_bins_high = int(256 * (learned_value.max()/(learned_value.max() - learned_value.min())) // 1)
-                RdWh = matplotlib.colors.LinearSegmentedColormap.from_list('RdWh', [(1,0,0), (1,0,0), (1,0.5,0.5), (1,1,1)])
-                WhBl = matplotlib.colors.LinearSegmentedColormap.from_list('WhBl', [(1,1,1), (0.5,0.5,1), (0,0,1), (0,0,1)])
-                colors = np.vstack((RdWh(np.linspace(0., 1, 256-n_bins_high)), WhBl(np.linspace(0., 1, n_bins_high))))
-                RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', colors)
-            
-            ax_val.view_init(elev=15, azim=-60)
-            surf = ax_val.plot_surface(Xg, Yg, learned_value, cmap=RdWhBl_vscaled) #cmap='bwr_r')
-            fig_val.colorbar(surf, ax=ax_val, fraction=0.02, pad=0.1)
-            ax_val.set_zlim(-max(ax_val.get_zlim()[1]/5, 0.5))
-            ax_val.contour(Xg, Yg, learned_value, zdir='z', offset=ax_val.get_zlim()[0], cmap=RdWh, levels=[0.]) #cmap='bwr_r')
+            if plot_value:
+                if learned_value.min() > 0:
+                    RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', [(1,1,1), (0.5,0.5,1), (0,0,1), (0,0,1)])
+                elif learned_value.max() < 0:
+                    RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', [(1,0,0), (1,0,0), (1,0.5,0.5), (1,1,1)])
+                else:
+                    n_bins_high = int(256 * (learned_value.max()/(learned_value.max() - learned_value.min())) // 1)
+                    RdWh = matplotlib.colors.LinearSegmentedColormap.from_list('RdWh', [(1,0,0), (1,0,0), (1,0.5,0.5), (1,1,1)])
+                    WhBl = matplotlib.colors.LinearSegmentedColormap.from_list('WhBl', [(1,1,1), (0.5,0.5,1), (0,0,1), (0,0,1)])
+                    colors = np.vstack((RdWh(np.linspace(0., 1, 256-n_bins_high)), WhBl(np.linspace(0., 1, n_bins_high))))
+                    RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', colors)
+                
+                ax_val.view_init(elev=15, azim=-60)
+                surf = ax_val.plot_surface(Xg, Yg, learned_value, cmap=RdWhBl_vscaled) #cmap='bwr_r')
+                fig_val.colorbar(surf, ax=ax_val, fraction=0.02, pad=0.1)
+                ax_val.set_zlim(-max(ax_val.get_zlim()[1]/5, 0.5))
+                ax_val.contour(Xg, Yg, learned_value, zdir='z', offset=ax_val.get_zlim()[0], cmap=RdWh, levels=[0.]) #cmap='bwr_r')
 
         fig_set.savefig(save_path)
-        fig_val.savefig(save_path.split('_epoch')[0] + '_Vfn' + save_path.split('_epoch')[1])
+        if plot_value: fig_val.savefig(save_path.split('_epoch')[0] + '_Vfn' + save_path.split('_epoch')[1])
         if self.use_wandb:
-            wandb.log({
-                'step': epoch,
-                'val_plot': wandb.Image(fig_set), # (silly) legacy name
-                'val_fn_plot': wandb.Image(fig_val),
-            })
+            log_dict_plot = {'step': epoch,
+                        'val_plot': wandb.Image(fig_set),} # (silly) legacy name
+            if plot_value: log_dict_plot['val_fn_plot'] = wandb.Image(fig_val)
+            wandb.log(log_dict_plot)
         plt.close()
 
-        if self.dataset.record_set_metrics:
-            self.plot_set_metrics_eachtime(epoch, times)
-            if self.use_wandb:
-                wandb.log({'Time vs. Epoch vs. Set Accuracy compared to DP': wandb.Image(self.t_ep_acc_fig),})
-            plt.close()
+        # if self.dataset.record_set_metrics:
+        #     self.plot_set_metrics_eachtime(epoch, times)
+        #     if self.use_wandb:
+        #         wandb.log({'Time vs. Epoch vs. Set Accuracy compared to DP': wandb.Image(self.t_ep_acc_fig),})
+        #     plt.close()
 
         if was_training:
             self.model.train()
@@ -678,6 +596,8 @@ class DeepReachHopf(Experiment):
         values_grid = self.dataset.dynamics.io_to_value(model_results_grid['model_in'].detach(), model_results_grid['model_out'].squeeze(dim=-1))
         values_grid_sub0_ixs = torch.argwhere(values_grid <= 0).flatten()
 
+        Vmse = (self.dataset.values_DP_grid - values_grid).square().mean()
+
         # n_intersect = np.intersect1d(values_grid_sub0_ixs, self.dataset.values_DP_grid_sub0_ixs).size
         n_intersect = values_grid_sub0_ixs[(values_grid_sub0_ixs.view(1, -1) == self.dataset.values_DP_grid_sub0_ixs.view(-1, 1)).any(dim=0)].size()[0] # ty Amin_Jun
         n_overlap = values_grid_sub0_ixs.size()[0] + self.dataset.values_DP_grid_sub0_ixs.size()[0] - n_intersect
@@ -689,7 +609,7 @@ class DeepReachHopf(Experiment):
         FEp = (self.dataset.values_DP_grid_sub0_ixs.size()[0] - n_intersect) / self.dataset.values_DP_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
         JIp = n_intersect / n_overlap
 
-        return JIp, FIp, FEp
+        return JIp, FIp, FEp, Vmse
         
     def set_metrics_eachtime(self): 
 
@@ -728,13 +648,4 @@ class DeepReachHopf(Experiment):
                 ax.set_zlim(0, 1)
                 ax.set_xlabel('Time')
                 ax.set_ylabel('Epoch (C)')
-                ax.set_zlabel(['JI', 'FI%', 'FE%'][axi])
-                ax.view_init(elev=20., azim=-35, roll=0)
-
-        time_data = torch.linspace(self.dataset.tMin, self.dataset.tMax, self.dataset.n_grid_t_pts_hi)
-        epoch_data = epoch*torch.ones(self.dataset.n_grid_t_pts_hi)/100
-
-        lw = 1
-        self.t_ep_acc_fig_ax1.plot(time_data, epoch_data, JIps, lw=lw, color="blue")
-        self.t_ep_acc_fig_ax2.plot(time_data, epoch_data, FIps, lw=lw, color="green")
-        self.t_ep_acc_fig_ax3.plot(time_data, epoch_data, FEps, lw=lw, color="red")
+                

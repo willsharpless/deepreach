@@ -74,7 +74,7 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--batch_size', type=int, default=1, help='Batch size used during training (irrelevant, since len(dataset) == 1).')
     p.add_argument('--lr', type=float, default=1e-5, help='learning rate. default=2e-6')
     p.add_argument('--lr_decay_w', default=1., required=False, type=float, help='LR Exponential Decay Rate') # 1 or 0.9999
-    p.add_argument('--num_epochs', type=int, default=105000, help='Number of epochs to train for.')
+    p.add_argument('--num_epochs', type=int, default=200000, help='Number of epochs to train for.')
     p.add_argument('--clip_grad', default=0.0, type=float, help='Clip gradient.')
     p.add_argument('--use_lbfgs', default=False, type=bool, help='use L-BFGS.')
     p.add_argument('--adj_rel_grads', default=False, type=bool, help='adjust the relative magnitude of the losses') # adds 0.05s/it FYI
@@ -106,19 +106,23 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--hopf_loss_divisor', default=5, required=False, type=float, help='What to divide the hopf loss by for loss reweighting')
     p.add_argument('--hopf_pretrain', action='store_true', default=True, required=False, help='Pretrain hopf conditions')
     p.add_argument('--hopf_pretrain_iters', type=int, default=10000, required=False, help='Number of pretrain iterations with Hopf loss')
-    p.add_argument('--hopf_loss_decay', action='store_true', default=True, required=False, help='Hopf loss weight decay')
-    p.add_argument('--hopf_loss_decay_w', default=0.9999, required=False, type=float, help='Hopf loss weight decay rate')
-    p.add_argument('--hopf_loss_decay_early', action='store_true', default=False, required=False, help='Hopf loss weight decay')
-    p.add_argument('--diff_con_loss_incr', action='store_true', default=False, required=False, help='Incremental Diff Cons loss weight of (1 - hopf decay)')
+    p.add_argument('--hopf_loss_decay', action='store_true', default=False, required=False, help='Hopf loss weight decay')
+    p.add_argument('--hopf_loss_decay_rate', type=str, default='linear', choices=['exponential', 'linear', 'negative_exponential'], help='Type of decay for hopf loss term')
+    p.add_argument('--hopf_loss_decay_w', default=1., required=False, type=float, help='Hopf loss decay rate weight')
+    p.add_argument('--hopf_loss_decay_early', action='store_true', default=False, required=False, help='Starts hopf loss decay in pretraining')
+    p.add_argument('--diff_con_loss_incr', action='store_true', default=False, required=False, help='Increments PDE loss introduction of (1 - hopf decay)')
     p.add_argument('--dual_lr', action='store_true', default=True, required=False, help='Use separate lr for Hopf Pretraining and Training')
-    p.add_argument('--lr_hopf', default=2e-5, required=False, type=float, help='Learning Rate in Hopf Pretraining')
-    p.add_argument('--lr_hopf_decay_w', default=1, required=False, type=float, help='LR Exponential Decay Rate in Hopf Pretraining')
-    p.add_argument('--nl_scale', action='store_true', default=False, required=False, help='Whether to scale the amount of nonlinearity over training') # TODO: add choice of epochs, add correct contour
+    p.add_argument('--lr_hopf', default=2e-5, required=False, type=float, help='Learning rate in hopf pretraining')
+    p.add_argument('--lr_hopf_decay_w', default=1, required=False, type=float, help='LR exponential decay rate in hopf pretraining')
+    p.add_argument('--nl_scale', action='store_true', default=False, required=False, help='Scales the "amount" of nonlinearity over training') # TODO: add choice of epochs, add correct contour
     p.add_argument('--nl_scale_epoch_step', type=int, default=10000, required=False, help='Interval (after pt) to step the nonlinearity scale')
-    p.add_argument('--nl_scale_epoch_post', type=int, default=0, required=False, help='Number of epochs to add after nonlinearity scaling')
+    p.add_argument('--nl_scale_epoch_post', type=int, default=50000, required=False, help='Number of epochs to add after nonlinearity scaling')
+    p.add_argument('--temporal_weighting', action='store_true', default=False, required=False, help='Inversely weights the samples in the loss w.r.t. time')
 
     # record set metrics
     p.add_argument('--set_metrics', action='store_true', default=True, required=False, help='Compute and Score the Learned Set Similarity (Needs Ground Truth)')
+    p.add_argument('--temporal_loss', action='store_true', default=True, required=False, help='Compute the loss over time chunks (Slower)')
+    p.add_argument('--capacity_test', action='store_true', default=False, required=False, help='Use separate lr for Hopf Pretraining and Training')
 
     # load dynamics_class choices dynamically from dynamics module
     dynamics_classes_dict = {name: clss for name, clss in inspect.getmembers(dynamics, inspect.isclass) if clss.__bases__[0] == dynamics.Dynamics}
@@ -143,6 +147,21 @@ if (mode == 'all') or (mode == 'test'):
 
 opt = p.parse_args()
 
+if opt.capacity_test:
+    if opt.dynamics_class != "LessLinearND":
+        raise AssertionError 
+    opt.hopf_pretrain_iters = opt.num_epochs - opt.pretrain_iters # only uses hopf lin diff
+    opt.hopf_loss = 'lindiff'
+    opt.use_bank = False
+    opt.hopf_loss_decay = False
+
+debugging = False
+if debugging:
+    opt.pretrain_iters = 2
+    opt.hopf_pretrain_iters = 2
+    opt.num_epochs = 5
+    opt.epochs_til_ckpt = 15
+    
 # start wandb
 if use_wandb:
     wandb.init(
@@ -208,7 +227,7 @@ dataset = dataio.ReachabilityDataset(
     use_hopf=orig_opt.hopf_loss != 'none',
     hopf_pretrain=orig_opt.hopf_pretrain, hopf_pretrain_iters=orig_opt.hopf_pretrain_iters,
     no_curriculum=orig_opt.no_curr, record_set_metrics=orig_opt.set_metrics,
-    use_bank=orig_opt.use_bank, bank_name=orig_opt.bank_name,)
+    use_bank=orig_opt.use_bank, bank_name=orig_opt.bank_name, capacity_test=orig_opt.capacity_test,)
 
 model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
                              final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl)
@@ -224,7 +243,7 @@ if (mode == 'all') or (mode == 'train'):
     elif dynamics.loss_type == 'brat_hjivi':
         loss_fn = losses.init_brat_hjivi_loss(dynamics, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
     elif dynamics.loss_type == 'brt_hjivi_hopf':
-        loss_fn = losses.init_brt_hjivi_hopf_loss(dynamics, orig_opt.minWith, orig_opt.dirichlet_loss_divisor, orig_opt.hopf_loss_divisor, orig_opt.hopf_loss)
+        loss_fn = losses.init_brt_hjivi_hopf_loss(experiment, orig_opt.minWith, orig_opt.dirichlet_loss_divisor, orig_opt.hopf_loss_divisor, orig_opt.hopf_loss, orig_opt.temporal_weighting)
     else:
         raise NotImplementedError
     experiment.train(
@@ -234,8 +253,10 @@ if (mode == 'all') or (mode == 'train'):
         val_x_resolution=orig_opt.val_x_resolution, val_y_resolution=orig_opt.val_y_resolution, val_z_resolution=orig_opt.val_z_resolution, val_time_resolution=orig_opt.val_time_resolution,
         use_CSL=orig_opt.use_CSL, CSL_lr=orig_opt.CSL_lr, CSL_dt=orig_opt.CSL_dt, epochs_til_CSL=orig_opt.epochs_til_CSL, num_CSL_samples=orig_opt.num_CSL_samples, CSL_loss_frac_cutoff=orig_opt.CSL_loss_frac_cutoff, max_CSL_epochs=orig_opt.max_CSL_epochs, CSL_loss_weight=orig_opt.CSL_loss_weight, CSL_batch_size=orig_opt.CSL_batch_size,
         dual_lr=orig_opt.dual_lr, lr_decay_w=orig_opt.lr_decay_w, lr_hopf=orig_opt.lr_hopf, lr_hopf_decay_w=orig_opt.lr_hopf_decay_w, 
-        hopf_loss_decay_early=orig_opt.hopf_loss_decay_early, hopf_loss_decay=orig_opt.hopf_loss_decay, hopf_loss_decay_w=orig_opt.hopf_loss_decay_w, diff_con_loss_incr=orig_opt.diff_con_loss_incr,
-        nonlin_scale=orig_opt.nl_scale, nl_scale_epoch_step=orig_opt.nl_scale_epoch_step, nl_scale_epoch_post=orig_opt.nl_scale_epoch_post)
+        hopf_loss_decay=orig_opt.hopf_loss_decay, hopf_loss_decay_early=orig_opt.hopf_loss_decay_early, diff_con_loss_incr=orig_opt.diff_con_loss_incr, 
+        hopf_loss_decay_rate=orig_opt.hopf_loss_decay_rate, hopf_loss_decay_w=orig_opt.hopf_loss_decay_w, 
+        nonlin_scale=orig_opt.nl_scale, nl_scale_epoch_step=orig_opt.nl_scale_epoch_step, nl_scale_epoch_post=orig_opt.nl_scale_epoch_post,
+        record_temporal_loss=orig_opt.temporal_loss,)
 
 if (mode == 'all') or (mode == 'test'):
     experiment.test(
