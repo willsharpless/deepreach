@@ -36,11 +36,12 @@ class ReachabilityDataset(Dataset):
         self.no_curriculum = no_curriculum
         self.N = dynamics.N
         self.capacity_test = capacity_test
+        self.llnd_path = "value_fns/LessLinear/"
 
         self.use_bank = use_bank
         if bank_name is None or bank_name == 'none': bank_name = "Bank_"+str(self.N)+"D_"+str(self.numpoints//10000)+"Mpts.npy"
         self.bank_name = bank_name
-        self.make_bank = use_bank and not(os.path.isfile(self.bank_name))
+        self.make_bank = use_bank and not(os.path.isfile(self.llnd_path + "banks/" + self.bank_name))
         self.numblocks = 101
         self.bank_total = numpoints * self.numblocks
 
@@ -108,12 +109,12 @@ class ReachabilityDataset(Dataset):
                     self.fast_interp = jl.seval(fast_interp_exec)
                 
                 if self.N == 2:
-                    self.V_DP_itp = jl.load("llin2d_g20_m-20_a1_DP_interp_linear.jld")["V_itp"]
+                    self.V_DP_itp = jl.load(self.llnd_path + "interps/old/llin2d_g20_m-20_a1_DP_interp_linear.jld")["V_itp"]
                     self.V_DP = lambda tXg: torch.from_numpy(self.fast_interp(self.V_DP_itp, tXg.numpy()).to_numpy())
                 
                 elif self.N > 2:
-                    LessLinear2D_interpolations = jl.load("LessLinear2D1i_interpolations_res1e-2_r15e-2.jld", "LessLinear2D_interpolations")
-                    # LessLinear2D_interpolations = jl.load("LessLinear2D1i_interpolations_res1e-2_r4e-1_el_1_5.jld", "LessLinear2D_interpolations")
+                    LessLinear2D_interpolations = jl.load(self.llnd_path + "interps/old/LessLinear2D1i_interpolations_res1e-2_r15e-2.jld", "LessLinear2D_interpolations")
+                    # LessLinear2D_interpolations = jl.load(rel_path + "old/LessLinear2D1i_interpolations_res1e-2_r4e-1_el_1_5.jld", "LessLinear2D_interpolations")
                     # self.V_DP_itp = LessLinear2D_interpolations["g0_m0_a0"] #linear
                     # self.V_DP_itp = LessLinear2D_interpolations["g20_m0_a0"] #level 1
                     # self.V_DP_itp = LessLinear2D_interpolations["g20_m-20_a1"] #level 2
@@ -224,15 +225,15 @@ class ReachabilityDataset(Dataset):
                     pbar.update(1)
 
             ## Save Evaluated Bank and Delete it from Memory
-            print("Done. Written to " + bank_name + ".\n")
-            np.save(bank_name, bank)
+            print("Done. Written to " + self.bank_name + ".\n")
+            np.save(self.llnd_path + "banks/" + self.bank_name, bank)
             del(bank)
             gc.collect()
         
         ## Load Memory Map of the Bank
         if self.use_bank:
 
-            self.bank = np.load(bank_name, mmap_mode='r')
+            self.bank = np.load(self.llnd_path + "banks/" + self.bank_name, mmap_mode='r')
             self.bank_index = torch.from_numpy(np.random.permutation(self.bank_total)) # random shuffle for sampling (should we also mmap this?)
             self.block_counter = 0
         
