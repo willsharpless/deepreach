@@ -159,7 +159,7 @@ debugging = False
 if debugging:
     opt.pretrain_iters = 2
     opt.hopf_pretrain_iters = 2
-    opt.num_epochs = 5
+    opt.num_epochs = 6
     opt.epochs_til_ckpt = 15
     
 # start wandb

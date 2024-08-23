@@ -143,6 +143,8 @@ class Experiment(ABC):
         gamma_orig, mu_orig, alpha_orig = self.dataset.dynamics.gamma, self.dataset.dynamics.mu, self.dataset.dynamics.alpha
         total_pretrain_iters = self.dataset.pretrain_iters + self.dataset.hopf_pretrain_iters
         self.total_pretrain_iters = total_pretrain_iters
+        self.epochs = epochs
+        nl_perc = 0.
 
         # new_weight, new_weight_hopf, new_weight_diff_con = 1, 1, 0
         loss_weights = {'dirichlet': 1., 'hopf': 1., 'diff_constraint_hom': 0.}
@@ -168,9 +170,7 @@ class Experiment(ABC):
                     self.dataset.dynamics.gamma = nl_perc * gamma_orig
                     self.dataset.dynamics.mu = nl_perc * mu_orig
                     self.dataset.dynamics.alpha = nl_perc * alpha_orig
-                    # print("Epoch:", epoch, ", nl perc:", nl_perc)
-                    # print("  Params:", self.dataset.dynamics.gamma, self.dataset.dynamics.mu, self.dataset.dynamics.alpha)
-                
+
                 # self-supervised learning
                 for step, (model_input, gt) in enumerate(train_dataloader):
                     start_time = time.time()
