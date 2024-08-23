@@ -110,12 +110,19 @@ def init_brt_hjivi_hopf_loss(experiment, minWith, dirichlet_loss_divisor, hopf_l
 
                     ## flattening truncated normal params
                     a,b = 0,1
-                    mu, sigma_init, sigma_final, k = 0, 0.4, 5, 5
-                    e_perc, sigma = 0, sigma_init
+                    # mu, sigma_init, sigma_final, k = 0, 0.4, 5, 5
+                    # e_perc, sigma = 0, sigma_init
+                    # mu, sigma_init, sigma_final, k = 0, 0.1, 1., 2.2 # low str
+                    # mu, sigma_init, sigma_final, k = 0, 0.1, 0.4, 1 # mid str
+                    mu, sigma_init, sigma_final, k = 0, 0.01, 0.4, 1.8 # high str
+                    e_perc = (epoch - experiment.total_pretrain_iters)/(experiment.epochs - experiment.total_pretrain_iters)
+                    exp_perc = 2.718 ** (k * (e_perc - 1))
+                    sigma = sigma_init * (1. - exp_perc) + sigma_final * exp_perc
 
                     a_p, b_p = (a - mu) / sigma, (b - mu) / sigma
                     weight = torch.tensor(truncnorm.pdf(state_time.cpu(), a_p, b_p, scale=sigma))
                     diff_constraint_hom = torch.tensor(weight).cuda() * diff_constraint_hom
+                    # FIXME: this still doesn't seem to do much!
 
             # if epoch >= experiment.total_pretrain_iters:
             #     print("times   : ", state_time)
