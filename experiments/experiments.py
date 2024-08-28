@@ -98,7 +98,7 @@ class Experiment(ABC):
             val_x_resolution, val_y_resolution, val_z_resolution, val_time_resolution,
             use_CSL, CSL_lr, CSL_dt, epochs_til_CSL, num_CSL_samples, CSL_loss_frac_cutoff, max_CSL_epochs, CSL_loss_weight, CSL_batch_size,
             dual_lr=False, lr_decay_w=1., lr_hopf=2e-5, lr_hopf_decay_w=1., smoothing_factor=0.8, 
-            hopf_loss_decay_early = True, hopf_loss_decay=True, hopf_loss_decay_w=0.9998, 
+            hopf_loss='none', hopf_loss_decay_early = True, hopf_loss_decay=True, hopf_loss_decay_w=0.9998, 
             diff_con_loss_incr=False, hopf_loss_decay_rate = 'exponential',
             nonlin_scale=False, nl_scale_epoch_step=10000, nl_scale_epoch_post=10000, 
             record_temporal_loss = False,
@@ -146,10 +146,14 @@ class Experiment(ABC):
         self.epochs = epochs
         nl_perc = 0.
 
-        # new_weight, new_weight_hopf, new_weight_diff_con = 1, 1, 0
-        loss_weights = {'dirichlet': 1., 'hopf': 1., 'diff_constraint_hom': 0.}
+        ## Dynamic Weighting
+        loss_weights = {'dirichlet': 1., 'hopf': 1., 'diff_constraint_hom': 1.}
+        if diff_con_loss_incr:
+            loss_weights['diff_constraint_hom'] = 0.
         if hopf_loss_decay_rate == 'negative_exponential': 
             loss_weights['hopf'] = 1 - (hopf_loss_decay_w ** (epochs - 1 - total_pretrain_iters))
+        if hopf_loss == 'lin_val_grad_diff':
+            loss_weights['hopf_grad'] = loss_weights['hopf']
 
         with tqdm(total=len(train_dataloader) * epochs) as pbar:
             train_losses = []
@@ -197,24 +201,50 @@ class Experiment(ABC):
 
                     ## Compute Loss
                     if self.timing: start_time_2 = time.time()
+
+                    ## Standard BRT
                     if self.dataset.dynamics.loss_type == 'brt_hjivi':
                         losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'])
-                    elif self.dataset.dynamics.loss_type == 'brt_hjivi_hopf':
+
+                    ## Linearly-Guided BRT (Hopf-based)
+                    elif hopf_loss != 'none':
+                        
                         hopf_values = gt['hopf_values']
+
+                        if hopf_loss == 'lin_val_grad_diff':
+                            hopf_grads = gt['hopf_grads']
+                        
+                        # the following allows separate coordinates for the hopf loss (to allow unrestricted sampling for PDE loss)
                         if not(self.dataset.use_bank) or self.dataset.hopf_pretrain_counter == 0:
+                            
                             learned_hopf_values = values
+                            if hopf_loss == 'lin_val_grad_diff':
+                                learned_hopf_grads = dvs[..., 1:]
+                                
                         else:
                             model_results_hopf = self.model({'coords': gt['model_coords_hopf']})
                             learned_hopf_values = self.dataset.dynamics.io_to_value(model_results_hopf['model_in'].detach(), model_results_hopf['model_out'].squeeze(dim=-1))   
-                        losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, learned_hopf_values, epoch, state_times)
+                            
+                            if hopf_loss == 'lin_val_grad_diff':
+                                learned_hopf_grads = self.dataset.dynamics.io_to_dv(model_results_hopf['model_in'], model_results_hopf['model_out'].squeeze(dim=-1))[..., 1:]   
+                        
+                        if hopf_loss == 'lin_val_grad_diff':
+                            losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, learned_hopf_values, hopf_grads, learned_hopf_grads, epoch, state_times)
+                        else:
+                            losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, learned_hopf_values, epoch, state_times)
+
+                    ## Standard BRAT
                     elif self.dataset.dynamics.loss_type == 'brat_hjivi':
                         losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, reach_values, avoid_values, dirichlet_masks, model_results['model_out'])
+                    
                     else:
                         raise NotImplementedError
+                    
                     if self.timing: print("Loss Computation took:", time.time() - start_time_2)
 
                     # print("B/C  loss:", losses['dirichlet'])
                     # print("Hopf loss:", losses['hopf'])
+                    # print("Hopf Grad loss:", losses['hopf_grad'])
                     # print("PDE  loss:", losses['diff_constraint_hom'])
 
                     ## Compute & Record Temporal Loss Distribution
@@ -226,7 +256,12 @@ class Experiment(ABC):
                             t_ix = (state_times < tp) * (state_times >= tm)
                             state_times_t, states_t, values_t, dvs_t, boundary_values_t = state_times[t_ix, ...].unsqueeze(0), states[t_ix, ...].unsqueeze(0), values[t_ix].unsqueeze(0), dvs[t_ix, ...].unsqueeze(0), boundary_values[t_ix].unsqueeze(0)
                             dirichlet_masks_t, model_results_t, hopf_values_t, learned_hopf_values_t = dirichlet_masks[t_ix].unsqueeze(0), model_results['model_out'][t_ix].unsqueeze(0), hopf_values[t_ix].unsqueeze(0), learned_hopf_values[t_ix].unsqueeze(0)
-                            losses_t[str(tp)] = loss_fn(states_t, values_t, dvs_t[..., 0], dvs_t[..., 1:], boundary_values_t, dirichlet_masks_t, model_results_t, hopf_values_t, learned_hopf_values_t, epoch, state_times_t)
+                            if not self.dataset.solve_grad:
+                                losses_t[str(tp)] = loss_fn(states_t, values_t, dvs_t[..., 0], dvs_t[..., 1:], boundary_values_t, dirichlet_masks_t, model_results_t, hopf_values_t, learned_hopf_values_t, epoch, state_times_t)
+                            else:
+                                hopf_grads_t, learned_grads_t = hopf_grads[t_ix].unsqueeze(0), learned_hopf_grads[t_ix].unsqueeze(0)
+                                losses_t[str(tp)] = loss_fn(states_t, values_t, dvs_t[..., 0], dvs_t[..., 1:], boundary_values_t, dirichlet_masks_t, model_results_t, hopf_values_t, learned_hopf_values_t, hopf_grads_t, learned_grads_t, epoch, state_times_t)
+
                             # print("PDE  loss", tp, ':', losses_t[str(tp)]['diff_constraint_hom'].item())
                     
                     ## Switch Optimizers/Rates (after Hopf Pretraining)
@@ -236,19 +271,22 @@ class Experiment(ABC):
                         lr_scheduler = lr_scheduler_std
                     if self.timing: print("Loss Scheduler took:", time.time() - start_time_2)
                     
-                    ## Decay Hopf Loss
-                    if hopf_loss_decay and self.dataset.dynamics.loss_type == 'brt_hjivi_hopf': #                         
+                    ## Decay Hopf Loss(es)
+                    if hopf_loss_decay and hopf_loss != 'none': #                         
                         if epoch >= total_pretrain_iters or hopf_loss_decay_early:
                             if hopf_loss_decay_rate == 'exponential' and epoch > total_pretrain_iters or hopf_loss_decay_early:
                                 loss_weights['hopf'] = hopf_loss_decay_w * loss_weights['hopf']
                             elif hopf_loss_decay_rate == 'linear':
-                                loss_weights['hopf'] = 1 - hopf_loss_decay_w * (epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters) 
+                                loss_weights['hopf'] = 1 - hopf_loss_decay_w * (epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters)
                             elif hopf_loss_decay_rate == 'negative_exponential' and epoch > total_pretrain_iters:
                                 loss_weights['hopf'] = 1 - ((1 - loss_weights['hopf']) / hopf_loss_decay_w)
                             # else:
                             #     raise NotImplementedError
                             # print("epoch", epoch, ", loss_weights['hopf']=", loss_weights['hopf'])
                         loss_weights['hopf'] = min(max(loss_weights['hopf'], 0.), 1.)
+                        
+                        if hopf_loss == 'lin_val_grad_diff':
+                            loss_weights['hopf_grad'] = loss_weights['hopf'] 
 
                         ## Incrementally Introduce Differential Constraint Loss (After All Pretraining)
                         if diff_con_loss_incr and epoch >= total_pretrain_iters:
@@ -262,9 +300,10 @@ class Experiment(ABC):
                     if self.timing: start_time_2 = time.time()
                     train_loss = 0.
                     for loss_name, loss in losses.items():
-                        single_loss = loss.mean()
+                        single_loss = loss.mean() ## TODO: this is not the right place for this
                         writer.add_scalar(loss_name, single_loss, total_steps)
                         train_loss += loss_weights[loss_name] * single_loss
+                        # print(loss_name, ":", loss_weights[loss_name] * single_loss.detach().item())
 
                     train_losses.append(train_loss.item())
                     writer.add_scalar("total_train_loss", train_loss, total_steps)
@@ -311,11 +350,12 @@ class Experiment(ABC):
                             if nonlin_scale and not(self.dataset.pretrain) and not(self.dataset.hopf_pretrain):
                                 log_dict["Nonlinearity Scale"] = nl_perc
 
-                            if self.dataset.record_set_metrics:
-                                with torch.no_grad():
-                                    JIp, FIp, FEp, Vmse = self.set_metrics_overtime()
-                                    JIp_s = smoothing_factor * JIp + (1 - smoothing_factor) * JIp_s
-                                    JIp_s_max = max(JIp_s, JIp_s_max)
+                            if self.dataset.record_gt_metrics:
+
+                                JIp, FIp, FEp, Vmse, DVXmse = self.compute_gt_metrics()
+                                JIp_s = smoothing_factor * JIp + (1 - smoothing_factor) * JIp_s
+                                JIp_s_max = max(JIp_s, JIp_s_max)
+
                                 log_dict["Jaccard Index over Time"] = JIp
                                 log_dict["Smooth Jaccard Index over Time"] = JIp_s
                                 log_dict["Max Smooth Jaccard Index over Time"] = JIp_s_max
@@ -323,6 +363,7 @@ class Experiment(ABC):
                                 log_dict["Falsely Excluded percent over Time"] = FEp
                                 log_dict["Mean Absolute Spatial Gradient"] = torch.abs(dvs[..., 1:]).sum() / (self.dataset.numpoints * self.N)
                                 log_dict["Mean Squared Error of Value"] = Vmse
+                                log_dict["Mean Squared Error of Spatial Gradient"] = DVXmse
 
                             if hopf_loss_decay and epoch >= total_pretrain_iters:
                                 log_dict['hopf_weight'] = loss_weights['hopf']
@@ -457,11 +498,11 @@ class DeepReachHopf(Experiment):
             })
         plt.close()
 
-        if self.dataset.record_set_metrics:
-            self.plot_set_metrics_eachtime(epoch, times)
-            if self.use_wandb:
-                wandb.log({'Time vs. Epoch vs. Set Accuracy compared to DP': wandb.Image(self.t_ep_acc_fig),})
-            plt.close()
+        # if self.dataset.record_gt_metrics:
+        #     self.plot_set_metrics_eachtime(epoch, times)
+        #     if self.use_wandb:
+        #         wandb.log({'Time vs. Epoch vs. Set Accuracy compared to DP': wandb.Image(self.t_ep_acc_fig),})
+        #     plt.close()
 
         if was_training:
             self.model.train()
@@ -579,7 +620,7 @@ class DeepReachHopf(Experiment):
             wandb.log(log_dict_plot)
         plt.close()
 
-        # if self.dataset.record_set_metrics:
+        # if self.dataset.record_gt_metrics:
         #     self.plot_set_metrics_eachtime(epoch, times)
         #     if self.use_wandb:
         #         wandb.log({'Time vs. Epoch vs. Set Accuracy compared to DP': wandb.Image(self.t_ep_acc_fig),})
@@ -589,27 +630,35 @@ class DeepReachHopf(Experiment):
             self.model.train()
             self.model.requires_grad_(True)
 
-    def set_metrics_overtime(self):
+    def compute_gt_metrics(self):
 
         # if self.N == 2: do whats here, else: use grid only on slices / actually jk, just fill .dataset loads with proper grids (full for 2D, slices for ND)
         model_results_grid = self.model({'coords': self.dataset.model_coords_grid_allt})
-        values_grid = self.dataset.dynamics.io_to_value(model_results_grid['model_in'].detach(), model_results_grid['model_out'].squeeze(dim=-1))
-        values_grid_sub0_ixs = torch.argwhere(values_grid <= 0).flatten()
-
-        Vmse = (self.dataset.values_DP_grid - values_grid).square().mean()
-
-        # n_intersect = np.intersect1d(values_grid_sub0_ixs, self.dataset.values_DP_grid_sub0_ixs).size
-        n_intersect = values_grid_sub0_ixs[(values_grid_sub0_ixs.view(1, -1) == self.dataset.values_DP_grid_sub0_ixs.view(-1, 1)).any(dim=0)].size()[0] # ty Amin_Jun
-        n_overlap = values_grid_sub0_ixs.size()[0] + self.dataset.values_DP_grid_sub0_ixs.size()[0] - n_intersect
         
-        if values_grid_sub0_ixs.size()[0] > 0:
-            FIp = (values_grid_sub0_ixs.size()[0] - n_intersect) / values_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
-        else:
-            FIp = 1.
-        FEp = (self.dataset.values_DP_grid_sub0_ixs.size()[0] - n_intersect) / self.dataset.values_DP_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
-        JIp = n_intersect / n_overlap
+        ## Compute Value Gradient MSE on Grid
+        if self.dataset.solve_grad:
+            DVX = self.dataset.dynamics.io_to_dv(model_results_grid['model_in'], model_results_grid['model_out'].squeeze(dim=-1))[..., 1:].detach()
+            DVXmse = (self.dataset.value_grads_DP_grid - DVX).square().mean()
 
-        return JIp, FIp, FEp, Vmse
+        with torch.no_grad():
+            values_grid = self.dataset.dynamics.io_to_value(model_results_grid['model_in'].detach(), model_results_grid['model_out'].squeeze(dim=-1))
+            values_grid_sub0_ixs = torch.argwhere(values_grid <= 0).flatten()
+
+            ## Compute MSE on Grid
+            Vmse = (self.dataset.values_DP_grid - values_grid).square().mean()
+
+            ## Compute Set Metrics over Time
+            n_intersect = values_grid_sub0_ixs[(values_grid_sub0_ixs.view(1, -1) == self.dataset.values_DP_grid_sub0_ixs.view(-1, 1)).any(dim=0)].size()[0] # ty Amin_Jun
+            n_overlap = values_grid_sub0_ixs.size()[0] + self.dataset.values_DP_grid_sub0_ixs.size()[0] - n_intersect
+            
+            if values_grid_sub0_ixs.size()[0] > 0:
+                FIp = (values_grid_sub0_ixs.size()[0] - n_intersect) / values_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
+            else:
+                FIp = 1.
+            FEp = (self.dataset.values_DP_grid_sub0_ixs.size()[0] - n_intersect) / self.dataset.values_DP_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
+            JIp = n_intersect / n_overlap
+
+        return JIp, FIp, FEp, Vmse, DVXmse
         
     def set_metrics_eachtime(self): 
 

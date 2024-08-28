@@ -31,7 +31,7 @@ p.add_argument('--solve_hopf', action='store_true', default=False, required=Fals
 
 use_wandb = p.parse_known_args()[0].use_wandb
 if use_wandb:
-    p.add_argument('--wandb_project', type=str, default='deepreach_hopf_LND', required=False, help='wandb project')
+    p.add_argument('--wandb_project', type=str, default='deepreach_hopf_gradloss', required=False, help='wandb project')
     p.add_argument('--wandb_entity', type=str, default='sas-lab', required=False, help='wandb entity')
     p.add_argument('--wandb_group', type=str, default='LessLinearND', required=False, help='wandb group')
     p.add_argument('--wandb_name', type=str, default='test_run', required=False, help='name of wandb run')
@@ -54,7 +54,7 @@ if (mode == 'all') or (mode == 'train'):
     # simulation data source options
     p.add_argument('--numpoints', type=int, default=65000, help='Number of points in simulation data source __getitem__.')
     p.add_argument('--pretrain', action='store_true', default=True, required=False, help='Pretrain dirichlet conditions')
-    p.add_argument('--pretrain_iters', type=int, default=5000, required=False, help='Number of pretrain iterations')
+    p.add_argument('--pretrain_iters', type=int, default=2000, required=False, help='Number of pretrain iterations')
     p.add_argument('--tMin', type=float, default=0.0, required=False, help='Start time of the simulation')
     p.add_argument('--tMax', type=float, default=1.0, required=False, help='End time of the simulation')
     p.add_argument('--counter_start', type=int, default=0, required=False, help='Defines the initial time for the curriculum training')
@@ -75,7 +75,7 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--batch_size', type=int, default=1, help='Batch size used during training (irrelevant, since len(dataset) == 1).')
     p.add_argument('--lr', type=float, default=1e-5, help='learning rate. default=2e-6')
     p.add_argument('--lr_decay_w', default=1., required=False, type=float, help='LR Exponential Decay Rate') # 1 or 0.9999
-    p.add_argument('--num_epochs', type=int, default=200000, help='Number of epochs to train for.')
+    p.add_argument('--num_epochs', type=int, default=30000, help='Number of epochs to train for.')
     p.add_argument('--clip_grad', default=0.0, type=float, help='Clip gradient.')
     p.add_argument('--use_lbfgs', default=False, type=bool, help='use L-BFGS.')
     p.add_argument('--adj_rel_grads', default=False, type=bool, help='adjust the relative magnitude of the losses') # adds 0.05s/it FYI

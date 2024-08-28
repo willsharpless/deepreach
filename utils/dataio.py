@@ -10,7 +10,7 @@ from tqdm.autonotebook import tqdm
 # uses model input and real boundary fn
 class ReachabilityDataset(Dataset):
     def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, 
-                 use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0, record_set_metrics=False,
+                 use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0, record_gt_metrics=False, solve_hopf=False, solve_grad=False,
                  manual_load=False, load_packet=None, no_curriculum=False, use_bank=False, bank_name=None, capacity_test=False):
         
         # print("Into the dataset!")
@@ -27,12 +27,13 @@ class ReachabilityDataset(Dataset):
         self.num_src_samples = num_src_samples
         self.num_target_samples = num_target_samples
 
-        self.use_hopf = use_hopf
+        self.use_hopf = use_hopf # old name, means use linear data (not necessarily solve)
+        self.solve_grad = solve_grad
         self.hopf_pretrain = use_hopf and hopf_pretrain
         self.hopf_pretrained = use_hopf and hopf_pretrain
         self.hopf_pretrain_counter = 0
         self.hopf_pretrain_iters = hopf_pretrain_iters
-        self.record_set_metrics = record_set_metrics
+        self.record_gt_metrics = record_gt_metrics
         self.no_curriculum = no_curriculum
         self.N = dynamics.N
         self.capacity_test = capacity_test
@@ -45,64 +46,106 @@ class ReachabilityDataset(Dataset):
         self.numblocks = 101
         self.bank_total = numpoints * self.numblocks
 
+        self.solve_hopf = solve_hopf # triggers online hopf formula solving via HopfReachability.jl
+
         if manual_load: # added this to skirt WandB sweep + PyCall imcompatibility (not working)
             self.V_hopf_itp, self.fast_interp, self.V_hopf, self.V_DP_itp, self.V_DP = load_packet
         
-        ## Compute Hopf value from interpolant (if hopf loss)
-        
+        ## Compute Linear Value from Model (if hopf loss)
         if use_hopf and not(manual_load):
 
-            jl.seval("using JLD, JLD2, Interpolations")
-            fast_interp_exec = """
-            function fast_interp(_V_itp, tXg)
-                Vg = zeros(size(tXg,2))
-                for i=1:length(Vg); Vg[i] = _V_itp(tXg[:,i][end:-1:1]...); end # (assumes t in first row)
-                return Vg
-            end
-            """
-            self.fast_interp = jl.seval(fast_interp_exec)
-            
-            if self.N == 2:
-                self.V_hopf_itp = jl.load("lin2d_hopf_interp_linear.jld")["V_itp"]
-                self.V_hopf = lambda tXg: torch.from_numpy(self.fast_interp(self.V_hopf_itp, tXg.numpy()).to_numpy())
-            
-            ## FIXME : using DP right now for early Ndim testing, switch to hopf solution in future
-            elif self.N > 2:
-
-                LessLinear2D_interpolations = jl.load("LessLinear2D1i_interpolations_res1e-2_r15e-2.jld", "LessLinear2D_interpolations")
-
-                self.V_hopf_itp = LessLinear2D_interpolations["g0_m0_a0"]
-                if capacity_test:
-                    model_key = "g" + str(int(self.dynamics.gamma)) + "_m" + str(int(self.dynamics.mu)) + "_a"  + str(int(self.dynamics.alpha))
-                    self.V_hopf_itp = LessLinear2D_interpolations[model_key]
-
-                def V_N_hopf_itp(tXg):
-                    V = 0 * tXg[0,:]
-                    for i in range(self.N-1):
-                        V += torch.from_numpy(self.fast_interp(self.V_hopf_itp, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
-                    return V
-                self.V_hopf = V_N_hopf_itp ## TODO: actually use hopf solution (as in N==2 case)
-
-                # fast_interp_exec = """
-                # function fast_interp_N(_V_itp, tXg)
-                #     Vg = zeros(size(tXg,2))
-                #     for i=1:length(Vg); 
-                #     Vg[i] = sum(_V_itp(tXg[[1,2,2+j],i][end:-1:1]...) for j=1:size(tXg,1)-3); end # (assumes t in first row)
-                #     return Vg
-                # end
-                # """
-                # self.fast_interp = jl.seval(fast_interp_exec)
-                # self.V_hopf = lambda tXg: torch.from_numpy(self.fast_interp(self.V_hopf_itp, tXg.numpy()).to_numpy())
+            ## Load Linear DP Solution for Proof-of-Concept (Faster & Higher-Fidelity than actual Hopf Solving)
+            if not self.solve_hopf:
                 
-        if record_set_metrics:
+                ## julia code opt returns values or values and grads
+                jl.seval("using JLD, JLD2, Interpolations")
+                fast_interp_exec = """
+                function fast_interp(_V_itp, tXg; compute_grad=false)
+                    Vg = zeros(size(tXg,2))
+                    for i=1:length(Vg); Vg[i] = _V_itp(tXg[:,i][end:-1:1]...); end # (assumes t in first row)
+                    if !compute_grad
+                        return Vg
+                    else
+                        G = zeros(size(tXg,2), size(tXg,1)-1)
+                        for i=1:size(G,1); G[i,:] = Interpolations.gradient(_V_itp, tXg[:,i][end:-1:1]...)[end-1:-1:1]; end # (assumes t in first row)
+                        return Vg, G
+                    end
+                end
+                """
+                self.fast_interp = jl.seval(fast_interp_exec)
+                ## FIXME: rename "tXg"-> "tX" and some of "hopf_loss" -> "linear"
+                
+                if self.N == 2:
+
+                    ## Load 2D DP Solution
+                    self.V_hopf_itp = jl.load("lin2d_hopf_interp_linear.jld")["V_itp"] ## (using gt)
+                    self.V_hopf = lambda tXg: torch.from_numpy(self.fast_interp(self.V_hopf_itp, tXg.numpy()).to_numpy())
+                    if self.solve_grad:
+                        self.V_hopf_grad = lambda tXg: torch.from_numpy(self.fast_interp(self.V_hopf_itp, tXg.numpy(), compute_grad=True).to_numpy())
+                
+                elif self.N > 2:
+                    
+                    ## Load 2D DP Solution
+                    LessLinear2D_interpolations = jl.load(self.llnd_path + "interps/old/LessLinear2D1i_interpolations_res1e-2_r15e-2.jld", "LessLinear2D_interpolations")
+                    self.V_hopf_itp = LessLinear2D_interpolations["g0_m0_a0"] ## (using gt)
+                    
+                    ## Capacity Test: Load Ground Truth for Supervised-Learning
+                    if capacity_test:
+                        model_key = "g" + str(int(self.dynamics.gamma)) + "_m" + str(int(self.dynamics.mu)) + "_a"  + str(int(self.dynamics.alpha))
+                        self.V_hopf_itp = LessLinear2D_interpolations[model_key]
+
+                    ## ND Projection & Interpolation of Loaded 2D DP Solution
+                    def V_N_hopf_itp(tXg):
+                        V = 0 * tXg[0,:]
+                        for i in range(self.N-1):
+                            V += torch.from_numpy(self.fast_interp(self.V_hopf_itp, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
+                        return V
+                    self.V_hopf = V_N_hopf_itp ## TODO: rename once everything works with actual solve
+
+                    if self.solve_grad:
+                        def V_N_hopf_grad_itp(tXg):
+                            V = 0 * tXg[0,:]
+                            DV = 0 * tXg[1:,:].t()
+                            for i in range(self.N-1):
+                                Vi, DVi = self.fast_interp(self.V_hopf_itp, tXg[[0, 1, 2+i], :].numpy(), compute_grad=True)
+                                V += torch.from_numpy(Vi.to_numpy())
+                                DV[:, [0, 1+i]] += torch.from_numpy(DVi.to_numpy()) # assumes xN first
+                            return V, DV
+                        self.V_hopf_grad = V_N_hopf_grad_itp
+
+            ## Initialize Hopf Solve Parameters
+            else:
+                exec_HopfReachabilityjl = """
+                include(pwd() * "/src/HopfReachability.jl");
+                using .HopfReachability: Hopf_BRS, Hopf_cd, make_grid, make_target, make_set_params, plot_nice
+                using LinearAlgebra, Plots
+                """
+                jl.seval(exec_HopfReachabilityjl)
+
+                ## Define the Linear System Params
+                ## Define the Target Params
+                ## Define the Time Params
+                ## Define the Optimization Params
+
+                ## Define a wrapper at self.V_hopf (given these params a default args? allow relaxation later)
+                # this will take in tXg matrix AND V_Xg (fix old self.V_hopf?)
+        
+        ## Get Ground Truth for Special N-Dimensional Decomposable LessLinear System
+        if record_gt_metrics:
             if not(manual_load):
 
                 jl.seval("using JLD, JLD2, Interpolations")
                 fast_interp_exec = """
-                function fast_interp(_V_itp, tXg)
+                function fast_interp(_V_itp, tXg; compute_grad=false)
                     Vg = zeros(size(tXg,2))
                     for i=1:length(Vg); Vg[i] = _V_itp(tXg[:,i][end:-1:1]...); end # (assumes t in first row)
-                    return Vg
+                    if !compute_grad
+                        return Vg
+                    else
+                        G = zeros(size(tXg,2), size(tXg,1)-1)
+                        for i=1:size(G,1); G[i,:] = Interpolations.gradient(_V_itp, tXg[:,i][end:-1:1]...)[end-1:-1:1]; end # (assumes t in first row)
+                        return Vg, G
+                    end
                 end
                 """
                 if not(hasattr(self, 'fast_interp')):
@@ -111,13 +154,12 @@ class ReachabilityDataset(Dataset):
                 if self.N == 2:
                     self.V_DP_itp = jl.load(self.llnd_path + "interps/old/llin2d_g20_m-20_a1_DP_interp_linear.jld")["V_itp"]
                     self.V_DP = lambda tXg: torch.from_numpy(self.fast_interp(self.V_DP_itp, tXg.numpy()).to_numpy())
-                
+                    if self.solve_grad:
+                        self.V_DP_grad = lambda tXg: torch.from_numpy(self.fast_interp(self.V_DP_itp, tXg.numpy(), compute_grad=True).to_numpy())
+
                 elif self.N > 2:
                     LessLinear2D_interpolations = jl.load(self.llnd_path + "interps/old/LessLinear2D1i_interpolations_res1e-2_r15e-2.jld", "LessLinear2D_interpolations")
                     # LessLinear2D_interpolations = jl.load(rel_path + "old/LessLinear2D1i_interpolations_res1e-2_r4e-1_el_1_5.jld", "LessLinear2D_interpolations")
-                    # self.V_DP_itp = LessLinear2D_interpolations["g0_m0_a0"] #linear
-                    # self.V_DP_itp = LessLinear2D_interpolations["g20_m0_a0"] #level 1
-                    # self.V_DP_itp = LessLinear2D_interpolations["g20_m-20_a1"] #level 2
                     
                     model_key = "g" + str(int(self.dynamics.gamma)) + "_m" + str(int(self.dynamics.mu)) + "_a"  + str(int(self.dynamics.alpha))
                     self.V_DP_itp = LessLinear2D_interpolations[model_key]
@@ -134,7 +176,18 @@ class ReachabilityDataset(Dataset):
                         for i in range(self.N-1):
                             V += torch.from_numpy(self.fast_interp(self.V_DP_linear_itp, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
                         return V
-                    self.V_DP_linear = V_N_DP_linear_itp_combo
+                    self.V_DP_linear = V_N_DP_linear_itp_combo # for plotting the BRT of Linear Solution
+
+                    if self.solve_grad:
+                        def V_N_DP_itp_grad_combo(tXg):
+                            V = 0 * tXg[0,:]
+                            DV = 0 * tXg[1:,:].t()
+                            for i in range(self.N-1):
+                                Vi, DVi = self.fast_interp(self.V_DP_itp, tXg[[0, 1, 2+i], :].numpy(), compute_grad=True)
+                                V += torch.from_numpy(Vi.to_numpy())
+                                DV[:, [0, 1+i]] += torch.from_numpy(DVi.to_numpy()) # assumes xN first
+                            return V, DV
+                        self.V_DP_grad = V_N_DP_itp_grad_combo
 
             ## Define a fixed spatiotemporal grid to score Jaccard
 
@@ -192,7 +245,12 @@ class ReachabilityDataset(Dataset):
 
             ## Precompute value & safe-set on grid for ground truth
 
-            self.values_DP_grid = self.V_DP(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
+            if self.solve_grad:
+                self.values_DP_grid, self.value_grads_DP_grid = self.V_DP_grad(self.dynamics.input_to_coord(self.model_coords_grid_allt).t())
+                self.values_DP_grid, self.value_grads_DP_grid = self.values_DP_grid.cuda(), self.value_grads_DP_grid.cuda()
+            else:
+                self.values_DP_grid = self.V_DP(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
+
             self.values_DP_linear_grid = self.V_DP_linear(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
             self.values_DP_grid_sub0_ixs = torch.argwhere(self.values_DP_grid <= 0).flatten().cuda()
 
@@ -206,29 +264,38 @@ class ReachabilityDataset(Dataset):
         ## Make a bank of evaluated points, instead of evaluating online
         if self.make_bank:
 
-            print("\nMaking a Bank of Evaluated Points ...")
-            bank = torch.zeros(self.bank_total, self.N+3) # cols: time (1), state (2 - N+1), boundary value (N+2), value (N+3)
-            bank[:, 1:self.N+1] = torch.zeros(self.bank_total, self.N).uniform_(-1, 1) 
-            # TODO better sampling: latin hypercube? sparse grid? near boundary? on scored planes (is this cheating)?
+            ## Make a Bank of Points from Linear DP Solution
+            if not self.solve_hopf:
+                print("\nMaking a Bank of Evaluated Points ...")
+                bank = torch.zeros(self.bank_total, 2*(self.N)+3) # cols: time (1), state (2 - N+1), boundary value (N+2), value (N+3), spatial grad (N+4 - end)
+                bank[:, 1:self.N+1] = torch.zeros(self.bank_total, self.N).uniform_(-1, 1) 
+                # TODO better sampling: latin hypercube? sparse grid? near boundary? on scored planes (is this cheating)?
 
-            step = self.numpoints 
-            with tqdm(total=self.numblocks) as pbar:
-                for i in range(0, self.bank_total, step):
+                step = self.numpoints 
+                with tqdm(total=self.numblocks) as pbar:
+                    for i in range(0, self.bank_total, step):
 
-                    # Make T & X (model_coords)
-                    bank[i:i+step, 0:self.N+1] = torch.cat((torch.full((step, 1), (i//step)*(self.tMax-self.tMin)/(self.numblocks-1)),
-                                                                bank[i:i+step, 1:self.N+1]), dim=1)
-                    
-                    # Solve Boundary & Hopf Value 
-                    bank[i:i+step, self.N+1] = self.dynamics.boundary_fn(self.dynamics.input_to_coord(bank[i:i+step, 0:self.N+1])[..., 1:])
-                    bank[i:i+step, self.N+2] = self.V_hopf(self.dynamics.input_to_coord(bank[i:i+step, 0:self.N+1]).t())
-                    pbar.update(1)
+                        # Make T & X (model_coords)
+                        bank[i:i+step, 0:self.N+1] = torch.cat((torch.full((step, 1), (i//step)*(self.tMax-self.tMin)/(self.numblocks-1)),
+                                                                    bank[i:i+step, 1:self.N+1]), dim=1)
+                        
+                        # Solve Boundary & Hopf Value 
+                        bank[i:i+step, self.N+1] = self.dynamics.boundary_fn(self.dynamics.input_to_coord(bank[i:i+step, 0:self.N+1])[..., 1:])
+                        if self.solve_grad:
+                            bank[i:i+step, self.N+2], bank[i:i+step, self.N+3:] = self.V_hopf_grad(self.dynamics.input_to_coord(bank[i:i+step, 0:self.N+1]).t())
+                        else:
+                            bank[i:i+step, self.N+2] = self.V_hopf(self.dynamics.input_to_coord(bank[i:i+step, 0:self.N+1]).t())
 
-            ## Save Evaluated Bank and Delete it from Memory
-            print("Done. Written to " + self.bank_name + ".\n")
-            np.save(self.llnd_path + "banks/" + self.bank_name, bank)
-            del(bank)
-            gc.collect()
+                        pbar.update(1)
+
+                ## Save Evaluated Bank and Delete it from Memory
+                print("Done. Written to " + self.bank_name + ".\n")
+                np.save(self.llnd_path + "banks/" + self.bank_name, bank)
+                del(bank)
+                gc.collect()
+            
+            ## Solve Hopf Problem Continuously
+            # else: 
         
         ## Load Memory Map of the Bank
         if self.use_bank:
@@ -271,8 +338,10 @@ class ReachabilityDataset(Dataset):
         ## Solve Hopf value
         if self.use_hopf:   
 
-            if self.pretrain: # or when hopf loss is not being used (once turned off in regular training)
-                hopf_values = torch.zeros(self.numpoints) #saves time
+            if self.pretrain: # TODO: or when hopf loss is not being used
+                hopf_values = torch.zeros(self.numpoints)
+                if self.solve_grad:
+                    hopf_grads = torch.zeros(self.numpoints, self.N)
 
             ## Sample Bank of Hopf-Evaluated Points
             elif self.use_bank:
@@ -283,6 +352,9 @@ class ReachabilityDataset(Dataset):
                 model_coords_hopf = bank_sample[:, 0:self.N+1] # separate states so pde loss is not restricted to small bank
                 hopf_values = bank_sample[:, self.N+2]
 
+                if self.solve_grad:
+                    hopf_grads = bank_sample[:, self.N+3:]
+
                 self.block_counter += 1
                 if self.block_counter == self.numblocks:
                     self.bank_index = torch.from_numpy(np.random.permutation(self.bank_total)) # reshuffle
@@ -290,8 +362,16 @@ class ReachabilityDataset(Dataset):
             
             ## Compute Value from Hopf-Interpolation
             else:
-                try: hopf_values = self.V_hopf(self.dynamics.input_to_coord(model_coords).t()) # is slow in high d (yields)
-                except: hopf_values = self.V_hopf(0.999 * self.dynamics.input_to_coord(model_coords).t()) # rare FP issue
+                try: 
+                    if self.solve_grad:
+                        hopf_values, hopf_grads = self.V_hopf_grad(self.dynamics.input_to_coord(model_coords).t())
+                    else:
+                        hopf_values = self.V_hopf(self.dynamics.input_to_coord(model_coords).t()) # is slow in high d (yields)
+                except: 
+                    if self.solve_grad:
+                        hopf_values, hopf_grads = self.V_hopf_grad(0.999 * self.dynamics.input_to_coord(model_coords).t())
+                    else:
+                        hopf_values = self.V_hopf(0.999 * self.dynamics.input_to_coord(model_coords).t()) # rare itp-lim fp issue
             
         boundary_values = self.dynamics.boundary_fn(self.dynamics.input_to_coord(model_coords)[..., 1:])
         if self.dynamics.loss_type == 'brat_hjivi':
@@ -320,10 +400,15 @@ class ReachabilityDataset(Dataset):
         if self.dynamics.loss_type == 'brt_hjivi':
             return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks}
         elif self.dynamics.loss_type == 'brt_hjivi_hopf':
-            if not(self.use_bank) or self.hopf_pretrain_counter == 0:
+            ## UGLY
+            if (not(self.use_bank) or self.hopf_pretrain_counter == 0) and not self.solve_grad:
                 return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks, 'hopf_values': hopf_values}
-            else:
+            elif not(self.use_bank) or self.hopf_pretrain_counter == 0:
+                return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks, 'hopf_values': hopf_values, 'hopf_grads': hopf_grads}
+            elif not self.solve_grad:
                 return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks, 'hopf_values': hopf_values, 'model_coords_hopf': model_coords_hopf}
+            else:
+                return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks, 'hopf_values': hopf_values, 'model_coords_hopf': model_coords_hopf, 'hopf_grads': hopf_grads}
         elif self.dynamics.loss_type == 'brat_hjivi':
             return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'reach_values': reach_values, 'avoid_values': avoid_values, 'dirichlet_masks': dirichlet_masks}
         else:

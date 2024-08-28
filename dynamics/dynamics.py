@@ -626,6 +626,10 @@ class LessLinearND(Dynamics):
             'y_axis_idx': 1,
             'z_axis_idx': 2,
         }
+    
+# class LinearND(LessLinearND):
+#     def __init__(self, N:int, gamma:float, mu:float, alpha:float):
+#         super().__init__(self, N, 0, 0, 0)
 
 class Dubins4D(Dynamics):
     def __init__(self, bound_mode:str):
