@@ -108,7 +108,7 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--solve_grad', action='store_true', default=False, required=False, help='Compute gradient of linear guide (forced true if grad loss)')
     p.add_argument('--hopf_grad_loss_divisor', default=25, required=False, type=float, help='What to divide the hopf grad loss by for loss reweighting')
     p.add_argument('--hopf_pretrain', action='store_true', default=True, required=False, help='Pretrain hopf conditions')
-    p.add_argument('--hopf_pretrain_iters', type=int, default=10000, required=False, help='Number of pretrain iterations with Hopf loss')
+    p.add_argument('--hopf_pretrain_iters', type=int, default=5000, required=False, help='Number of pretrain iterations with Hopf loss')
     p.add_argument('--hopf_loss_decay', action='store_true', default=False, required=False, help='Hopf loss weight decay')
     p.add_argument('--hopf_loss_decay_rate', type=str, default='linear', choices=['exponential', 'linear', 'negative_exponential'], help='Type of decay for hopf loss term')
     p.add_argument('--hopf_loss_decay_w', default=1., required=False, type=float, help='Hopf loss decay rate weight')

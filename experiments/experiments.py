@@ -256,9 +256,9 @@ class Experiment(ABC):
                             t_ix = (state_times < tp) * (state_times >= tm)
                             state_times_t, states_t, values_t, dvs_t, boundary_values_t = state_times[t_ix, ...].unsqueeze(0), states[t_ix, ...].unsqueeze(0), values[t_ix].unsqueeze(0), dvs[t_ix, ...].unsqueeze(0), boundary_values[t_ix].unsqueeze(0)
                             dirichlet_masks_t, model_results_t, hopf_values_t, learned_hopf_values_t = dirichlet_masks[t_ix].unsqueeze(0), model_results['model_out'][t_ix].unsqueeze(0), hopf_values[t_ix].unsqueeze(0), learned_hopf_values[t_ix].unsqueeze(0)
-                            if not self.dataset.solve_grad:
+                            if hopf_loss == 'lin_val_diff':
                                 losses_t[str(tp)] = loss_fn(states_t, values_t, dvs_t[..., 0], dvs_t[..., 1:], boundary_values_t, dirichlet_masks_t, model_results_t, hopf_values_t, learned_hopf_values_t, epoch, state_times_t)
-                            else:
+                            elif hopf_loss == 'lin_val_grad_diff':
                                 hopf_grads_t, learned_grads_t = hopf_grads[t_ix].unsqueeze(0), learned_hopf_grads[t_ix].unsqueeze(0)
                                 losses_t[str(tp)] = loss_fn(states_t, values_t, dvs_t[..., 0], dvs_t[..., 1:], boundary_values_t, dirichlet_masks_t, model_results_t, hopf_values_t, learned_hopf_values_t, hopf_grads_t, learned_grads_t, epoch, state_times_t)
 
@@ -363,7 +363,8 @@ class Experiment(ABC):
                                 log_dict["Falsely Excluded percent over Time"] = FEp
                                 log_dict["Mean Absolute Spatial Gradient"] = torch.abs(dvs[..., 1:]).sum() / (self.dataset.numpoints * self.N)
                                 log_dict["Mean Squared Error of Value"] = Vmse
-                                log_dict["Mean Squared Error of Spatial Gradient"] = DVXmse
+                                if self.dataset.solve_grad:
+                                    log_dict["Mean Squared Error of Spatial Gradient"] = DVXmse
 
                             if hopf_loss_decay and epoch >= total_pretrain_iters:
                                 log_dict['hopf_weight'] = loss_weights['hopf']
@@ -634,7 +635,8 @@ class DeepReachHopf(Experiment):
 
         # if self.N == 2: do whats here, else: use grid only on slices / actually jk, just fill .dataset loads with proper grids (full for 2D, slices for ND)
         model_results_grid = self.model({'coords': self.dataset.model_coords_grid_allt})
-        
+        DVXmse = 0
+
         ## Compute Value Gradient MSE on Grid
         if self.dataset.solve_grad:
             DVX = self.dataset.dynamics.io_to_dv(model_results_grid['model_in'], model_results_grid['model_out'].squeeze(dim=-1))[..., 1:].detach()
@@ -657,7 +659,7 @@ class DeepReachHopf(Experiment):
                 FIp = 1.
             FEp = (self.dataset.values_DP_grid_sub0_ixs.size()[0] - n_intersect) / self.dataset.values_DP_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
             JIp = n_intersect / n_overlap
-
+        
         return JIp, FIp, FEp, Vmse, DVXmse
         
     def set_metrics_eachtime(self): 

@@ -528,6 +528,7 @@ class LessLinearND(Dynamics):
         # gamma, mu, alpha = 20, -20, 1
         self.N = N 
         goalR, u_max, d_max, set_mode = 0.15, 0.5, 0.3, "reach" 
+        
         self.A = (-0.5 * torch.eye(N) - torch.cat((torch.cat((torch.zeros(1,1),torch.ones(N-1,1)),0),torch.zeros(N,N-1)),1)).cuda()
         self.B = torch.cat((torch.zeros(1,N-1), 0.4*torch.eye(N-1)), 0)
         self.Bumax = u_max * torch.matmul(self.B, torch.ones(self.N-1)).unsqueeze(0).unsqueeze(0).cuda()
@@ -535,8 +536,9 @@ class LessLinearND(Dynamics):
         self.Cdmax = d_max * torch.matmul(self.C, torch.ones(self.N-1)).unsqueeze(0).unsqueeze(0).cuda()
         self.gamma, self.mu, self.alpha = gamma, mu, alpha
 
-        self.goalR = ((N-1) ** 0.5) * goalR # accounts for N-dimensional combination
-        self.ellipse_params = torch.cat((((N-1) ** 0.5) * torch.ones(1), torch.ones(N-1)),0) # accounts for N-dimensional combination
+        self.goalR_2d = goalR
+        self.goalR = ((N-1) ** 0.5) * self.goalR_2d # accounts for N-dimensional combination
+        self.ellipse_params = torch.cat((((N-1) ** 0.5) * torch.ones(1), torch.ones(N-1) / 1.), 0) # accounts for N-dimensional combination
 
         self.u_max, self.d_max = u_max, d_max
         super().__init__(

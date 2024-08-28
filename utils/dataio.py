@@ -40,7 +40,8 @@ class ReachabilityDataset(Dataset):
         self.llnd_path = "value_fns/LessLinear/"
 
         self.use_bank = use_bank
-        if bank_name is None or bank_name == 'none': bank_name = "Bank_"+str(self.N)+"D_"+str(self.numpoints//10000)+"Mpts.npy"
+        if bank_name is None or bank_name == 'none': 
+            bank_name = "Bank_"+str(self.N)+"D_"+str(self.numpoints//10000)+"Mpts" + "_r" + str(int(100 * dynamics.goalR_2d)) + "e-2_g" + str(int(dynamics.gamma)) + "_m" + str(int(dynamics.mu)) + "_a" + str(int(dynamics.alpha)) + ".npy"
         self.bank_name = bank_name
         self.make_bank = use_bank and not(os.path.isfile(self.llnd_path + "banks/" + self.bank_name))
         self.numblocks = 101
@@ -86,7 +87,8 @@ class ReachabilityDataset(Dataset):
                 elif self.N > 2:
                     
                     ## Load 2D DP Solution
-                    LessLinear2D_interpolations = jl.load(self.llnd_path + "interps/old/LessLinear2D1i_interpolations_res1e-2_r15e-2.jld", "LessLinear2D_interpolations")
+                    # LessLinear2D_interpolations = jl.load(self.llnd_path + "interps/old/LessLinear2D1i_interpolations_res1e-2_r15e-2.jld", "LessLinear2D_interpolations")
+                    LessLinear2D_interpolations = jl.load(self.llnd_path + "interps/LessLinear2D1i_interpolations_res1e-2_r15e-2_c20.jld", "LessLinear2D_interpolations")
                     self.V_hopf_itp = LessLinear2D_interpolations["g0_m0_a0"] ## (using gt)
                     
                     ## Capacity Test: Load Ground Truth for Supervised-Learning
@@ -152,14 +154,16 @@ class ReachabilityDataset(Dataset):
                     self.fast_interp = jl.seval(fast_interp_exec)
                 
                 if self.N == 2:
-                    self.V_DP_itp = jl.load(self.llnd_path + "interps/old/llin2d_g20_m-20_a1_DP_interp_linear.jld")["V_itp"]
+                    # self.V_DP_itp = jl.load(self.llnd_path + "interps/old/llin2d_g20_m-20_a1_DP_interp_linear.jld")["V_itp"]
+                    model_key = "g" + str(int(self.dynamics.gamma)) + "_m" + str(int(self.dynamics.mu)) + "_a"  + str(int(self.dynamics.alpha))
+                    self.V_DP_itp = jl.load(self.llnd_path + "interps/LessLinear2D1i_interpolations_res1e-2_r15e-2_c20.jld", "LessLinear2D_interpolations")[model_key]
                     self.V_DP = lambda tXg: torch.from_numpy(self.fast_interp(self.V_DP_itp, tXg.numpy()).to_numpy())
                     if self.solve_grad:
                         self.V_DP_grad = lambda tXg: torch.from_numpy(self.fast_interp(self.V_DP_itp, tXg.numpy(), compute_grad=True).to_numpy())
 
                 elif self.N > 2:
-                    LessLinear2D_interpolations = jl.load(self.llnd_path + "interps/old/LessLinear2D1i_interpolations_res1e-2_r15e-2.jld", "LessLinear2D_interpolations")
-                    # LessLinear2D_interpolations = jl.load(rel_path + "old/LessLinear2D1i_interpolations_res1e-2_r4e-1_el_1_5.jld", "LessLinear2D_interpolations")
+                    # LessLinear2D_interpolations = jl.load(self.llnd_path + "interps/old/LessLinear2D1i_interpolations_res1e-2_r15e-2.jld", "LessLinear2D_interpolations")
+                    LessLinear2D_interpolations = jl.load(self.llnd_path + "interps/LessLinear2D1i_interpolations_res1e-2_r15e-2_c20.jld", "LessLinear2D_interpolations")
                     
                     model_key = "g" + str(int(self.dynamics.gamma)) + "_m" + str(int(self.dynamics.mu)) + "_a"  + str(int(self.dynamics.alpha))
                     self.V_DP_itp = LessLinear2D_interpolations[model_key]
