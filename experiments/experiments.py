@@ -659,6 +659,7 @@ class DeepReachHopf(Experiment):
                 FIp = 1.
             FEp = (self.dataset.values_DP_grid_sub0_ixs.size()[0] - n_intersect) / self.dataset.values_DP_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
             JIp = n_intersect / n_overlap
+            ## FIXME: still wondering if there is a bug in FIp and JIp... they look slightly off sometimes 
         
         return JIp, FIp, FEp, Vmse, DVXmse
         

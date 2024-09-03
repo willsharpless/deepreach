@@ -151,8 +151,11 @@ if (mode == 'all') or (mode == 'test'):
 opt = p.parse_args()
 
 if opt.capacity_test:
-    opt.hopf_pretrain_iters = opt.num_epochs - opt.pretrain_iters # only uses hopf lin diff loss
-    opt.hopf_loss = 'lin_val_diff' ## FIXME: should be grad training no?
+    opt.pretrain_iters = 1 ## FIXME: something weird happens when = 0
+    opt.hopf_pretrain_iters = opt.num_epochs
+    # opt.hopf_pretrain_iters = opt.num_epochs - opt.pretrain_iters
+    opt.hopf_loss = 'lin_val_grad_diff'
+    opt.solve_grad = True
     opt.solve_hopf = False
     opt.use_bank = False
     opt.hopf_loss_decay = False

@@ -40,12 +40,20 @@ class ReachabilityDataset(Dataset):
         self.llnd_path = "value_fns/LessLinear/"
 
         self.use_bank = use_bank
+
+        self.numblocks = 6
+        self.bank_total = numpoints * self.numblocks
+        if self.bank_total >= 1e6:
+            qty_tag = str(int(self.bank_total // 1e6)) + 'M'
+        elif self.bank_total >= 1e3:
+            qty_tag = str(int(self.bank_total // 1e3)) + 'K'
+        else:
+            qty_tag = str(self.bank_total)
+
         if bank_name is None or bank_name == 'none': 
-            bank_name = "Bank_"+str(self.N)+"D_"+str(self.numpoints//10000)+"Mpts" + "_r" + str(int(100 * dynamics.goalR_2d)) + "e-2_g" + str(int(dynamics.gamma)) + "_m" + str(int(dynamics.mu)) + "_a" + str(int(dynamics.alpha)) + ".npy"
+            bank_name = "Bank_"+str(self.N)+"D_"+ qty_tag + "pts_r" + str(int(100 * dynamics.goalR_2d)) + "e-2_g" + str(int(dynamics.gamma)) + "_m" + str(int(dynamics.mu)) + "_a" + str(int(dynamics.alpha)) + ".npy"
         self.bank_name = bank_name
         self.make_bank = use_bank and not(os.path.isfile(self.llnd_path + "banks/" + self.bank_name))
-        self.numblocks = 101
-        self.bank_total = numpoints * self.numblocks
 
         self.solve_hopf = solve_hopf # triggers online hopf formula solving via HopfReachability.jl
 
