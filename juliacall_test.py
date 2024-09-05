@@ -9,9 +9,11 @@ import torch
 # jl.seval("using Pkg")
 # Pkg.add("JLD, JLD2, Interpolations")
 
-jl.seval("using JLD2, Interpolations")
+jl.seval("using JLD, JLD2, Interpolations")
 
-V_itp = jl.load("lin2d_hopf_interp_linear.jld")["V_itp"]
+llnd_path = "value_fns/LessLinear/"
+# V_itp = jl.load("lin2d_hopf_interp_linear.jld")["V_itp"]
+V_itp = jl.load(llnd_path + "interps/old/lin2d_hopf_interp_linear.jld")["V_itp"]
 
 n = 65000
 # tXg = np.zeros((3, n))
@@ -25,31 +27,33 @@ def py_interp(_V_itp, _tXg):
     return Vg
 
 fast_interp_exec = """
-function fast_interp(_V_itp, tXg, method="grid")
-    # assumes tXg has time in first row
-    if method == "grid"
-        Vg = zeros(size(tXg,2))
-        for i=1:length(Vg)
-            Vg[i] = _V_itp(tXg[:,i][end:-1:1]...)
-        end
+function fast_interp(_V_itp, tXg; compute_grad=false)
+    Vg = zeros(size(tXg,2))
+    for i=1:length(Vg); Vg[i] = _V_itp(tXg[:,i][end:-1:1]...); end # (assumes t in first row)
+    if !compute_grad
+        return Vg
     else
-        Vg = ScatteredInterpolation.evaluate(_V_itp, tXg)
+        G = zeros(size(tXg,2), size(tXg,1)-1)
+        for i=1:size(G,1); G[i,:] = Interpolations.gradient(_V_itp, tXg[:,i][end:-1:1]...)[end-1:-1:1]; end # (assumes t in first row)
+        return Vg, G
     end
-    return Vg
 end
 """
 
 fast_interp = jl.seval(fast_interp_exec)
+V_linear = lambda tXg: torch.from_numpy(fast_interp(V_itp, tXg.numpy()).to_numpy())
 
 import time
 
 # way faster
-fast_interp(V_itp, tXg.numpy()) # JIT compile
+# fast_interp(V_itp, tXg.numpy()) # JIT compile
+V_linear(tXg)
 start = time.time()
 for _ in range(10):
     # fast_interp(V_itp, tXg)
     # fast_interp(V_itp, tXg).to_numpy() # adds 40ms smh
-    torch.from_numpy(fast_interp(V_itp, tXg.numpy()).to_numpy()) # torch conv v fast atleast
+    # torch.from_numpy(fast_interp(V_itp, tXg.numpy()).to_numpy()) # torch conv v fast atleast
+    V_linear(tXg) # same as above
     # Chat thinks I should use Torch.jl, which allows direct conv (will save ~70 ms/it)
 end = time.time()
 print("JuliaCall 65k interp call time:", (end - start)/5)
@@ -67,7 +71,8 @@ t5 = [0., .25, .5, .75, 1.]
 ts = np.concatenate([t * np.ones(int(n/5)) for t in t5]).reshape((1, n))
 tXr = np.concatenate((ts, Xr), axis=0)
 
-Vr = fast_interp(V_itp, tXr).to_numpy()
+# Vr = fast_interp(V_itp, tXr).to_numpy()
+Vr = V_linear(torch.from_numpy(tXr)) # simulating torch handling
 Xr_near = Xr[:, np.abs(Vr) < .005]
 
 plt.figure()
