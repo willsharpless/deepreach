@@ -526,8 +526,13 @@ class LessLinearND(Dynamics):
         # gamma, mu, alpha = 0, 0, 0 
         # gamma, mu, alpha = 20, 0, 0
         # gamma, mu, alpha = 20, -20, 1
+        goalR, u_max, d_max, set_mode = 0.15, 0.5, 0.3, "reach" # TODO: unfix
+
         self.N = N 
-        goalR, u_max, d_max, set_mode = 0.15, 0.5, 0.3, "reach" 
+        self.u_max, self.d_max = u_max, d_max
+        self.input_center = torch.zeros(N-1)
+        self.input_shape = "box"
+        self.game = set_mode
         
         self.A = (-0.5 * torch.eye(N) - torch.cat((torch.cat((torch.zeros(1,1),torch.ones(N-1,1)),0),torch.zeros(N,N-1)),1)).cuda()
         self.B = torch.cat((torch.zeros(1,N-1), 0.4*torch.eye(N-1)), 0)

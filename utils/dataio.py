@@ -6,6 +6,8 @@ import time
 import os
 import gc
 from tqdm.autonotebook import tqdm
+from utils import julia_multiproc
+from multiprocessing.shared_memory import SharedMemory
 
 # uses model input and real boundary fn
 class ReachabilityDataset(Dataset):
@@ -122,23 +124,16 @@ class ReachabilityDataset(Dataset):
                                 DV[:, [0, 1+i]] += torch.from_numpy(DVi.to_numpy()) # assumes xN first
                             return V, DV
                         self.V_hopf_grad = V_N_hopf_grad_itp
-
-            ## Initialize Hopf Solve Parameters
+            
+            ## Initialize Julia CPU Workers for Pool Solving Hopf Formula
             else:
-                exec_HopfReachabilityjl = """
-                include(pwd() * "/src/HopfReachability.jl");
-                using .HopfReachability: Hopf_BRS, Hopf_cd, make_grid, make_target, make_set_params, plot_nice
-                using LinearAlgebra, Plots
-                """
-                jl.seval(exec_HopfReachabilityjl)
+                hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100} #TODO load from run_exp.py
+                
+                ## Initialize Pool
+                self.hjpool = julia_multiproc.HopfJuliaPool(self.dynamics, self.time_step, hopf_opt_p, self.bank_params, 
+                                                    solve_grad=self.solve_grad, use_hopf=self.use_hopf, num_hopf_workers=self.num_hopf_workers)
 
-                ## Define the Linear System Params
-                ## Define the Target Params
-                ## Define the Time Params
-                ## Define the Optimization Params
-
-                ## Define a wrapper at self.V_hopf (given these params a default args? allow relaxation later)
-                # this will take in tXg matrix AND V_Xg (fix old self.V_hopf?)
+                ## memap to shared arrays? or do this later in make/use_bank section                
         
         ## Get Ground Truth for Special N-Dimensional Decomposable LessLinear System
         if record_gt_metrics:
@@ -307,14 +302,22 @@ class ReachabilityDataset(Dataset):
                 gc.collect()
             
             ## Solve Hopf Problem Continuously
-            # else: 
+            else: 
+                # TODO: hjpool.solve_bank_start()
+                # TODO: hjpool.solve_bank_invst()
+                pass
         
         ## Load Memory Map of the Bank
         if self.use_bank:
-
-            self.bank = np.load(self.llnd_path + "banks/" + self.bank_name, mmap_mode='r')
-            self.bank_index = torch.from_numpy(np.random.permutation(self.bank_total)) # random shuffle for sampling (should we also mmap this?)
-            self.block_counter = 0
+            
+            if not self.use_hopf:
+                self.bank = np.load(self.llnd_path + "banks/" + self.bank_name, mmap_mode='r')
+                self.bank_index = torch.from_numpy(np.random.permutation(self.bank_total)) # random shuffle for sampling (should we also mmap this?)
+                self.block_counter = 0
+            
+            else:
+                # TODO: memmap to shared memory
+                pass
         
     def __len__(self):
         return 1
@@ -322,7 +325,8 @@ class ReachabilityDataset(Dataset):
     def __getitem__(self, idx):
         
         # ## Sample Points and Evaluate
-        # if not(self.use_bank) or self.pretrain:
+        # TODO: if not(self.use_bank) or self.pretrain:
+        # 
 
         # uniformly sample domain and include coordinates where source is non-zero 
         model_states = torch.zeros(self.numpoints, self.dynamics.state_dim).uniform_(-1, 1)
