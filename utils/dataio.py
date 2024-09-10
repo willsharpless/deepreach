@@ -12,7 +12,7 @@ from multiprocessing.shared_memory import SharedMemory
 # uses model input and real boundary fn
 class ReachabilityDataset(Dataset):
     def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, 
-                 use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0, record_gt_metrics=False, solve_hopf=False, solve_grad=False,
+                 use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0, record_gt_metrics=False, solve_hopf=False, num_hopf_workers=2, hopf_warm_start=False, solve_grad=False,
                  manual_load=False, load_packet=None, no_curriculum=False, use_bank=False, bank_name=None, capacity_test=False):
         
         # print("Into the dataset!")
@@ -29,7 +29,7 @@ class ReachabilityDataset(Dataset):
         self.num_src_samples = num_src_samples
         self.num_target_samples = num_target_samples
 
-        self.use_hopf = use_hopf # old name, means use linear data (not necessarily solve)
+        self.use_hopf = use_hopf # FIXME: old name, means use linear data (not necessarily solve hopf formula)
         self.solve_grad = solve_grad
         self.hopf_pretrain = use_hopf and hopf_pretrain
         self.hopf_pretrained = use_hopf and hopf_pretrain
@@ -41,6 +41,13 @@ class ReachabilityDataset(Dataset):
         self.capacity_test = capacity_test
         self.llnd_path = "value_fns/LessLinear/"
 
+        self.solve_hopf = solve_hopf # triggers online hopf formula solving via HopfReachability.jl
+        self.num_hopf_workers = num_hopf_workers
+        self.hopf_warm_start = hopf_warm_start
+        self.time_step = 1e-3 #TODO load from run_exp.py  
+        self.hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100} #TODO load from run_exp.py 
+        self.bank_params = {"bank_total":2e6, "bank_start":1e6, "bank_invst":1e5} # TODO load from run_exp.py  
+        
         self.use_bank = use_bank
 
         self.numblocks = 6
@@ -56,8 +63,6 @@ class ReachabilityDataset(Dataset):
             bank_name = "Bank_"+str(self.N)+"D_"+ qty_tag + "pts_r" + str(int(100 * dynamics.goalR_2d)) + "e-2_g" + str(int(dynamics.gamma)) + "_m" + str(int(dynamics.mu)) + "_a" + str(int(dynamics.alpha)) + ".npy"
         self.bank_name = bank_name
         self.make_bank = use_bank and not(os.path.isfile(self.llnd_path + "banks/" + self.bank_name))
-
-        self.solve_hopf = solve_hopf # triggers online hopf formula solving via HopfReachability.jl
 
         if manual_load: # added this to skirt WandB sweep + PyCall imcompatibility (not working)
             self.V_hopf_itp, self.fast_interp, self.V_hopf, self.V_DP_itp, self.V_DP = load_packet
@@ -127,14 +132,15 @@ class ReachabilityDataset(Dataset):
             
             ## Initialize Julia CPU Workers for Pool Solving Hopf Formula
             else:
-                hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100} #TODO load from run_exp.py
-                
-                ## Initialize Pool
-                self.hjpool = julia_multiproc.HopfJuliaPool(self.dynamics, self.time_step, hopf_opt_p, self.bank_params, 
-                                                    solve_grad=self.solve_grad, use_hopf=self.use_hopf, num_hopf_workers=self.num_hopf_workers)
 
-                ## memap to shared arrays? or do this later in make/use_bank section                
-        
+                ## Initialize Pool
+                # try setting the spawn here
+                # otherwise try using with statement and accept reinitialization
+                self.hjpool = julia_multiproc.HopfJuliaPool(self.dynamics, self.time_step, self.hopf_opt_p, self.bank_params, 
+                                                    solve_grad=self.solve_grad, hopf_warm_start=self.hopf_warm_start, solve_hopf=False,
+                                                    gt_metrics=self.record_gt_metrics,
+                                                    num_hopf_workers=self.num_hopf_workers)      
+
         ## Get Ground Truth for Special N-Dimensional Decomposable LessLinear System
         if record_gt_metrics:
             if not(manual_load):
@@ -301,11 +307,17 @@ class ReachabilityDataset(Dataset):
                 del(bank)
                 gc.collect()
             
-            ## Solve Hopf Problem Continuously
+            ## Make Dynamic Bank by Solving Hopf Formula Online
             else: 
-                # TODO: hjpool.solve_bank_start()
-                # TODO: hjpool.solve_bank_invst()
+                shm_data = hjpool.solve_bank_start(bank_params, n_splits=10)
+    
+                shm_states_id, shm_states_shape, shm_algdat_id, shm_algdat_shape = shm_data
+                shm_states, shm_algdat = SharedMemory(name=shm_states_id), SharedMemory(name=shm_algdat_id)
+                bank = np.ndarray(shm_states_shape, dtype=np.float32, buffer=shm_states.buf)
+                alg_data = np.ndarray(shm_algdat_shape, dtype=np.float32, buffer=shm_algdat.buf)
+
                 pass
+                # TODO: hjpool.solve_bank_invst()
         
         ## Load Memory Map of the Bank
         if self.use_bank:

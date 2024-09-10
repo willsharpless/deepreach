@@ -27,7 +27,7 @@ p.add_argument('--N', default=7, required=False, type=int, help='Dimension of va
 p.add_argument('--timing', action='store_true', default=False, required=False, help='Gives detailed computation times')
 p.add_argument('--use_bank', action='store_true', default=False, required=False, help='Makes/loads a state & value bank to reduce compute')
 p.add_argument('--bank_name', type=str, default='none', required=False, help='Name of the state & value bank file (if none and using bank, will make)')
-p.add_argument('--solve_hopf', action='store_true', default=False, required=False, help='Dynamically makes a state & value bank by iteratively solving the Hopf formula')
+p.add_argument('--solve_hopf', action='store_true', default=True, required=False, help='Dynamically makes a state & value bank by iteratively solving the Hopf formula')
 
 use_wandb = p.parse_known_args()[0].use_wandb
 if use_wandb:

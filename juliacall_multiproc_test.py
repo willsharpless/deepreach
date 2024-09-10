@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import time
 import numpy as np
 import torch
+import warnings
 
 ## Multi-Processing
 
@@ -25,6 +26,7 @@ class JuliaPool(object):
 
         print('Initializing a process...')
 
+        warnings.filterwarnings("ignore", category=UserWarning, message="torch was imported before juliacall. This may cause a segfault. To avoid this, import juliacall before importing torch. For updates, see https://github.com/pytorch/pytorch/issues/78829.")
         from juliacall import Main as jl, convert as jlconvert
 
         cls.jl = jl
