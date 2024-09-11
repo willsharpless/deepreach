@@ -4,10 +4,15 @@ import time
 import numpy as np
 import torch
 import warnings
+import contextlib
 
 from multiprocessing import Pool, Lock
 from multiprocessing.shared_memory import SharedMemory
 import multiprocessing as mp
+
+import sys
+import os
+import shutil
 
 ## Multi-Processing
 
@@ -17,6 +22,12 @@ class HopfJuliaPool(object):
 
     lock = None
     jl = None
+    log_loc = "runs/test_run/julia_multiproc_logs" ## FIXME: name of actual run instead of 'test_run'
+    master_log = "master_log.log"
+    worker_id = 0
+    worker_log, worker_log_full = "", ""
+    log_flush = None
+    flush_julia_procs = None
     
     shm_states_id = None 
     shm_states_shape = None
@@ -79,8 +90,13 @@ class HopfJuliaPool(object):
 
     @classmethod
     def init_worker(cls):
-
-        print('Initializing a worker...')
+        
+        cls.worker_id = os.getpid()
+        # cls.worker_log = f"worker_{worker_id}.log"
+        # sys.stdout = open(cls.worker_log, 'w')
+        cls.worker_log = f"worker_{cls.worker_id}.log"
+        cls.worker_log_full = os.path.join(cls.log_loc, cls.worker_log)
+        print(f'Initializing worker {cls.worker_id}...')
 
         cls.lock = Lock()
 
@@ -88,15 +104,28 @@ class HopfJuliaPool(object):
         from juliacall import Main as jl, convert as jlconvert
         cls.jl = jl
 
-        exec_load = """
+        exec_load = f"""
 
         using LinearAlgebra
 
         include(pwd() * "/HopfReachability/src/HopfReachability.jl");
         using .HopfReachability: Hopf_BRS, Hopf_cd, make_grid, make_target, make_set_params
 
-        """
+        global log_f = open("{cls.worker_log_full}", "a")
+        redirect_stdout(log_f)
+        redirect_stderr(log_f)
+
+        """ ## at least see Hopf_BRS print (until it presumably errors)
         cls.jl.seval(exec_load)
+
+        exec_flush = """
+        function log_flush()
+            flush(log_f)
+            close(log_f)
+        end
+        """
+        cls.log_flush = cls.jl.seval(exec_flush)
+        cls.flush_julia_procs = lambda: staticmethod(cls.log_flush())
 
     @classmethod
     def init_solver(cls, dynamics_data, time_step, hopf_opt_p, settings):
@@ -151,8 +180,10 @@ class HopfJuliaPool(object):
             solve_Hopf_BRS_exec = f"""
             function solve_Hopf_BRS(X; P_in=nothing, return_grad=false)
                 println("About to solve hopf")
-                (XsT, VXsT), run_stats, opt_data, gradVXsT = Hopf_BRS(system, target, times; X, th, input_shapes, game, opt_method=Hopf_cd, opt_p=opt_p_cd, P_in, warm="temporal", print=false)
+                flush(log_f)
+                (XsT, VXsT), run_stats, opt_data, gradVXsT = Hopf_BRS(system, target, times; X, th, input_shapes, game, opt_method=Hopf_cd, opt_p=opt_p_cd, P_in, warm="temporal", printing=true)
                 println("solved hopf")
+                flush(log_f)
                 if return_grad
                     return VXsT[1], VXsT[2:end], P_in_f(gradVXsT)
                 else
@@ -161,23 +192,19 @@ class HopfJuliaPool(object):
             end
             """
             cls.solve_hopf_BRS = cls.jl.seval(solve_Hopf_BRS_exec)
-            # cls.V_hopf = lambda tX: torch.from_numpy(cls.solve_hopf_BRS(tX, return_grad=False).to_numpy())
-            # cls.V_hopf_ws = lambda tX, P_in: torch.from_numpy(cls.solve_hopf_BRS(tX, P_in=P_in, return_grad=False).to_numpy())
-            # if solve_grad:
-            #     cls.V_hopf_grad = lambda tX: torch.from_numpy(cls.solve_hopf_BRS(tX, return_grad=True).to_numpy())
-            #     cls.V_hopf_grad_ws = lambda tX, P_in: torch.from_numpy(cls.solve_hopf_BRS(tX, P_in=P_in, return_grad=True).to_numpy())
-            cls.V_hopf = lambda tX: cls.solve_hopf_BRS(tX, return_grad=False)
-            cls.V_hopf_ws = lambda tX, P_in: cls.solve_hopf_BRS(tX, P_in=P_in, return_grad=False)
+            cls.V_hopf = staticmethod(lambda tX: cls.solve_hopf_BRS(tX, return_grad=False))
+            cls.V_hopf_ws = staticmethod(lambda tX, P_in: cls.solve_hopf_BRS(tX, P_in=P_in, return_grad=False))
             if solve_grad:
-                cls.V_hopf_grad = lambda tX: cls.solve_hopf_BRS(tX, return_grad=True)
-                cls.V_hopf_grad_ws = lambda tX, P_in: cls.solve_hopf_BRS(tX, P_in=P_in, return_grad=True)
+                cls.V_hopf_grad = staticmethod(lambda tX: cls.solve_hopf_BRS(tX, return_grad=True))
+                cls.V_hopf_grad_ws = staticmethod(lambda tX, P_in: cls.solve_hopf_BRS(tX, P_in=P_in, return_grad=True))
 
         ## Interpolate the Dynamic Programming Solution
         if not cls.use_hopf or cls.gt_metrics:
             cls.jl.seval("using JLD, JLD2, Interpolations")
 
             llnd_path = "value_fns/LessLinear/"
-            V_itp = cls.jl.load(llnd_path + "interps/old/lin2d_hopf_interp_linear.jld")["V_itp"]
+            # V_itp = cls.jl.load(llnd_path + "interps/old/lin2d_hopf_interp_linear.jld")["V_itp"]
+            V_itp = cls.jl.load(llnd_path + f"interps/value_fns/LessLinear2D1i_interpolations_res1e-2_r{int(100 * dynamics_data['goalR'])}e-2_c20.jld")["V_itp"]
 
             fast_interp_exec = """
 
@@ -197,16 +224,17 @@ class HopfJuliaPool(object):
 
             """
             fast_interp = cls.jl.seval(fast_interp_exec)
-            # cls.V_hopf_gt = lambda tX: torch.from_numpy(fast_interp(V_itp, tX).to_numpy())
-            # cls.V_hopf_gt_grad = lambda tX: torch.from_numpy(fast_interp(V_itp, tX, compute_grad=True).to_numpy())
-            cls.V_hopf_gt = lambda tX: fast_interp(V_itp, tX)
-            cls.V_hopf_gt_grad = lambda tX: fast_interp(V_itp, tX, compute_grad=True)
+            cls.V_hopf_gt = staticmethod(lambda tX: fast_interp(V_itp, tX))
+            cls.V_hopf_gt_grad = staticmethod(lambda tX: fast_interp(V_itp, tX, compute_grad=True))
 
         return 
 
     @classmethod
     def solve_hopf(cls, Xi, bix, shm_data, tX_grad=None):
-        
+
+        split_size = Xi.shape[0] / cls.ts
+        job_id = int(bix/split_size)
+
         ## Point to Shared Memory
         shm_states_id, shm_states_shape, shm_algdat_id, shm_algdat_shape = shm_data
         shm_states = SharedMemory(name=shm_states_id)
@@ -214,12 +242,33 @@ class HopfJuliaPool(object):
         bank = np.ndarray(shm_states_shape, dtype=np.float32, buffer=shm_states.buf)
         alg_data = np.ndarray(shm_algdat_shape, dtype=np.float32, buffer=shm_algdat.buf)
 
-        split_size = Xi.shape[0] / cls.ts
-        job_id = int(bix/split_size)
-        print(f"job {job_id}: Solving Hopf formula...")
-
         if not cls.use_hopf or cls.gt_metrics:
             tXi = np.vstack([np.hstack([(j+1) * cls.ts * torch.ones(Xi.shape[0],1), Xi]) for j in range(cls.tp)])
+
+        ## Redirect Output to Log files
+        job_log = f"worker_{cls.worker_id}_job_{job_id}.log"
+        job_log_full = os.path.join(cls.log_loc, job_log)
+        # print(f"Worker {cls.worker_id}, job {job_id}: Solving Hopf formula... writing to {job_log}")
+        # sys.stdout = open(job_log_full, 'w')
+        # job_log_file = open(job_log_full, 'a')
+        # jl.seval(f"""
+        #     redirect_stdout(unsafe_string(pointer_from_objref(PyCall.pyimport('builtins').open))("{job_log_full}", "a"))
+        # """)
+        # sys.stdout.flush()
+        # redirect_stdout(open("{job_log_full}", "a"))
+        # redirect_stderr(open("{job_log_full}", "a"))
+
+        # cls.jl.seval(f"""
+
+        # global log_f = open("{job_log_full}", "a")
+        # redirect_stdout(log_f)
+        # redirect_stderr(log_f)
+
+        # """) ## cant see Hopf_BRS print this way?
+
+        # with contextlib.redirect_stdout(job_log_file), contextlib.redirect_stderr(job_log_file):
+
+        print(f"\n ########### Worker {cls.worker_id}, job {job_id} ###########\n")
         
         start_time = time.time()
 
@@ -242,9 +291,6 @@ class HopfJuliaPool(object):
                 J, V, DxV = cls.V_hopf_gt_grad(tXi)
             else:
                 J, V = cls.V_hopf_gt(tXi)
-
-        print("J")
-        print("V")
 
         mean_time = (start_time - time.time()) / split_size
 
@@ -285,10 +331,28 @@ class HopfJuliaPool(object):
             if cls.score:
                 alg_data[job_id, 3] = MSE
                 alg_data[job_id, 4] = MSE_grad
+            
+            # ## Write Job Log to Master Log
+            # with open(job_log_full, 'r') as wlog, open(os.path.join(cls.log_loc, cls.master_log), 'a') as mlog:
+            #     shutil.copyfileobj(wlog, mlog)
+        
+        ## Delete job log and restore Julia output
+        # try:
+        #     os.remove(job_log_full)
+        # except OSError as e:
+        #     print(f"Error deleting worker log {job_log}: {e}")
+        # jl.seval(f"""
+        #     redirect_stdout(stdout)
+        # """)
+        # job_log_file.close()
 
         return (job_id, mean_time)
 
     def solve_bank_start(self, bank_params, n_splits=10):
+        
+        print("\nMaster log at: ", os.path.join(self.log_loc, self.master_log))
+        with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
+            mlog.write("\n########################### Bank Starter Logs ###########################\n")
 
         ## Define Shared Memory
         bank_total, bank_start, bank_invst, ts = bank_params["bank_total"], bank_params["bank_start"], bank_params["bank_invst"], time_step
@@ -309,9 +373,8 @@ class HopfJuliaPool(object):
         split_size = int(bank_start / n_splits)
 
         ## Care
-        print(f"\nSolving {bank_start} points to start the bank (divided into {n_splits} jobs for {self.num_hopf_workers} workers), composed of {total_spatial_pts} spatial pts each with {self.tp} time pts (delegating {split_spatial_pts} pts per job).\n")
+        print(f"\nSolving {bank_start} points to start the bank (in {n_splits} jobs for {self.num_hopf_workers} workers), composed of {total_spatial_pts} spatial x {self.tp} time pts ({split_size} per job).\n")
         if bank_start % split_spatial_pts != 0: raise AssertionError(f"Your bank isn't divided well ({n_splits} splits gives {bank_start % split_spatial_pts} pts/split); change your bank total or time-step") 
-        if self.jobs: raise AssertionError(f"Print why are there active jobs? jobs={self.jobs}")
 
         with tqdm(total=n_splits) as pbar:
             
@@ -331,24 +394,49 @@ class HopfJuliaPool(object):
                 Xi = bank[i*split_size: i*split_size + split_spatial_pts, 1:self.N+1]
                 job = self.pool.apply_async(self.solve_hopf, (Xi, i*split_size, shm_data))
                 self.jobs.append(job)
+                # print("jobs len:", len(self.jobs))
 
             # for job in self.jobs:
             #     job_id, mean_time = job.get()
             #     # TODO: in invst, will store alg_data[job_id, 0] = self.alg_iter (automatically)
             #     pbar.update(1)
             
+            # print("While jobs, jobs len:", len(self.jobs))
             while self.jobs:
                 for job in self.jobs:
                     if job.ready():
+                        # print("Job ready!")
                         pbar.update(1)
                         self.jobs.remove(job)
+
+        ## Flush In Case of Error
+        for i in range(self.num_hopf_workers):
+            job = self.pool.apply_async(self.flush_julia_procs)
+            self.jobs.append(job)
+
+        while self.jobs:
+            for job in self.jobs:
+                if job.ready():
+                    self.jobs.remove(job)
         
         print("Finished solving bank starter.")
+
+        with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
+            mlog.write("\n########################    End of Bank Starter Logs    ##################")
+
+        print("\n\nBANK SAMPLE")
+        print(np.around(bank[0:n_splits, :], decimals=2))
+
+        print("\n\nALG DATA SAMPLE")
+        print(alg_data[0:n_splits, :])
 
         self.alg_iter += 1
         return shm_data
     
     def solve_bank_invst(self, X, model):
+
+        with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
+            mlog.write("\n######################## Start of Bank Invstestment Logs #################")
 
         ## will mostly be the same, but will ...
         # - use bank_invst instead of bank_start
@@ -360,11 +448,11 @@ class HopfJuliaPool(object):
         pass
 
 from dynamics.dynamics import LessLinearND
-import logging
+# import logging
 
 if __name__ == '__main__':
     mp.set_start_method('spawn', force=True)
-    mp.log_to_stderr(logging.DEBUG)
+    # mp.log_to_stderr(logging.DEBUG)
 
     dynamics = LessLinearND(7, 0., 0., 0.)
     dynamics_data = {param:getattr(dynamics, param) for param in dir(dynamics) if not (param.startswith('__') or param.startswith('_')) and not callable(getattr(dynamics, param))}
@@ -376,23 +464,30 @@ if __name__ == '__main__':
     hjpool = HopfJuliaPool(dynamics_data, time_step, hopf_opt_p,
                             use_hopf=True, solve_grad=False, hopf_warm_start=False, gt_metrics=True, num_hopf_workers=1)
 
-    bank_params = {"bank_total":200000, "bank_start":100000, "bank_invst":10000}
-    # shm_data = hjpool.solve_bank_start(bank_params, n_splits=10)
+    # bank_params = {"bank_total":200000, "bank_start":100000, "bank_invst":10000}
+    bank_params = {"bank_total":20000, "bank_start":10000, "bank_invst":1000}
+    shm_data = hjpool.solve_bank_start(bank_params, n_splits=2)
     
-    # shm_states_id, shm_states_shape, shm_algdat_id, shm_algdat_shape = shm_data
-    # shm_states, shm_algdat = SharedMemory(name=shm_states_id), SharedMemory(name=shm_algdat_id)
-    # bank = np.ndarray(shm_states_shape, dtype=np.float32, buffer=shm_states.buf)
-    # alg_data = np.ndarray(shm_algdat_shape, dtype=np.float32, buffer=shm_algdat.buf)
+    shm_states_id, shm_states_shape, shm_algdat_id, shm_algdat_shape = shm_data
+    shm_states, shm_algdat = SharedMemory(name=shm_states_id), SharedMemory(name=shm_algdat_id)
+    bank = np.ndarray(shm_states_shape, dtype=np.float32, buffer=shm_states.buf)
+    alg_data = np.ndarray(shm_algdat_shape, dtype=np.float32, buffer=shm_algdat.buf)
 
-    ## debugging serialization error...
-    hjpool.init_worker()
-    settings = (True, False, True, False)
-    hjpool.init_solver(dynamics_data, time_step, hopf_opt_p, settings)
+    print()
 
-    import pickle
-    Xi = np.random.uniform(-1, 1, (10, hjpool.N))
-    result = hjpool.V_hopf(Xi)
-    pickle.dumps(result)
+    # ## debugging serialization error...
+    # hjpool.init_worker()
+    # settings = (True, False, True, False)
+    # hjpool.init_solver(dynamics_data, time_step, hopf_opt_p, settings)
 
-    print("He hecho")
+    # X = np.random.uniform(-1, 1, (10, hjpool.N))
+    # # result = hjpool.V_hopf(X)
+
+    # tX = np.hstack(0.1 * np.ones(10,1), X)
+    # result = hjpool.V_hopf_gt(X)
+
+    # import pickle
+    # pickle.dumps(result)
+
+    print("He hecho\n")
             
