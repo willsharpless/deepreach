@@ -6,7 +6,7 @@ import time
 import os
 import gc
 from tqdm.autonotebook import tqdm
-from utils import julia_multiproc
+import julia_multiproc
 from multiprocessing.shared_memory import SharedMemory
 
 # uses model input and real boundary fn
