@@ -61,6 +61,7 @@ class HopfJuliaPool(object):
         self.num_hopf_workers = num_hopf_workers
         self.jobs = []
         self.alg_iter = 0
+        self.start_bix = 0
         self.use_hopf = use_hopf
         self.solve_grad = solve_grad
         self.gt_metrics = gt_metrics
@@ -76,6 +77,7 @@ class HopfJuliaPool(object):
         print("\nFinished initializing workers.")
 
         ## Initialize HopfReachability.jl Solver
+        print("\nLoading julia software into workers...")
         with tqdm(total=num_hopf_workers) as pbar:
             
             for jid in range(num_hopf_workers):
@@ -88,7 +90,7 @@ class HopfJuliaPool(object):
                     if job.ready():
                         pbar.update(1)
                         self.jobs.remove(job)
-        print("Finished initializing solvers.")
+        print("Finished initializing each worker solver.")
 
     @classmethod
     def init_worker(cls):
@@ -113,15 +115,14 @@ redirect_stdout(log_f)
 redirect_stderr(log_f)"""
             cls.jl.seval(exec_print)
 
-            print(f"\n\n ################ Worker {cls.worker_id} log ################\n\n")
+            print(f"\n\n################ Worker {cls.worker_id} log ################\n")
 
-        exec_load = f"""\n
-# Load
+        exec_load = f"""    # Load
 
-using LinearAlgebra
+    using LinearAlgebra
 
-include(pwd() * "/HopfReachability/src/HopfReachability.jl");
-using .HopfReachability: Hopf_BRS, Hopf_cd, make_grid, make_target, make_set_params"""
+    include(pwd() * "/HopfReachability/src/HopfReachability.jl");
+    using .HopfReachability: Hopf_BRS, Hopf_cd, make_grid, make_target, make_set_params"""
         cls.jl.seval(exec_load)
         print(exec_load)
 
@@ -141,52 +142,52 @@ using .HopfReachability: Hopf_BRS, Hopf_cd, make_grid, make_target, make_set_par
         ## Execute HopfReachability.jl's solve_BRS
         if cls.use_hopf:
             hopf_setup_exec = f"""\n
-# Define the Problem
+    # Define the Problem
 
-## System & Game
-A, B₁, B₂, = {dynamics_data["A"].numpy()}, {dynamics_data["B"].numpy()}, {dynamics_data["C"].numpy()}
-max_u, max_d, input_center, input_shapes = {dynamics_data["u_max"]}, {dynamics_data["d_max"]}, {dynamics_data["input_center"].numpy()}, "{dynamics_data["input_shape"]}"
-Q₁, c₁ = make_set_params(input_center, max_u; type=input_shapes) 
-Q₂, c₂ = make_set_params(input_center, max_d; type=input_shapes) # 𝒰 & 𝒟
-system, game = (A, B₁, B₂, Q₁, c₁, Q₂, c₂), "reach"
+    ## System & Game
+    A, B₁, B₂, = {dynamics_data["A"].numpy()}, {dynamics_data["B"].numpy()}, {dynamics_data["C"].numpy()}
+    max_u, max_d, input_center, input_shapes = {dynamics_data["u_max"]}, {dynamics_data["d_max"]}, {dynamics_data["input_center"].numpy()}, "{dynamics_data["input_shape"]}"
+    Q₁, c₁ = make_set_params(input_center, max_u; type=input_shapes) 
+    Q₂, c₂ = make_set_params(input_center, max_d; type=input_shapes) # 𝒰 & 𝒟
+    system, game = (A, B₁, B₂, Q₁, c₁, Q₂, c₂), "reach"
 
-## Target
-N, r = {cls.N}, {dynamics_data["goalR"]}
-Q, center, radius = diagm(ones(N)), zeros(N), r
-radius_N, Q_N = sqrt(N-1) * radius, diagm(vcat(1/(N-1), inv(1) * ones(N-1)))
-target = make_target(center, radius_N; Q=Q_N, type="ellipse")
+    ## Target
+    N, r = {cls.N}, {dynamics_data["goalR"]}
+    Q, center, radius = diagm(ones(N)), zeros(N), r
+    radius_N, Q_N = sqrt(N-1) * radius, diagm(vcat(1/(N-1), inv(1) * ones(N-1)))
+    target = make_target(center, radius_N; Q=Q_N, type="ellipse")
 
-## Times
-Th = {cls.ts}
-times = collect(Th : Th : 1.);
-th = min(1e-2, Th)
+    ## Times
+    Th = {cls.ts}
+    times = collect(Th : Th : 1.);
+    th = min(1e-2, Th)
 
-## Optimization Parameters
-# vh, stepsz, tol, decay_stepsz, conv_runs_rqd, max_runs, max_its = 0.01, 1, 1e-3, 100, 1, 1, 100 # for N=100, gives MSE=0.85 & 27 min/60k
-# vh, stepsz, tol, decay_stepsz, conv_runs_rqd, max_runs, max_its = 0.01, 1, 1e-3, 300, 1, 1, 300 # for N=100, gives MSE=0.25 & 78 min/60k
-# vh, stepsz, tol, decay_stepsz, conv_runs_rqd, max_runs, max_its = 0.01, 1, 1e-3, 1000, 1, 1, 1000 # for N=100, gives MSE=0.13 & 253 min/60k
-opt_p_cd = ({hopf_opt_p["vh"]}, {hopf_opt_p["stepsz"]}, {hopf_opt_p["tol"]}, {hopf_opt_p["decay_stepsz"]}, {hopf_opt_p["conv_runs_rqd"]}, {hopf_opt_p["max_runs"]}, {hopf_opt_p["max_its"]})
+    ## Optimization Parameters
+    # vh, stepsz, tol, decay_stepsz, conv_runs_rqd, max_runs, max_its = 0.01, 1, 1e-3, 100, 1, 1, 100 # for N=100, gives MSE=0.85 & 27 min/60k
+    # vh, stepsz, tol, decay_stepsz, conv_runs_rqd, max_runs, max_its = 0.01, 1, 1e-3, 300, 1, 1, 300 # for N=100, gives MSE=0.25 & 78 min/60k
+    # vh, stepsz, tol, decay_stepsz, conv_runs_rqd, max_runs, max_its = 0.01, 1, 1e-3, 1000, 1, 1, 1000 # for N=100, gives MSE=0.13 & 253 min/60k
+    opt_p_cd = ({hopf_opt_p["vh"]}, {hopf_opt_p["stepsz"]}, {hopf_opt_p["tol"]}, {hopf_opt_p["decay_stepsz"]}, {hopf_opt_p["conv_runs_rqd"]}, {hopf_opt_p["max_runs"]}, {hopf_opt_p["max_its"]})
 
-## Grad Reshape Fn
-P_in_f(gradVX) = reshape(hcat(gradVX[2:end]...), size(gradVX[1])..., length(gradVX)-1)"""
+    ## Grad Reshape Fn
+    P_in_f(gradVX) = reshape(hcat(gradVX[2:end]...), size(gradVX[1])..., length(gradVX)-1)"""
             print(hopf_setup_exec)
             cls.jl.seval(hopf_setup_exec)
 
             solve_Hopf_BRS_exec = f"""\n
-# Wrapper for Hopf Solver
+    # Wrapper for Hopf Solver
 
-function solve_Hopf_BRS(X_in; P_in=nothing, return_grad=false)
-    println("Solving Hopf ... ")
-    flush(log_f)
-    (XsT, VXsT), run_stats, opt_data, gradVXsT = Hopf_BRS(system, target, times; X=Matrix(X_in), th, input_shapes, game, opt_method=Hopf_cd, opt_p=opt_p_cd, P_in, warm=true, warm_pattern="temporal", printing=false)
-    println("Success!")
-    flush(log_f)
-    if return_grad
-        return VXsT[1], vcat(VXsT[2:end]...), P_in_f(gradVXsT), run_stats[1]
-    else
-        return VXsT[1], vcat(VXsT[2:end]...), run_stats[1]
-    end
-end"""
+    function solve_Hopf_BRS(X_in; P_in=nothing, return_grad=false)
+        println("        Solving Hopf ... ")
+        flush(log_f)
+        (XsT, VXsT), run_stats, opt_data, gradVXsT = Hopf_BRS(system, target, times; X=Matrix(X_in), th, input_shapes, game, opt_method=Hopf_cd, opt_p=opt_p_cd, P_in, warm=true, warm_pattern="temporal", printing=false)
+        println("        Success.")
+        flush(log_f)
+        if return_grad
+            return VXsT[1], vcat(VXsT[2:end]...), P_in_f(gradVXsT), run_stats[1]
+        else
+            return VXsT[1], vcat(VXsT[2:end]...), run_stats[1]
+        end
+    end"""
             cls.solve_hopf_BRS = cls.jl.seval(solve_Hopf_BRS_exec)
             print(solve_Hopf_BRS_exec)
             cls.V_hopf = staticmethod(lambda tX: cls.solve_hopf_BRS(tX, return_grad=False))
@@ -205,34 +206,34 @@ end"""
             V_DP_itp = cls.jl.load(llnd_path + f"interps/{cls.interp_file_name}", "LessLinear2D_interpolations")["g0_m0_a0"] # FIXME: flexible c param value
 
             fast_interp_exec = """\n
-# Warpper for Interpolation
+    # Warpper for Interpolation
 
-function fast_interp(_V_itp, tX_in; compute_grad=false)
-    tX = Matrix(tX_in) # strange mp + torch + juliacall bug, only noticable here
-    # print("Interpolating Xi across t... ")
-    # flush(log_f)
-    V = zeros(size(tX, 2))
-    for i=1:length(V); V[i] = _V_itp(tX[:,i][end:-1:1]...); end # (assumes t in first row)
-    J = zeros(size(tX, 2))
-    for i=1:length(V); V[i] = _V_itp(tX[:,i][end:-1:2]..., 0.); end
-    if !compute_grad
-        return J, V
-    else
-        DxV = zeros(size(tX,2), size(tX,1)-1)
-        for i=1:size(DxV,1); DxV[i,:] = Interpolations.gradient(_V_itp, tX[:,i][end:-1:1]...)[end-1:-1:1]; end # (assumes t in first row)
-        return J, V, DxV
-    end
-end"""
+    function fast_interp(_V_itp, tX_in; compute_grad=false)
+        tX = Matrix(tX_in) # strange mp + torch + juliacall bug, only noticable here
+        # print("       Interpolating Xi across t... ")
+        # flush(log_f)
+        V = zeros(size(tX, 2))
+        for i=1:length(V); V[i] = _V_itp(tX[:,i][end:-1:1]...); end # (assumes t in first row)
+        J = zeros(size(tX, 2))
+        for i=1:length(V); V[i] = _V_itp(tX[:,i][end:-1:2]..., 0.); end
+        if !compute_grad
+            return J, V
+        else
+            DxV = zeros(size(tX,2), size(tX,1)-1)
+            for i=1:size(DxV,1); DxV[i,:] = Interpolations.gradient(_V_itp, tX[:,i][end:-1:1]...)[end-1:-1:1]; end # (assumes t in first row)
+            return J, V, DxV
+        end
+    end"""
             fast_interp = cls.jl.seval(fast_interp_exec)
 
             def V_N_DP_linear_itp_combo(tXg):
                 J = 0 * tXg[0,:]
                 V = 0 * tXg[0,:]
-                print("Interpolating DP solution ... ")
+                print("        Interpolating DP solution ... ")
                 for i in range(cls.N-1):
                     Ji, Vi = fast_interp(V_DP_itp, tXg[[0, 1, 2+i], :])
                     J, V = J+Ji, V+Vi
-                print("Success.")
+                print("        Success.")
                 return J, V
 
             def V_N_DP_itp_grad_combo(tXg):
@@ -255,6 +256,7 @@ end"""
     @classmethod
     def solve_hopf(cls, Xi, bix, shm_data, tX_grad=None):
 
+        start_time = time.time()
         split_size = int(Xi.shape[1] / cls.ts)
         job_id = int(bix/split_size)
 
@@ -268,27 +270,27 @@ end"""
         if not cls.use_hopf or cls.gt_metrics:
             tXi = np.hstack([np.vstack(((j+1) * cls.ts * np.ones((1, Xi.shape[1])), Xi)) for j in range(cls.tp)])
 
-        print(f"\n\n ########### Worker {cls.worker_id}, job {job_id} ###########\n\n")
-        print(f"Solving {int(Xi.shape[1] * cls.tp)} points ({Xi.shape[1]} spatial, {cls.tp} time).")
+        print(f"\n\n    ########### Worker {cls.worker_id}, job {job_id} ###########\n")
+        print(f"        Solving {int(Xi.shape[1] * cls.tp)} points ({Xi.shape[1]} spatial, {cls.tp} time).")
 
         ## Compute Value (and Gradient) with Hopf, w/w/o Some Gradients for Warm-Starting Hopf
         if cls.use_hopf:
             if cls.solve_grad:
                 if tX_grad is not None:
-                    print("\nWarm-starting the hopf solve with gradient data.")
+                    print("\n       Warm-starting the hopf solve with gradient data.")
                     J, V, DxV, comp_time = cls.V_hopf_grad_ws(Xi, tX_grad)
                 else:
                     J, V, DxV, comp_time = cls.V_hopf_grad(Xi)
             else:
                 if tX_grad is not None:
-                    print("\nWarm-starting the hopf solve with gradient data.")
+                    print("\n       Warm-starting the hopf solve with gradient data.")
                     J, V, comp_time = cls.V_hopf_grad(Xi, tX_grad)
                 else:
                     J, V, comp_time = cls.V_hopf(Xi)
 
         ## Compute Value with Composed 2D Interpolation (for testing)
         else: 
-            print(f"\nComputing value with DP-Interpolations (not solving hopf), from {cls.interp_file_name}")
+            print(f"\n        Computing value with DP-Interpolations (not solving hopf), from {cls.interp_file_name}")
             if cls.solve_grad:
                 J, V, DxV = cls.V_hopf_gt_grad(tXi)
             else:
@@ -304,7 +306,7 @@ end"""
 
             ## Solve Ground Truth
             if cls.gt_metrics:
-                print(f"\nComputing value with DP-Interpolations for ground truth, from {cls.interp_file_name}")
+                print(f"\n        Computing value with DP-Interpolations for ground truth, from {cls.interp_file_name}")
                 if cls.solve_grad:
                     J_gt, V_gt, DxV_gt = cls.V_hopf_gt_grad(tXi)
                 else:
@@ -317,7 +319,8 @@ end"""
                     SE_grad = np.power((DxV_gt - DxV), 2).mean(dim=1) # mse per pt
                     MSE_grad = SE_grad.mean()
         
-        print(f"\n Batch had accuracy of {MSE} and took {mean_time} s/pt")
+        total_time = time.time() - start_time
+        print(f"\n        Batch had accuracy of {MSE} and took {total_time} s with {mean_time} s/pt")
 
         ## Store in Shared Memory
         with cls.lock:
@@ -338,24 +341,10 @@ end"""
                 alg_data[job_id, 3] = MSE
                 if cls.solve_grad:
                     alg_data[job_id, 4] = MSE_grad
-            
-            ## Write Job Log to Master Log
-            with open(cls.worker_log_full, 'r') as wlog, open(os.path.join(cls.log_loc, cls.master_log), 'a') as mlog:
-                shutil.copyfileobj(wlog, mlog)
-        
-        # Delete job log and restore Julia output
-        # try:
-        #     os.remove(cls.worker_log_full)
-        # except OSError as e:
-        #     print(f"Error deleting worker log {cls.worker_log_full}: {e}")
-        # jl.seval(f"""
-        #     redirect_stdout(stdout)
-        # """)
-        # cls.worker_log_full.close()
 
         return (job_id, mean_time)
 
-    def solve_bank_start(self, bank_params, n_splits=10):
+    def solve_bank_start(self, bank_params, n_splits=10, print_sample=False):
         
         print("\nMaster log at: ", os.path.join(self.log_loc, self.master_log))
         with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
@@ -363,16 +352,16 @@ end"""
 
         ## Define Shared Memory
         bank_total, bank_start, bank_invst, ts = bank_params["bank_total"], bank_params["bank_start"], bank_params["bank_invst"], time_step
-        shm_states_shape = (bank_total, 1 + self.N + 3 + dynamics.N + 1) # bank_total x (time, state, bc, val, mse, state_grad, mse_grad)
-        shm_algdat_shape = (1000, 5) # alg_log_max x (alg_iter, job_ix, avg_comp_time, avg_mse, avg_grad_mse)
+        self.shm_states_shape = (bank_total, 1 + self.N + 3 + dynamics.N + 1) # bank_total x (time, state, bc, val, mse, state_grad, mse_grad)
+        self.shm_algdat_shape = (1000, 5) # alg_log_max x (alg_iter, job_ix, avg_comp_time, avg_mse, avg_grad_mse)
 
-        shm_states = SharedMemory(create=True, size=np.prod(shm_states_shape) * np.dtype(np.float32).itemsize)
-        shm_algdat = SharedMemory(create=True, size=np.prod(shm_algdat_shape) * np.dtype(np.float32).itemsize)
-        shm_states_id, shm_algdat_id = shm_states.name, shm_algdat.name
-        shm_data = (shm_states_id, shm_states_shape, shm_algdat_id, shm_algdat_shape)
+        shm_states = SharedMemory(create=True, size=np.prod(self.shm_states_shape) * np.dtype(np.float32).itemsize)
+        shm_algdat = SharedMemory(create=True, size=np.prod(self.shm_algdat_shape) * np.dtype(np.float32).itemsize)
+        self.shm_states_id, self.shm_algdat_id = shm_states.name, shm_algdat.name
+        shm_data = (self.shm_states_id, self.shm_states_shape, self.shm_algdat_id, self.shm_algdat_shape)
 
-        bank = np.ndarray(shm_states_shape, dtype=np.float32, buffer=shm_states.buf)
-        alg_data = np.ndarray(shm_algdat_shape, dtype=np.float32, buffer=shm_algdat.buf)
+        bank = np.ndarray(self.shm_states_shape, dtype=np.float32, buffer=shm_states.buf)
+        alg_data = np.ndarray(self.shm_algdat_shape, dtype=np.float32, buffer=shm_algdat.buf)
 
         ## split X into several jobs (X1, ... Xp)
         total_spatial_pts = int(bank_start / self.tp) # maybe this should be chosen instead of bank_total
@@ -413,18 +402,32 @@ end"""
                         pbar.update(1)
                         self.jobs.remove(job)
         
-        print("Finished solving bank starter.")
+        print("Finished solving bank starter.\n")
 
+        ## Combine Worker Logs and Dispose
+        for file in os.listdir(self.log_loc):
+            if not file.startswith("worker_") and not file.endswith(".log"):
+                continue
+            worker_log_full = os.path.join(self.log_loc, file)
+            with open(worker_log_full, 'r') as wlog, open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
+                shutil.copyfileobj(wlog, mlog)
+            try:
+                os.remove(worker_log_full)
+            except OSError as e:
+                print(f"Error deleting worker log {worker_log_full}: {e}")
         with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
             mlog.write("\n########################    End of Bank Starter Logs    ##################")
 
-        print("\n\nBANK SAMPLE")
-        print(np.around(bank[0:n_splits, :], decimals=2))
+        if print_sample:
+            print("\n\nBANK SAMPLE")
+            print(np.around(bank[0:n_splits, :], decimals=2))
 
-        print("\n\nALG DATA SAMPLE")
-        print(alg_data[0:n_splits, :])
+            print("\n\nALG DATA SAMPLE")
+            print(alg_data[0:n_splits, :])
 
         self.alg_iter += 1
+        self.start_bix = bank_start
+
         return shm_data
     
     def solve_bank_invst(self, X, model):
@@ -440,6 +443,19 @@ end"""
         # could this just be the same fn w/ some if's
 
         pass
+
+    def dispose(self):
+
+        self.pool.close()
+        self.pool.join()
+
+        shm_states = SharedMemory(name=self.shm_states_id)
+        shm_algdat = SharedMemory(name=self.shm_algdat_id)
+
+        shm_states.close()
+        shm_states.unlink()
+        shm_algdat.close()
+        shm_algdat.unlink()
 
 from dynamics.dynamics import LessLinearND
 
@@ -460,12 +476,14 @@ if __name__ == '__main__':
 
     # bank_params = {"bank_total":200000, "bank_start":100000, "bank_invst":10000}
     bank_params = {"bank_total":200, "bank_start":100, "bank_invst":10}
-    shm_data = hjpool.solve_bank_start(bank_params, n_splits=10)
+    shm_data = hjpool.solve_bank_start(bank_params, n_splits=10, print_sample=True)
     
-    shm_states_id, shm_states_shape, shm_algdat_id, shm_algdat_shape = shm_data
-    shm_states, shm_algdat = SharedMemory(name=shm_states_id), SharedMemory(name=shm_algdat_id)
-    bank = np.ndarray(shm_states_shape, dtype=np.float32, buffer=shm_states.buf)
-    alg_data = np.ndarray(shm_algdat_shape, dtype=np.float32, buffer=shm_algdat.buf)
+    # shm_states_id, shm_states_shape, shm_algdat_id, shm_algdat_shape = shm_data
+    # shm_states, shm_algdat = SharedMemory(name=shm_states_id), SharedMemory(name=shm_algdat_id)
+    # bank = np.ndarray(shm_states_shape, dtype=np.float32, buffer=shm_states.buf)
+    # alg_data = np.ndarray(shm_algdat_shape, dtype=np.float32, buffer=shm_algdat.buf)
+
+    hjpool.dispose()
 
     print("He hecho\n")
             
