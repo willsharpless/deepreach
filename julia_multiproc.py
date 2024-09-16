@@ -99,7 +99,7 @@ class HopfJuliaPool(object):
         cls.worker_id = os.getpid()
         cls.worker_log = f"worker_{cls.worker_id}.log"
         cls.worker_log_full = os.path.join(cls.log_loc, cls.worker_log)
-        print(f'Initializing worker {cls.worker_id}...')
+        print(f'\nInitializing worker {cls.worker_id}...')
 
         cls.lock = Lock()
 
@@ -241,12 +241,12 @@ redirect_stderr(log_f)"""
                 J = 0 * tXg[0,:]
                 V = 0 * tXg[0,:]
                 DV = 0 * tXg[1:,:].T
-                print("Interpolating DP solution and gradients ... ")
+                print("        Interpolating DP solution and gradients ... ")
                 for i in range(cls.N-1):
                     Ji, Vi, DVi = fast_interp(V_DP_itp, tXg[[0, 1, 2+i], :], compute_grad=True)
                     J, V = J+Ji, V+Vi
                     DV[:, [0, 1+i]] += DVi # assumes xN first
-                print("Success.")
+                print("        Success.")
                 return J, V, DV
 
             cls.V_hopf_gt = V_N_DP_linear_itp_combo
@@ -255,11 +255,12 @@ redirect_stderr(log_f)"""
         return 
 
     @classmethod
-    def solve_hopf(cls, Xi, bix, aix, shm_data, tX_grad=None):
+    def solve_hopf(cls, Xi, shm_data, shm_ix, tX_grad=None):
 
         start_time = time.time()
         split_size = int(Xi.shape[1] / cls.ts)
-        job_id = int(bix/split_size)
+        job_id, bix, aix = shm_ix
+        # job_id = int(bix/split_size)
         MSE, MSE_grad = float('nan'), float('nan')
 
         ## Point to Shared Memory
@@ -272,8 +273,8 @@ redirect_stderr(log_f)"""
         if not cls.use_hopf or cls.gt_metrics:
             tXi = np.hstack([np.vstack(((j+1) * cls.ts * np.ones((1, Xi.shape[1])), Xi)) for j in range(cls.tp)])
 
-        print(f"\n\n    ########### Worker {cls.worker_id}, job {job_id} ###########\n")
-        print(f"        Solving {int(Xi.shape[1] * cls.tp)} points ({Xi.shape[1]} spatial, {cls.tp} time).")
+        print(f"\n\n    ########### Worker {cls.worker_id}, iter job {job_id} (sum job {aix}) ###########\n")
+        print(f"        Solving {int(Xi.shape[1] * cls.tp)} points ({Xi.shape[1]} random spatial, {cls.tp} time steps of {cls.ts}).")
 
         ## Compute Value (and Gradient) with Hopf, w/w/o Some Gradients for Warm-Starting Hopf
         if cls.use_hopf:
@@ -321,7 +322,10 @@ redirect_stderr(log_f)"""
                     MSE_grad = SE_grad.mean()
         
         total_time = time.time() - start_time
-        print(f"\n        Batch had accuracy of {MSE} and took {total_time} s with {mean_solve_time_ppt} s/pt")
+        print("")
+        print(f"        TOTAL JOB TIME       : {total_time} s")
+        print(f"        MEAN TIME PER POINT  : {mean_solve_time_ppt} s/pt")
+        print(f"        BATCH ACCURACY (MSE) : {MSE}")
 
         ## Store in shared memory
         with cls.lock:
@@ -337,24 +341,18 @@ redirect_stderr(log_f)"""
                     bank[bix:bix+split_size, 2*cls.N+2] = SE_grad # grad error
             
             ## Store general algorithm data
-            alg_data[aix + job_id, 0] = aix + job_id
-            alg_data[aix + job_id, 1] = job_id # not redundant when deposits added later
-            alg_data[aix + job_id, 2] = total_time
-            alg_data[aix + job_id, 3] = mean_solve_time_ppt
+            alg_data[aix, 0] = aix
+            alg_data[aix, 1] = job_id
+            alg_data[aix, 2] = total_time
+            alg_data[aix, 3] = mean_solve_time_ppt
             if cls.gt_metrics:
-                alg_data[aix + job_id, 4] = MSE
+                alg_data[aix, 4] = MSE
                 if cls.solve_grad:
-                    alg_data[aix + job_id, 5] = MSE_grad
+                    alg_data[aix, 5] = MSE_grad
 
-        return job_id, total_time, mean_solve_time_ppt, MSE, MSE_grad
+        return cls.worker_id, job_id, total_time, mean_solve_time_ppt, MSE, MSE_grad
 
     def solve_bank_starter(self, bank_params, n_splits=10, print_sample=False):
-        
-        print("\nMaster log at: ", os.path.join(self.log_loc, self.master_log))
-        if os.path.isfile(os.path.join(self.log_loc, self.master_log)):
-            os.remove(os.path.join(self.log_loc, self.master_log))
-        with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
-            mlog.write("\n########################### Bank Starter Logs ###########################\n")
 
         ## Define Shared Memory
         self.n_total, self.n_starter, self.n_deposit, ts = bank_params["n_total"], bank_params["n_starter"], bank_params["n_deposit"], time_step
@@ -375,11 +373,45 @@ redirect_stderr(log_f)"""
         total_spatial_pts = int(self.n_starter / self.tp) # maybe this should be chosen instead of n_total
         split_spatial_pts = int(total_spatial_pts / n_splits)
         split_size = int(self.n_starter / n_splits)
+        if self.n_starter % split_spatial_pts != 0: raise AssertionError(f"Your bank isn't divided well: ({n_splits} splits gives {self.n_starter % split_spatial_pts} pts/split). Change your parameters.") 
 
-        ## Care
+        ## Logging        
+        print("\nMaster log at: ", os.path.join(self.log_loc, self.master_log))
+        # for file in os.listdir(self.log_loc):
+        #     if file.endswith(".log"):
+        #         os.remove(os.path.join(self.log_loc, file))
+        with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
+            mlog.write("\n############################# Bank Starter Logs #############################")
+
         print(f"\nSolving {self.n_starter} points to start the bank (in {n_splits} jobs for {self.num_hopf_workers} workers), composed of {total_spatial_pts} spatial x {self.tp} time pts ({split_size} per job).\n")
-        if self.n_starter % split_spatial_pts != 0: raise AssertionError(f"Your bank isn't divided well: ({n_splits} splits gives {self.n_starter % split_spatial_pts} pts/split); change your bank total or time-step") 
 
+        with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
+
+            mlog.write(f"\n\n  GENERAL")
+            mlog.write(f"\n    Dimension  : {self.N}")
+            mlog.write(f"\n    Time step  : {self.ts:1.0e} s")
+            mlog.write(f"\n    Time:Space : {self.tp}")
+
+            mlog.write(f"\n\n  BANK")
+            mlog.write(f"\n    Total      : {self.n_total} pts")
+            mlog.write(f"\n    Starter    : {self.n_starter} pts")
+            mlog.write(f"\n    Deposit    : {self.n_deposit} pts")
+
+            mlog.write(f"\n\n  SHARED MEMORY")
+            mlog.write(f"\n    State Bank      [total x (time, state, bc, val, mse, state_grad, mse_grad)]")
+            mlog.write(f"\n      Id       : {self.shm_states_id}")
+            mlog.write(f"\n      Shape    : {self.shm_states_shape}")
+            mlog.write(f"\n    Algorithm Data  [log_max x (job_sum, job_iter, total_time, mean_time_ppt, mean_mse, mean_grad_mse)]")
+            mlog.write(f"\n      Id       : {self.shm_algdat_id}")
+            mlog.write(f"\n      Shape    : {self.shm_algdat_shape}")
+
+            mlog.write(f"\n\n  PARITION")
+            mlog.write(f"\n    Divisions  : {n_splits}")
+            mlog.write(f"\n    Size       : {split_size} pts")
+            mlog.write(f"\n    Space      : {split_spatial_pts} pts")
+            mlog.write(f"\n    Time       : {self.tp} pts")
+        
+        ## Start solving
         with tqdm(total=n_splits) as pbar:
             
             ## Define Xi splits and store
@@ -392,34 +424,31 @@ redirect_stderr(log_f)"""
                         
             ## Execute jobs on all workers 
             for i in range(n_splits):
-                Xi = bank[i*split_size: i*split_size + split_spatial_pts, 1:self.N+1].T
-                print("bix", i*split_size, "aix", self.start_aix)
-                job = self.pool.apply_async(self.solve_hopf, (Xi, int(i*split_size), self.start_aix, shm_data))
+
+                job_id, bank_ix, alg_dat_ix = i, self.start_bix + i*split_size, self.start_aix + i
+                shm_ix = (job_id, bank_ix, alg_dat_ix)
+
+                Xi = bank[self.start_bix + i*split_size: self.start_bix + i*split_size + split_spatial_pts, 1:self.N+1].T
+                
+                job = self.pool.apply_async(self.solve_hopf, (Xi, shm_data, shm_ix))
                 self.jobs.append(job)
             
+            with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
+                mlog.write(f"\n\n  LOG")
+                mlog.write(f"\n    WORKER     JOB      TOTAL (s)        MEAN (s/pt)      MSE              MSE GRAD\n") 
+
             ## Block until completion
+            time.sleep(12)
             while self.jobs:
                 for job in self.jobs:
                     if job.ready():
-                        job_id, total_time, mean_solve_time_ppt, MSE, MSE_grad = job.get()                        
+                        worker_id, job_id, total_time, mean_solve_time_ppt, MSE, MSE_grad = job.get()
+                        with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
+                            mlog.write(f"    {worker_id:<9d}  {job_id:<7d}  {total_time:<10.2e}  {mean_solve_time_ppt:<10.2e}  {MSE:<10.2e}  {MSE_grad:<10.2e}\n".replace("e", " x 10^"))
                         pbar.update(1)
                         self.jobs.remove(job)
         
         print("Finished solving bank starter.\n")
-
-        ## Combine worker logs and dispose
-        for file in os.listdir(self.log_loc):
-            if not file.startswith("worker_") and not file.endswith(".log"):
-                continue
-            worker_log_full = os.path.join(self.log_loc, file)
-            with open(worker_log_full, 'r') as wlog, open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
-                shutil.copyfileobj(wlog, mlog)
-            try:
-                os.remove(worker_log_full)
-            except OSError as e:
-                print(f"Error deleting worker log {worker_log_full}: {e}")
-        with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
-            mlog.write("\n########################    End of Bank Starter Logs    ##################")
 
         if print_sample:
             print("\n\nBANK SAMPLE")
@@ -431,14 +460,9 @@ redirect_stderr(log_f)"""
         self.alg_iter += 1
         self.start_bix += self.n_starter
         self.start_aix += n_splits
-
-        # return shm_data
     
-    def solve_bank_deposit(self, model=None, n_splits=10, print_sample=False, test_blocking=False):
+    def solve_bank_deposit(self, model=None, n_splits=10, print_sample=False, blocking=False):
         
-        with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
-            mlog.write("\n######################### Bank Deposit Logs, Iter {self.alg_iter} #########################\n")
-
         ## Point to Shared Memory
         shm_states = SharedMemory(name=self.shm_states_id)
         shm_algdat = SharedMemory(name=self.shm_algdat_id)
@@ -453,9 +477,22 @@ redirect_stderr(log_f)"""
         split_size = int(self.n_deposit / n_splits)
 
         ## Care
-        print(f"\nSolving {self.n_deposit} points to refresh the bank (in {n_splits} jobs for {self.num_hopf_workers} workers), composed of {total_spatial_pts} spatial x {self.tp} time pts ({split_size} per job).\n")
         if self.n_deposit % split_spatial_pts != 0: raise AssertionError(f"Your bank isn't divided well: ({n_splits} splits gives {self.n_deposit % split_spatial_pts} pts/split); change your bank total or time-step") 
-        tX_grad = None
+        print(f"\nSolving {self.n_deposit} points to deposit into the bank (in {n_splits} jobs for {self.num_hopf_workers} workers), composed of {total_spatial_pts} spatial x {self.tp} time pts ({split_size} per job).\n")
+
+        with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
+            mlog.write(f"\n######################### Bank Deposit Logs, Iter {self.alg_iter} #########################")
+
+        tX_grad = None # FIXME
+
+        with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
+
+            mlog.write(f"\n\n  PARITION")
+            mlog.write(f"\n    Workers    : {self.num_hopf_workers}")
+            mlog.write(f"\n    Divisions  : {n_splits}")
+            mlog.write(f"\n    Size       : {split_size} pts")
+            mlog.write(f"\n    Space      : {split_spatial_pts} pts")
+            mlog.write(f"\n    Time       : {self.tp} pts")
 
         with tqdm(total=n_splits) as pbar:
             
@@ -466,39 +503,51 @@ redirect_stderr(log_f)"""
 
                 for j in range(self.tp):
                     bank[i + j*split_spatial_pts: i + (j+1)*split_spatial_pts, 0:self.N+1] = np.hstack((self.ts * (j+1) * np.ones((Xi.shape[0],1)), Xi))
-                    if self.hopf_warm_start:
+                    if self.hopf_warm_start: # FIXME
                         print("tX_grad = model.coords_to_gradients(tX)")
                         print("check formatting")
                         print("TODO: here is where solve_bank_deposit will look up the grads if warmstarting")
                         
             ## Execute (blocking) on all workers 
             for i in range(n_splits):
+
+                job_id, bank_ix, alg_dat_ix = i, self.start_bix + i*split_size, self.start_aix + i
+                shm_ix = (job_id, bank_ix, alg_dat_ix)
+
                 Xi = bank[self.start_bix + i*split_size: self.start_bix + i*split_size + split_spatial_pts, 1:self.N+1].T
-                job = self.pool.apply_async(self.solve_hopf, (Xi, self.start_bix + i*split_size, self.start_aix + i, shm_data, tX_grad))
+                
+                job = self.pool.apply_async(self.solve_hopf, (Xi, shm_data, shm_ix, tX_grad))
                 self.jobs.append(job)
             
-            if test_blocking:
+            with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
+                mlog.write(f"\n\n  LOG")
+                mlog.write(f"\n    WORKER     JOB      TOTAL (s)        MEAN (s/pt)      MSE              MSE GRAD\n") 
+
+            if blocking:
                 while self.jobs:
                     for job in self.jobs:
                         if job.ready():
+                            worker_id, job_id, total_time, mean_solve_time_ppt, MSE, MSE_grad = job.get()
+                            with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
+                                mlog.write(f"    {worker_id:<9d}  {job_id:<7d}  {total_time:<10.2e}  {mean_solve_time_ppt:<10.2e}  {MSE:<10.2e}  {MSE_grad:<10.2e}\n".replace("e", " x 10^"))
                             pbar.update(1)
                             self.jobs.remove(job)
             
         print("Finished executing bank despoit.\n")
 
         ## Combine Worker Logs and Dispose
-        for file in os.listdir(self.log_loc):
-            if not file.startswith("worker_") and not file.endswith(".log"):
-                continue
-            worker_log_full = os.path.join(self.log_loc, file)
-            with open(worker_log_full, 'r') as wlog, open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
-                shutil.copyfileobj(wlog, mlog)
-            try:
-                os.remove(worker_log_full)
-            except OSError as e:
-                print(f"Error deleting worker log {worker_log_full}: {e}")
-        with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
-            mlog.write(f"\n########################    End of Bank Deposit Logs, Iter {self.alg_iter}    ##################")
+        # for file in os.listdir(self.log_loc):
+        #     if not file.startswith("worker_") and not file.endswith(".log"):
+        #         continue
+        #     worker_log_full = os.path.join(self.log_loc, file)
+        #     with open(worker_log_full, 'r') as wlog, open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
+        #         shutil.copyfileobj(wlog, mlog)
+        #     try:
+        #         os.remove(worker_log_full)
+        #     except OSError as e:
+        #         print(f"Error deleting worker log {worker_log_full}: {e}")
+        # with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
+        #     mlog.write(f"\n########################    End of Bank Deposit Logs, Iter {self.alg_iter}    ##################")
 
         if print_sample:
             print("\n\nBANK SAMPLE")
@@ -508,8 +557,6 @@ redirect_stderr(log_f)"""
             print(np.around(alg_data[:self.n_total, :], decimals=4))
 
         self.alg_iter += 1
-        print("start_bix", self.start_bix)
-        print("self.start_bix + self.n_deposit", self.start_bix + self.n_deposit)
         if self.start_bix + self.n_deposit == self.n_total:
             self.start_bix = 0
         else:
@@ -545,7 +592,8 @@ if __name__ == '__main__':
     dynamics_data = {key:val.cpu() if torch.is_tensor(val) else val for key,val in dynamics_data.items()}
 
     # time_step = 1e-3
-    time_step = 1e-1
+    # time_step = 1e-1
+    time_step = 5e-1
     hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100} 
 
     hjpool = HopfJuliaPool(dynamics_data, time_step, hopf_opt_p,
@@ -554,15 +602,14 @@ if __name__ == '__main__':
     # bank_params = {"n_total":200000, "n_starter":100000, "n_deposit":10000}
     bank_params = {"n_total":12, "n_starter":6, "n_deposit":2}
     
-    hjpool.solve_bank_starter(bank_params, n_splits=10, print_sample=True)
+    print_sample = False
+    hjpool.solve_bank_starter(bank_params, n_splits=3, print_sample=print_sample)
     
-    model = None
-    hjpool.solve_bank_deposit(model, n_splits=10, print_sample=True)
-
-    # shm_states_id, shm_states_shape, shm_algdat_id, shm_algdat_shape = shm_data
-    # shm_states, shm_algdat = SharedMemory(name=shm_states_id), SharedMemory(name=shm_algdat_id)
-    # bank = np.ndarray(shm_states_shape, dtype=np.float32, buffer=shm_states.buf)
-    # alg_data = np.ndarray(shm_algdat_shape, dtype=np.float32, buffer=shm_algdat.buf)
+    hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
+    hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
+    hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
+    hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
+    hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
 
     hjpool.dispose()
 
