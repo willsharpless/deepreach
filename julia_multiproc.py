@@ -242,7 +242,7 @@ redirect_stderr(log_f)"""
                 V = 0 * tXg[0,:]
                 DV = 0 * tXg[1:,:].T
                 print("Interpolating DP solution and gradients ... ")
-                for i in range(self.N-1):
+                for i in range(cls.N-1):
                     Ji, Vi, DVi = fast_interp(V_DP_itp, tXg[[0, 1, 2+i], :], compute_grad=True)
                     J, V = J+Ji, V+Vi
                     DV[:, [0, 1+i]] += DVi # assumes xN first
@@ -337,14 +337,14 @@ redirect_stderr(log_f)"""
                     bank[bix:bix+split_size, 2*cls.N+2] = SE_grad # grad error
             
             ## Store general algorithm data
-            alg_data[aix, 0] = aix + job_id
-            alg_data[aix, 1] = job_id # not redundant when deposits added later
-            alg_data[aix, 2] = total_time
-            alg_data[aix, 3] = mean_solve_time_ppt
+            alg_data[aix + job_id, 0] = aix + job_id
+            alg_data[aix + job_id, 1] = job_id # not redundant when deposits added later
+            alg_data[aix + job_id, 2] = total_time
+            alg_data[aix + job_id, 3] = mean_solve_time_ppt
             if cls.gt_metrics:
-                alg_data[aix, 4] = MSE
+                alg_data[aix + job_id, 4] = MSE
                 if cls.solve_grad:
-                    alg_data[aix, 5] = MSE_grad
+                    alg_data[aix + job_id, 5] = MSE_grad
 
         return job_id, total_time, mean_solve_time_ppt, MSE, MSE_grad
 
@@ -393,7 +393,8 @@ redirect_stderr(log_f)"""
             ## Execute jobs on all workers 
             for i in range(n_splits):
                 Xi = bank[i*split_size: i*split_size + split_spatial_pts, 1:self.N+1].T
-                job = self.pool.apply_async(self.solve_hopf, (Xi, int(i*split_size), i, shm_data))
+                print("bix", i*split_size, "aix", self.start_aix)
+                job = self.pool.apply_async(self.solve_hopf, (Xi, int(i*split_size), self.start_aix, shm_data))
                 self.jobs.append(job)
             
             ## Block until completion
@@ -422,10 +423,10 @@ redirect_stderr(log_f)"""
 
         if print_sample:
             print("\n\nBANK SAMPLE")
-            print(np.around(bank[self.start_bix:n_splits, :], decimals=2))
+            print(np.around(bank[:self.n_total, :], decimals=2))
 
             print("\n\nALG DATA SAMPLE")
-            print(np.around(alg_data[self.start_aix:n_splits, :], decimals=4))
+            print(np.around(alg_data[:self.n_total, :], decimals=4))
 
         self.alg_iter += 1
         self.start_bix += self.n_starter
@@ -501,13 +502,13 @@ redirect_stderr(log_f)"""
 
         if print_sample:
             print("\n\nBANK SAMPLE")
-            print(np.around(bank[self.start_bix:n_splits, :], decimals=2))
+            print(np.around(bank[:self.n_total, :], decimals=2))
 
             print("\n\nALG DATA SAMPLE")
-            print(np.around(alg_data[self.start_aix:n_splits, :], decimals=2))
+            print(np.around(alg_data[:self.n_total, :], decimals=4))
 
         self.alg_iter += 1
-        print("start_bix", start_bix)
+        print("start_bix", self.start_bix)
         print("self.start_bix + self.n_deposit", self.start_bix + self.n_deposit)
         if self.start_bix + self.n_deposit == self.n_total:
             self.start_bix = 0
@@ -548,13 +549,16 @@ if __name__ == '__main__':
     hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100} 
 
     hjpool = HopfJuliaPool(dynamics_data, time_step, hopf_opt_p,
-                            use_hopf=True, solve_grad=False, hopf_warm_start=False, gt_metrics=True, num_hopf_workers=4)
+                            use_hopf=True, solve_grad=False, hopf_warm_start=False, gt_metrics=True, num_hopf_workers=2)
 
     # bank_params = {"n_total":200000, "n_starter":100000, "n_deposit":10000}
-    bank_params = {"n_total":200, "n_starter":100, "n_deposit":10}
+    bank_params = {"n_total":12, "n_starter":6, "n_deposit":2}
     
     hjpool.solve_bank_starter(bank_params, n_splits=10, print_sample=True)
     
+    model = None
+    hjpool.solve_bank_deposit(model, n_splits=10, print_sample=True)
+
     # shm_states_id, shm_states_shape, shm_algdat_id, shm_algdat_shape = shm_data
     # shm_states, shm_algdat = SharedMemory(name=shm_states_id), SharedMemory(name=shm_algdat_id)
     # bank = np.ndarray(shm_states_shape, dtype=np.float32, buffer=shm_states.buf)
