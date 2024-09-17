@@ -175,7 +175,7 @@ class Experiment(ABC):
                     self.dataset.dynamics.mu = nl_perc * mu_orig
                     self.dataset.dynamics.alpha = nl_perc * alpha_orig
 
-                # self-supervised learning
+                ## Learn
                 for step, (model_input, gt) in enumerate(train_dataloader):
                     start_time = time.time()
 

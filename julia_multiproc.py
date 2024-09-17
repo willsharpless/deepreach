@@ -179,6 +179,10 @@ redirect_stderr(log_f)"""
 
     function solve_Hopf_BRS(X_in; P_in=nothing, return_grad=false)
         println("        Solving Hopf ... ")
+        if !isnothing(P_in)
+            println("        (warm starting)")
+            P_in = Array(P_in)
+        end
         flush(log_f)
         (XsT, VXsT), run_stats, opt_data, gradVXsT = Hopf_BRS(system, target, times; X=Matrix(X_in), th, input_shapes, game, opt_method=Hopf_cd, opt_p=opt_p_cd, P_in, warm=true, warm_pattern="temporal", printing=false)
         println("        Success.")
@@ -304,7 +308,7 @@ redirect_stderr(log_f)"""
         if cls.use_hopf:
             J = np.repeat(J, int(1/cls.ts))
             if cls.solve_grad:
-                DxV = np.reshape(DxV, (cls.N, split_size)).T()
+                DxV = np.reshape(DxV, (cls.N, split_size)).T
 
             ## Solve Ground Truth
             if cls.gt_metrics:
@@ -318,7 +322,7 @@ redirect_stderr(log_f)"""
                 MSE = SE.mean()
 
                 if cls.solve_grad:
-                    SE_grad = np.power((DxV_gt - DxV), 2).mean(dim=1) # mse per pt
+                    SE_grad = np.power((DxV_gt - DxV), 2).mean(axis=1) # mse (across dims) per pt
                     MSE_grad = SE_grad.mean()
         
         total_time = time.time() - start_time
@@ -334,11 +338,11 @@ redirect_stderr(log_f)"""
             bank[bix:bix+split_size, cls.N+1] = J # boundary
             bank[bix:bix+split_size, cls.N+2] = V # value
             if cls.solve_grad:
-                bank[bix:bix+split_size, cls.N+4:2*cls.N+2] = DxV # hopf-grad
+                bank[bix:bix+split_size, cls.N+4:2*cls.N+4] = DxV # hopf-grad
             if cls.gt_metrics:
                 bank[bix:bix+split_size, cls.N+3] = SE # error
                 if cls.solve_grad:
-                    bank[bix:bix+split_size, 2*cls.N+2] = SE_grad # grad error
+                    bank[bix:bix+split_size, 2*cls.N+4] = SE_grad # grad error
             
             ## Store general algorithm data
             alg_data[aix, 0] = aix
@@ -356,7 +360,7 @@ redirect_stderr(log_f)"""
 
         ## Define Shared Memory
         self.n_total, self.n_starter, self.n_deposit, ts = bank_params["n_total"], bank_params["n_starter"], bank_params["n_deposit"], time_step
-        if (self.n_total - self.n_starter) % self.n_deposit != 0: raise AssertionError(f"Your bank isn't divided well: ({(self.n_total - self.n_starter)} remainder must be divisble by {self.n_deposit} deposit). Change your parameters.") 
+        if (self.n_total - self.n_starter) % self.n_deposit != 0: raise AssertionError(f"Your bank isn't divided well: ({(self.n_total - self.n_starter)} remainder must be divisble by {self.n_deposit} deposit). Change your parameters.\n") 
 
         self.shm_states_shape = (self.n_total, 1 + self.N + 3 + dynamics.N + 1) # n_total x (time, state, bc, val, mse, state_grad, mse_grad)
         self.shm_algdat_shape = (1000, 6) # alg_log_max x (alg_iter, job_ix, total_time, mean_solve_time_ppt, avg_mse, avg_grad_mse)
@@ -373,7 +377,7 @@ redirect_stderr(log_f)"""
         total_spatial_pts = int(self.n_starter / self.tp) # maybe this should be chosen instead of n_total
         split_spatial_pts = int(total_spatial_pts / n_splits)
         split_size = int(self.n_starter / n_splits)
-        if self.n_starter % split_spatial_pts != 0: raise AssertionError(f"Your bank isn't divided well: ({n_splits} splits gives {self.n_starter % split_spatial_pts} pts/split). Change your parameters.") 
+        if total_spatial_pts / n_splits != split_spatial_pts: raise AssertionError(f"Your bank isn't divided well: ({total_spatial_pts} pts and {n_splits} splits gives {total_spatial_pts / n_splits} pts/split, not an integer). Change your parameters.\n") 
 
         ## Logging        
         print("\nMaster log at: ", os.path.join(self.log_loc, self.master_log))
@@ -391,6 +395,10 @@ redirect_stderr(log_f)"""
             mlog.write(f"\n    Dimension  : {self.N}")
             mlog.write(f"\n    Time step  : {self.ts:1.0e} s")
             mlog.write(f"\n    Time:Space : {self.tp}")
+            mlog.write(f"\n    Solve Hopf : {self.use_hopf}")
+            mlog.write(f"\n    Solve Grad : {self.solve_grad}")
+            mlog.write(f"\n    True Comp  : {self.gt_metrics}")
+            mlog.write(f"\n    Warm-Start : {self.hopf_warm_start}")
 
             mlog.write(f"\n\n  BANK")
             mlog.write(f"\n    Total      : {self.n_total} pts")
@@ -398,10 +406,10 @@ redirect_stderr(log_f)"""
             mlog.write(f"\n    Deposit    : {self.n_deposit} pts")
 
             mlog.write(f"\n\n  SHARED MEMORY")
-            mlog.write(f"\n    State Bank      [total x (time, state, bc, val, mse, state_grad, mse_grad)]")
+            mlog.write(f"\n    State Bank")
             mlog.write(f"\n      Id       : {self.shm_states_id}")
             mlog.write(f"\n      Shape    : {self.shm_states_shape}")
-            mlog.write(f"\n    Algorithm Data  [log_max x (job_sum, job_iter, total_time, mean_time_ppt, mean_mse, mean_grad_mse)]")
+            mlog.write(f"\n    Algorithm Data")
             mlog.write(f"\n      Id       : {self.shm_algdat_id}")
             mlog.write(f"\n      Shape    : {self.shm_algdat_shape}")
 
@@ -477,13 +485,11 @@ redirect_stderr(log_f)"""
         split_size = int(self.n_deposit / n_splits)
 
         ## Care
-        if self.n_deposit % split_spatial_pts != 0: raise AssertionError(f"Your bank isn't divided well: ({n_splits} splits gives {self.n_deposit % split_spatial_pts} pts/split); change your bank total or time-step") 
+        if total_spatial_pts / n_splits != split_spatial_pts: raise AssertionError(f"Your bank isn't divided well: {total_spatial_pts} pts and {n_splits} splits gives {total_spatial_pts / n_splits} pts/split, not an integer. Change your parameters.\n") 
         print(f"\nSolving {self.n_deposit} points to deposit into the bank (in {n_splits} jobs for {self.num_hopf_workers} workers), composed of {total_spatial_pts} spatial x {self.tp} time pts ({split_size} per job).\n")
 
         with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
             mlog.write(f"\n######################### Bank Deposit Logs, Iter {self.alg_iter} #########################")
-
-        tX_grad = None # FIXME
 
         with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
 
@@ -494,19 +500,28 @@ redirect_stderr(log_f)"""
             mlog.write(f"\n    Space      : {split_spatial_pts} pts")
             mlog.write(f"\n    Time       : {self.tp} pts")
 
+        tX_grads = np.ones((self.N, split_spatial_pts, self.tp, n_splits))
         with tqdm(total=n_splits) as pbar:
             
             ## Define Xi splits and store
-            for i in range(self.start_bix, self.start_bix + self.n_deposit, split_size):
+            for i, ix in enumerate(range(self.start_bix, self.start_bix + self.n_deposit, split_size)):
                 Xi = np.random.uniform(-1, 1, (split_spatial_pts, self.N)) 
                 # TODO: try w/ fixed Xi to check BC for solve_hopf & w/o (to see alignment)
 
                 for j in range(self.tp):
-                    bank[i + j*split_spatial_pts: i + (j+1)*split_spatial_pts, 0:self.N+1] = np.hstack((self.ts * (j+1) * np.ones((Xi.shape[0],1)), Xi))
+                    tjXi = np.hstack((self.ts * (j+1) * np.ones((Xi.shape[0],1)), Xi))
+                    bank[ix + j*split_spatial_pts: ix + (j+1)*split_spatial_pts, 0:self.N+1] = tjXi
                     if self.hopf_warm_start: # FIXME
                         print("tX_grad = model.coords_to_gradients(tX)")
                         print("check formatting")
                         print("TODO: here is where solve_bank_deposit will look up the grads if warmstarting")
+                        
+                        tX_grads[:,:,j,i] = 0.
+                        # model_input_model_coords = torch.from_numpy(tjXi.T).unsqueeze(0).cuda().float() # could be troublesome w cuda call, in this case has to happen outside! sampling will too for this fn
+                        # model_results = model({'coords':model_input_model_coords})
+                        # DxVi = self.dataset.dynamics.io_to_dv(model_results['model_in'], model_results['model_out'].squeeze(dim=-1)).squeeze(0).cpu().numpy().T[1:,:]
+                        # bank[ix + j*split_spatial_pts: ix + (j+1)*split_spatial_pts, self.N+4:] = DxVi
+                        # tX_grads[:,:,j,i] = DxVi
                         
             ## Execute (blocking) on all workers 
             for i in range(n_splits):
@@ -515,6 +530,8 @@ redirect_stderr(log_f)"""
                 shm_ix = (job_id, bank_ix, alg_dat_ix)
 
                 Xi = bank[self.start_bix + i*split_size: self.start_bix + i*split_size + split_spatial_pts, 1:self.N+1].T
+                # tX_grad = None # FIXME
+                tX_grad = tX_grads[:,:,:,i]
                 
                 job = self.pool.apply_async(self.solve_hopf, (Xi, shm_data, shm_ix, tX_grad))
                 self.jobs.append(job)
@@ -597,19 +614,20 @@ if __name__ == '__main__':
     hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100} 
 
     hjpool = HopfJuliaPool(dynamics_data, time_step, hopf_opt_p,
-                            use_hopf=True, solve_grad=False, hopf_warm_start=False, gt_metrics=True, num_hopf_workers=2)
+                            use_hopf=True, solve_grad=True, hopf_warm_start=True, gt_metrics=True, num_hopf_workers=2)
 
     # bank_params = {"n_total":200000, "n_starter":100000, "n_deposit":10000}
-    bank_params = {"n_total":12, "n_starter":6, "n_deposit":2}
+    # bank_params = {"n_total":12, "n_starter":6, "n_deposit":2} BUG: w/ n_splits=2
+    bank_params = {"n_total":12, "n_starter":8, "n_deposit":2}
     
-    print_sample = False
-    hjpool.solve_bank_starter(bank_params, n_splits=3, print_sample=print_sample)
+    print_sample = True
+    hjpool.solve_bank_starter(bank_params, n_splits=2, print_sample=print_sample)
     
     hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
-    hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
-    hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
-    hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
-    hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
+    # hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
+    # hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
+    # hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
+    # hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
 
     hjpool.dispose()
 
