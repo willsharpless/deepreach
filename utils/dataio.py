@@ -15,7 +15,7 @@ class ReachabilityDataset(Dataset):
     def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, 
                  use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0, record_gt_metrics=False, solve_grad=False,
                  manual_load=False, load_packet=None, no_curriculum=False, use_bank=False, bank_name=None, capacity_test=False,
-                 solve_hopf=False, hopf_warm_start=True, hopf_time_step=1e-3, num_hopf_workers=2, hopf_job_numsplits=10,
+                 solve_hopf=False, hopf_warm_start=True, hopf_time_step=1e-3, num_hopf_workers=2, hopf_starter_numsplits=10, hopf_deposit_numsplits=5,
                  hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100},
                  hopf_bank_params = {"n_total":int(2e5), "n_starter":int(1e5), "n_deposit":int(1e4)}
                  ):
@@ -50,12 +50,15 @@ class ReachabilityDataset(Dataset):
         self.hopf_time_step = hopf_time_step
         self.hopf_opt_p = hopf_opt_p
         self.hopf_bank_params = hopf_bank_params
-        self.hopf_job_numsplits = hopf_job_numsplits
+        self.hopf_starter_numsplits = hopf_starter_numsplits
+        self.hopf_deposit_numsplits = hopf_deposit_numsplits
         # self.hopf_time_step = 1e-3 #FIXME load from run_exp.py  
         # self.hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100} #TODO load from run_exp.py 
         # self.hopf_bank_params = {"n_total":2e6, "n_starter":1e6, "n_deposit":1e5} # TODO load from run_exp.py  
-        # # self.hopf_bank_params = {"n_total":12, "n_starter":8, "n_deposit":2} # FIXME: self.hopf_bank_params
-        # # self.hopf_bank_params = {"n_total":100, "n_starter":40, "n_deposit":10} # FIXME: self.hopf_bank_params
+        # self.hopf_bank_params = {"n_total":12, "n_starter":8, "n_deposit":2} # small test set
+        self.hopf_bank_params = {"n_total":4000, "n_starter":1000, "n_deposit":1000} # medium test set
+        self.hopf_starter_numsplits = 1
+        self.hopf_deposit_numsplits = 1
         
         self.use_bank = use_bank
         if self.solve_hopf: self.make_bank = True # redundant safety
@@ -322,11 +325,11 @@ class ReachabilityDataset(Dataset):
             ## Make Dynamic Bank by Solving Hopf Formula Online
             else:     
                 ## Solve bank starter (blocks until completion)
-                self.hjpool.solve_bank_starter(self.hopf_bank_params, n_splits=self.hopf_job_numsplits)
+                self.hjpool.solve_bank_starter(self.hopf_bank_params, n_splits=self.hopf_starter_numsplits, print_sample=False)
                 self.solved_hopf_pts = self.hopf_bank_params["n_starter"]
 
                 ## Order initial bank deposit (non-blocking)
-                self.hjpool.solve_bank_deposit(model=None, n_splits=self.hopf_job_numsplits, blocking=False)
+                self.hjpool.solve_bank_deposit(model=None, n_splits=self.hopf_deposit_numsplits, blocking=True, print_sample=False)
 
         ## Load Memory Map of the Bank
         if self.use_bank:

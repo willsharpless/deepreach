@@ -167,19 +167,17 @@ class Experiment(ABC):
                 ## if hopf-solving, check bank deposit orders
                 if self.dataset.solve_hopf:
                     if self.dataset.hjpool.jobs:
-                        for job in self.dataset.hjpool.jobs:
-                            if job.ready():
-                                job.get() ## in case of error
-                                self.dataset.hjpool.jobs.remove(job)
+                        self.dataset.hjpool.check_jobs()
                     
                     ## Deposit jobs complete, recall with 
                     else:
                         self.dataset.solved_hopf_pts += self.dataset.hopf_bank_params["n_deposit"]
+                        print(f"\nIn total, {self.dataset.solved_hopf_pts} hopf pts have been solved.")
 
-                        if self.dataset.hjpool.hopf_warm_start:
-                            self.dataset.hjpool.solve_bank_deposit(model=self.model, n_splits=self.dataset.hopf_job_numsplits, blocking=False)
+                        if self.dataset.hjpool.hopf_warm_start: #FIXME, blocking and print sample
+                            self.dataset.hjpool.solve_bank_deposit(model=self.model, n_splits=self.dataset.hopf_deposit_numsplits, blocking=False, print_sample=False)
                         else:
-                            self.dataset.hjpool.solve_bank_deposit(model=None, n_splits=self.dataset.hopf_job_numsplits, blocking=False)
+                            self.dataset.hjpool.solve_bank_deposit(model=None, n_splits=self.dataset.hopf_deposit_numsplits, blocking=False, print_sample=False)
 
                         # if reset_after_deposit: #TODO
                         #     reset grad steps
@@ -226,7 +224,7 @@ class Experiment(ABC):
                     if self.dataset.dynamics.loss_type == 'brt_hjivi':
                         losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'])
 
-                    ## Linearly-Guided BRT (Hopf-based)
+                    ## Linear Supervision BRT (Hopf-based)
                     elif hopf_loss != 'none':
                         
                         hopf_values = gt['hopf_values']
@@ -357,7 +355,16 @@ class Experiment(ABC):
 
                     ## Record Data Summary
                     if not total_steps % steps_til_summary:
-                        tqdm.write("Epoch %d, Total loss %0.6f, iteration time %0.6f" % (epoch, train_loss, time.time() - start_time))
+                        iter_time = time.time() - start_time
+
+                        if self.dataset.record_gt_metrics:   
+                            JIp, FIp, FEp, Vmse, DVXmse = self.compute_gt_metrics()
+                            JIp_s = smoothing_factor * JIp + (1 - smoothing_factor) * JIp_s
+                            JIp_s_max = max(JIp_s, JIp_s_max)
+                        
+                            tqdm.write("Epoch %d, Total loss %0.6f, MSE %3.5e, IOU %0.6f, iter time %0.6f" % (epoch, train_loss, Vmse, JIp, iter_time))
+                        else:
+                            tqdm.write("Epoch %d, Total loss %0.6f, iter time %0.6f" % (epoch, train_loss, iter_time))
                         
                         if self.use_wandb:
                             log_dict = {
@@ -371,10 +378,6 @@ class Experiment(ABC):
                                 log_dict["Nonlinearity Scale"] = nl_perc
 
                             if self.dataset.record_gt_metrics:
-
-                                JIp, FIp, FEp, Vmse, DVXmse = self.compute_gt_metrics()
-                                JIp_s = smoothing_factor * JIp + (1 - smoothing_factor) * JIp_s
-                                JIp_s_max = max(JIp_s, JIp_s_max)
 
                                 log_dict["Jaccard Index over Time"] = JIp
                                 log_dict["Smooth Jaccard Index over Time"] = JIp_s
