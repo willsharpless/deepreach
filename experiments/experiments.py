@@ -174,11 +174,17 @@ class Experiment(ABC):
                     
                     ## Deposit jobs complete, recall with 
                     else:
-                        if self.dataset.hjpool.hopf_warmst:
-                            self.dataset.hjpool.solve_bank_deposit(model=self.model, n_splits=2, blocking=False)
+                        self.dataset.solved_hopf_pts += self.dataset.bank_params["n_deposit"]
+
+                        if self.dataset.hjpool.hopf_warm_start:
+                            self.dataset.hjpool.solve_bank_deposit(model=self.model, n_splits=1, blocking=False)
                         else:
-                            self.dataset.hjpool.solve_bank_deposit(model=None, n_splits=2, blocking=False)
+                            self.dataset.hjpool.solve_bank_deposit(model=None, n_splits=1, blocking=False)
                         
+                        print("\nNew deposits ordered\n")
+
+                        ## FIXME, reset self.dataset.bank_index and block_counter
+
                         # if reset_after_deposit:
                         #     reset grad steps
 

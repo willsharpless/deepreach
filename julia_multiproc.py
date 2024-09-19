@@ -54,7 +54,7 @@ class HopfJuliaPool(object):
     V_hopf_gt = None
     V_hopf_gt_grad = None
 
-    def __init__(self, dynamics_data, time_step, hopf_opt_p, 
+    def __init__(self, dynamics, time_step, hopf_opt_p, 
                 solve_grad=True, use_hopf=True, hopf_warm_start=True, gt_metrics=True, 
                 num_hopf_workers=2):
 
@@ -70,8 +70,13 @@ class HopfJuliaPool(object):
         self.hopf_warm_start = hopf_warm_start
         self.ts = time_step
         self.tp = int(1/self.ts)
-        self.N = dynamics_data["N"]
+        self.dynamics = dynamics
         settings = (use_hopf, solve_grad, gt_metrics, hopf_warm_start)
+
+        ## Extract and copy dynamics data to CPU
+        dynamics_data = {param:getattr(self.dynamics, param) for param in dir(self.dynamics) if not (param.startswith('__') or param.startswith('_')) and not callable(getattr(self.dynamics, param))}
+        dynamics_data = {key:val.cpu() if torch.is_tensor(val) else val for key,val in dynamics_data.items()}
+        self.N = dynamics_data["N"]
 
         ## Initialize Pool running Julia
         print('\nUsing a pool of julia workers.')
@@ -180,14 +185,14 @@ redirect_stderr(log_f)"""
     # Wrapper for Hopf Solver
 
     function solve_Hopf_BRS(X_in; P_in=nothing, return_grad=false)
-        println("        julia: Solving Hopf ... ")
+        println("         julia: Solving Hopf ... ")
         if !isnothing(P_in)
-            println("        julia: (warm starting)")
+            println("         julia: (warm starting)")
             P_in = Array(P_in)
         end
         flush(log_f)
         (XsT, VXsT), run_stats, opt_data, gradVXsT = Hopf_BRS(system, target, times; X=Matrix(X_in), th, input_shapes, game, opt_method=Hopf_cd, opt_p=opt_p_cd, P_in, warm=true, warm_pattern="temporal", printing=false)
-        println("        julia: Success.")
+        println("         julia: Success.")
         flush(log_f)
         if return_grad
             return VXsT[1], vcat(VXsT[2:end]...), P_in_f(gradVXsT), run_stats[1]
@@ -199,9 +204,8 @@ redirect_stderr(log_f)"""
             print(solve_Hopf_BRS_exec)
             cls.V_hopf = staticmethod(lambda tX: cls.solve_hopf_BRS(tX, return_grad=False))
             cls.V_hopf_ws = staticmethod(lambda tX, P_in: cls.solve_hopf_BRS(tX, P_in=P_in, return_grad=False))
-            if solve_grad:
-                cls.V_hopf_grad = staticmethod(lambda tX: cls.solve_hopf_BRS(tX, return_grad=True))
-                cls.V_hopf_grad_ws = staticmethod(lambda tX, P_in: cls.solve_hopf_BRS(tX, P_in=P_in, return_grad=True))
+            cls.V_hopf_grad = staticmethod(lambda tX: cls.solve_hopf_BRS(tX, return_grad=True))
+            cls.V_hopf_grad_ws = staticmethod(lambda tX, P_in: cls.solve_hopf_BRS(tX, P_in=P_in, return_grad=True))
 
         ## Interpolate the Dynamic Programming Solution
         if not cls.use_hopf or cls.gt_metrics:
@@ -232,28 +236,28 @@ redirect_stderr(log_f)"""
         end
     end"""
             fast_interp = cls.jl.seval(fast_interp_exec)
-            print(fast_interp)
+            print(fast_interp_exec)
 
             def V_N_DP_linear_itp_combo(tXg):
                 J = 0 * tXg[0,:]
                 V = 0 * tXg[0,:]
-                print("        Interpolating DP solution ... ")
+                print("         julia: Interpolating DP solution ... ")
                 for i in range(cls.N-1):
                     Ji, Vi = fast_interp(V_DP_itp, tXg[[0, 1, 2+i], :])
                     J, V = J+Ji, V+Vi
-                print("        Success.")
+                print("         julia: Success.")
                 return J, V
 
             def V_N_DP_itp_grad_combo(tXg):
                 J = 0 * tXg[0,:]
                 V = 0 * tXg[0,:]
                 DV = 0 * tXg[1:,:].T
-                print("        Interpolating DP solution and gradients ... ")
+                print("         julia: Interpolating DP solution and gradients ... ")
                 for i in range(cls.N-1):
                     Ji, Vi, DVi = fast_interp(V_DP_itp, tXg[[0, 1, 2+i], :], compute_grad=True)
                     J, V = J+Ji, V+Vi
                     DV[:, [0, 1+i]] += DVi # assumes xN first
-                print("        Success.")
+                print("         julia: Success.")
                 return J, V, DV
 
             cls.V_hopf_gt = V_N_DP_linear_itp_combo
@@ -287,13 +291,13 @@ redirect_stderr(log_f)"""
         if cls.use_hopf:
             if cls.solve_grad:
                 if tX_grad is not None:
-                    print("\n       Warm-starting the hopf solve with gradient data and returning gradients.")
+                    print("\n        Warm-starting the hopf solve with gradient data and returning gradients.")
                     J, V, DxV, solve_time = cls.V_hopf_grad_ws(Xi, tX_grad)
                 else:
                     J, V, DxV, solve_time = cls.V_hopf_grad(Xi)
             else:
                 if tX_grad is not None:
-                    print("\n       Warm-starting the hopf solve with gradient data.")
+                    print("\n        Warm-starting the hopf solve with gradient data.")
                     J, V, solve_time = cls.V_hopf_grad(Xi, tX_grad)
                 else:
                     J, V, solve_time = cls.V_hopf(Xi)
@@ -382,7 +386,9 @@ redirect_stderr(log_f)"""
         total_spatial_pts = int(self.n_starter / self.tp) # maybe this should be chosen instead of n_total
         split_spatial_pts = int(total_spatial_pts / n_splits)
         split_size = int(self.n_starter / n_splits)
+        if self.n_starter / self.tp     != total_spatial_pts: raise AssertionError(f"Your bank isn't divided well: ({self.n_starter} total pts with {self.tp} tp gives {self.n_starter / self.tp} pts/split, not an integer). Change your parameters.\n") 
         if total_spatial_pts / n_splits != split_spatial_pts: raise AssertionError(f"Your bank isn't divided well: ({total_spatial_pts} pts and {n_splits} splits gives {total_spatial_pts / n_splits} pts/split, not an integer). Change your parameters.\n") 
+        if total_spatial_pts == 0 or split_spatial_pts == 0 or split_size == 0: raise AssertionError(f"Your bank isn't divided well, one of your splits is 0. Change your parameters.\n")
 
         ## Logging        
         print("\nMaster log at: ", os.path.join(self.log_loc, self.master_log))
@@ -491,6 +497,9 @@ redirect_stderr(log_f)"""
 
         ## Care
         if total_spatial_pts / n_splits != split_spatial_pts: raise AssertionError(f"Your bank isn't divided well: {total_spatial_pts} pts and {n_splits} splits gives {total_spatial_pts / n_splits} pts/split, not an integer. Change your parameters.\n") 
+        if self.n_deposit / self.tp     != total_spatial_pts: raise AssertionError(f"Your bank isn't divided well: {self.n_deposit} deposit pts with {self.tp} tp gives {self.n_deposit / self.tp} pts/split, not an integer. Change your parameters.\n") 
+        if total_spatial_pts == 0 or split_spatial_pts == 0 or split_size == 0: raise AssertionError(f"Your bank isn't divided well, one of your splits is 0. Change your parameters.\n")
+
         print(f"\nSolving {self.n_deposit} points to deposit into the bank (in {n_splits} jobs for {self.num_hopf_workers} workers), composed of {total_spatial_pts} spatial x {self.tp} time pts ({split_size} per job).\n")
 
         with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
@@ -505,7 +514,7 @@ redirect_stderr(log_f)"""
             mlog.write(f"\n    Space      : {split_spatial_pts} pts")
             mlog.write(f"\n    Time       : {self.tp} pts")
 
-        tX_grads = np.ones((self.N, split_spatial_pts, self.tp, n_splits))
+        tX_grads = np.zeros((self.N, split_spatial_pts, self.tp, n_splits))
         with tqdm(total=n_splits) as pbar:
             
             ## Define Xi splits and store
@@ -516,13 +525,13 @@ redirect_stderr(log_f)"""
                 for j in range(self.tp):
                     tjXi = np.hstack((self.ts * (j+1) * np.ones((Xi.shape[0],1)), Xi))
                     bank[ix + j*split_spatial_pts: ix + (j+1)*split_spatial_pts, 0:self.N+1] = tjXi
+                    
                     if self.hopf_warm_start and model: 
-                        # tX_grads[:,:,j,i] = 0. # FIXME
-                        model_input_model_coords = torch.from_numpy(tjXi.T).unsqueeze(0).cuda().float() # could be troublesome w cuda call, in this case has to happen outside! sampling will too for deposit
+                        model_input_model_coords = torch.from_numpy(tjXi).unsqueeze(0).cuda().float() # could be troublesome w cuda call, in this case has to happen outside! sampling will too for deposit
                         model_results = model({'coords':model_input_model_coords})
-                        DxVi = self.dataset.dynamics.io_to_dv(model_results['model_in'], model_results['model_out'].squeeze(dim=-1)).squeeze(0).cpu().numpy().T[1:,:]
-                        bank[ix + j*split_spatial_pts: ix + (j+1)*split_spatial_pts, self.N+4:] = DxVi
-                        tX_grads[:,:,j,i] = DxVi
+                        DxVi = self.dynamics.io_to_dv(model_results['model_in'], model_results['model_out'].squeeze(dim=-1)).squeeze(0).detach().cpu().numpy()[:,1:]
+                        bank[ix + j*split_spatial_pts: ix + (j+1)*split_spatial_pts, self.N+4:2*self.N+4] = DxVi
+                        tX_grads[:,:,j,i] = DxVi.T
                         
             ## Execute (blocking) on all workers 
             for i in range(n_splits):
@@ -531,8 +540,11 @@ redirect_stderr(log_f)"""
                 shm_ix = (job_id, bank_ix, alg_dat_ix)
 
                 Xi = bank[self.start_bix + i*split_size: self.start_bix + i*split_size + split_spatial_pts, 1:self.N+1].T
-                # tX_grad = None # FIXME
-                tX_grad = tX_grads[:,:,:,i]
+                
+                if self.hopf_warm_start:
+                    tX_grad = tX_grads[:,:,:,i]
+                else:
+                    tX_grad = None
                 
                 job = self.pool.apply_async(self.solve_hopf, (Xi, shm_data, shm_ix, tX_grad))
                 self.jobs.append(job)
