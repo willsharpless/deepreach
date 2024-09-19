@@ -174,18 +174,14 @@ class Experiment(ABC):
                     
                     ## Deposit jobs complete, recall with 
                     else:
-                        self.dataset.solved_hopf_pts += self.dataset.bank_params["n_deposit"]
+                        self.dataset.solved_hopf_pts += self.dataset.hopf_bank_params["n_deposit"]
 
                         if self.dataset.hjpool.hopf_warm_start:
-                            self.dataset.hjpool.solve_bank_deposit(model=self.model, n_splits=1, blocking=False)
+                            self.dataset.hjpool.solve_bank_deposit(model=self.model, n_splits=self.dataset.hopf_job_numsplits, blocking=False)
                         else:
-                            self.dataset.hjpool.solve_bank_deposit(model=None, n_splits=1, blocking=False)
-                        
-                        print("\nNew deposits ordered\n")
+                            self.dataset.hjpool.solve_bank_deposit(model=None, n_splits=self.dataset.hopf_job_numsplits, blocking=False)
 
-                        ## FIXME, reset self.dataset.bank_index and block_counter
-
-                        # if reset_after_deposit:
+                        # if reset_after_deposit: #TODO
                         #     reset grad steps
 
                 ## Parameter Scaling for Nonlinearity Curriculum #TODO: generalize to other dynamics
