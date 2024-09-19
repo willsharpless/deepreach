@@ -164,6 +164,24 @@ class Experiment(ABC):
                 time_interval_length = (self.dataset.counter/self.dataset.counter_end)*(self.dataset.tMax-self.dataset.tMin)
                 CSL_tMax = self.dataset.tMin + int(time_interval_length/CSL_dt)*CSL_dt
 
+                ## if hopf-solving, check bank deposit orders
+                if self.dataset.solve_hopf:
+                    if self.dataset.hjpool.jobs:
+                        for job in self.dataset.hjpool.jobs:
+                            if job.ready():
+                                job.get() ## in case of error
+                                self.dataset.hjpool.jobs.remove(job)
+                    
+                    ## Deposit jobs complete, recall with 
+                    else:
+                        if self.dataset.hjpool.hopf_warmst:
+                            self.dataset.hjpool.solve_bank_deposit(model=self.model, n_splits=2, blocking=False)
+                        else:
+                            self.dataset.hjpool.solve_bank_deposit(model=None, n_splits=2, blocking=False)
+                        
+                        # if reset_after_deposit:
+                        #     reset grad steps
+
                 ## Parameter Scaling for Nonlinearity Curriculum #TODO: generalize to other dynamics
                 not_pretraining = not(self.dataset.pretrain) and not(self.dataset.hopf_pretrain)
                 if nonlin_scale:

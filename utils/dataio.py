@@ -6,8 +6,9 @@ import time
 import os
 import gc
 from tqdm.autonotebook import tqdm
-import julia_multiproc
+import multiprocessing as mp
 from multiprocessing.shared_memory import SharedMemory
+import julia_multiproc
 
 # uses model input and real boundary fn
 class ReachabilityDataset(Dataset):
@@ -44,13 +45,13 @@ class ReachabilityDataset(Dataset):
         self.solve_hopf = solve_hopf # triggers online hopf formula solving via HopfReachability.jl
         self.num_hopf_workers = num_hopf_workers
         self.hopf_warm_start = hopf_warm_start
-        self.time_step = 1e-3 #TODO load from run_exp.py  
+        self.time_step = 1e-3 #FIXME load from run_exp.py  
         self.hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100} #TODO load from run_exp.py 
         self.bank_params = {"bank_total":2e6, "bank_start":1e6, "bank_invst":1e5} # TODO load from run_exp.py  
         
         self.use_bank = use_bank
 
-        self.numblocks = 6
+        self.numblocks = 6 # batch-sizes per bank
         self.bank_total = numpoints * self.numblocks
         if self.bank_total >= 1e6:
             qty_tag = str(int(self.bank_total // 1e6)) + 'M'
@@ -136,11 +137,19 @@ class ReachabilityDataset(Dataset):
                 ## Initialize Pool
                 # try setting the spawn here
                 # otherwise try using with statement and accept reinitialization
-                self.hjpool = julia_multiproc.HopfJuliaPool(self.dynamics, self.time_step, self.hopf_opt_p, self.bank_params, 
-                                                    solve_grad=self.solve_grad, hopf_warm_start=self.hopf_warm_start, solve_hopf=False,
-                                                    gt_metrics=self.record_gt_metrics,
-                                                    num_hopf_workers=self.num_hopf_workers)      
 
+                time_step = 5e-1 # FIXME self.time_step
+                dynamics_data = {param:getattr(self.dynamics, param) for param in dir(self.dynamics) if not (param.startswith('__') or param.startswith('_')) and not callable(getattr(self.dynamics, param))}
+                dynamics_data = {key:val.cpu() if torch.is_tensor(val) else val for key,val in dynamics_data.items()}
+
+                mp.set_start_method('spawn', force=True)
+                self.hjpool = julia_multiproc.HopfJuliaPool(dynamics_data, time_step, self.hopf_opt_p,  
+                                                    use_hopf=False, # FIXME: self.solve_hopf,
+                                                    solve_grad=False, # FIXME: self.solve_grad,
+                                                    hopf_warm_start=False, # FIXME: self.hopf_warm_start, 
+                                                    gt_metrics=False, # FIXME self.record_gt_metrics,
+                                                    num_hopf_workers=self.num_hopf_workers)      
+                
         ## Get Ground Truth for Special N-Dimensional Decomposable LessLinear System
         if record_gt_metrics:
             if not(manual_load):
@@ -308,38 +317,39 @@ class ReachabilityDataset(Dataset):
                 gc.collect()
             
             ## Make Dynamic Bank by Solving Hopf Formula Online
-            else: 
-                shm_data = hjpool.solve_bank_start(bank_params, n_splits=10)
-    
-                shm_states_id, shm_states_shape, shm_algdat_id, shm_algdat_shape = shm_data
-                shm_states, shm_algdat = SharedMemory(name=shm_states_id), SharedMemory(name=shm_algdat_id)
-                bank = np.ndarray(shm_states_shape, dtype=np.float32, buffer=shm_states.buf)
-                alg_data = np.ndarray(shm_algdat_shape, dtype=np.float32, buffer=shm_algdat.buf)
+            else:     
+                bank_params = {"n_total":12, "n_starter":8, "n_deposit":2} # FIXME: self.bank_params
+                self.hjpool.solve_bank_starter(bank_params, n_splits=2)
 
-                pass
-                # TODO: hjpool.solve_bank_invst()
-        
+                ## TODO: remove me from here, just for checking rn
+                self.shm_states = SharedMemory(name=self.hjpool.shm_states_id)
+                self.shm_algdat = SharedMemory(name=self.hjpool.shm_algdat_id)
+                bank = np.ndarray(self.hjpool.shm_states_shape, dtype=np.float32, buffer=self.shm_states.buf)
+                alg_data = np.ndarray(self.hjpool.shm_algdat_shape, dtype=np.float32, buffer=self.shm_algdat.buf)
+                
+                self.hjpool.solve_bank_deposit(model=None, n_splits=2, blocking=True) ## FIXME: blocking=False
+
         ## Load Memory Map of the Bank
         if self.use_bank:
             
             if not self.use_hopf:
                 self.bank = np.load(self.llnd_path + "banks/" + self.bank_name, mmap_mode='r')
-                self.bank_index = torch.from_numpy(np.random.permutation(self.bank_total)) # random shuffle for sampling (should we also mmap this?)
-                self.block_counter = 0
             
             else:
-                # TODO: memmap to shared memory
-                pass
+                self.shm_states = SharedMemory(name=self.hjpool.shm_states_id)
+                self.shm_algdat = SharedMemory(name=self.hjpool.shm_algdat_id)
+                bank = np.ndarray(self.hjpool.shm_states_shape, dtype=np.float32, buffer=self.shm_states.buf)
+                alg_data = np.ndarray(self.hjpool.shm_algdat_shape, dtype=np.float32, buffer=self.shm_algdat.buf)
+            
+            self.bank_index = torch.from_numpy(np.random.permutation(self.bank_total)) # random shuffle for sampling
+            self.block_counter = 0
         
     def __len__(self):
         return 1
 
     def __getitem__(self, idx):
         
-        # ## Sample Points and Evaluate
-        # TODO: if not(self.use_bank) or self.pretrain:
-        # 
-
+        ## Sample Points and Evaluate
         # uniformly sample domain and include coordinates where source is non-zero 
         model_states = torch.zeros(self.numpoints, self.dynamics.state_dim).uniform_(-1, 1)
         if self.num_target_samples > 0:
@@ -374,7 +384,7 @@ class ReachabilityDataset(Dataset):
             ## Sample Bank of Hopf-Evaluated Points
             elif self.use_bank:
 
-                sample_index = self.bank_index[self.block_counter*self.numpoints:(self.block_counter+1)*self.numpoints]
+                sample_index = self.bank_index[self.block_counter * self.numpoints : (self.block_counter+1) * self.numpoints]
                 bank_sample = torch.from_numpy(self.bank[sample_index, :])
 
                 model_coords_hopf = bank_sample[:, 0:self.N+1] # separate states so pde loss is not restricted to small bank

@@ -18,13 +18,14 @@ import shutil
 
 class HopfJuliaPool(object):
     ## By design, only one instance should be defined for class attribute stability
-    ## (instance attributes do not transfer to processes, hence, need class)
+    ## (instance attributes do not transfer to processes, hence, using class)
 
     lock = None
     jl = None
     interp_file_name = ""
     write_output = True
-    log_loc = "runs/test_run/julia_multiproc_logs" ## FIXME: actual run name, not 'test_run'
+    # log_loc = "runs/test_run/julia_multiproc_logs" ## FIXME: actual run name, not 'test_run'
+    log_loc = "julia_multiproc_logs"
     master_log = "master_log.log"
     worker_id = 0
     worker_log, worker_log_full = "", ""
@@ -73,7 +74,8 @@ class HopfJuliaPool(object):
         settings = (use_hopf, solve_grad, gt_metrics, hopf_warm_start)
 
         ## Initialize Pool running Julia
-        print('\nInitializing pool...')
+        print('\nUsing a pool of julia workers.')
+        print('Initializing pool...')
         self.pool = Pool(num_hopf_workers, initializer=self.init_worker)
         print("\nFinished initializing workers.")
 
@@ -178,14 +180,14 @@ redirect_stderr(log_f)"""
     # Wrapper for Hopf Solver
 
     function solve_Hopf_BRS(X_in; P_in=nothing, return_grad=false)
-        println("        Solving Hopf ... ")
+        println("        julia: Solving Hopf ... ")
         if !isnothing(P_in)
-            println("        (warm starting)")
+            println("        julia: (warm starting)")
             P_in = Array(P_in)
         end
         flush(log_f)
         (XsT, VXsT), run_stats, opt_data, gradVXsT = Hopf_BRS(system, target, times; X=Matrix(X_in), th, input_shapes, game, opt_method=Hopf_cd, opt_p=opt_p_cd, P_in, warm=true, warm_pattern="temporal", printing=false)
-        println("        Success.")
+        println("        julia: Success.")
         flush(log_f)
         if return_grad
             return VXsT[1], vcat(VXsT[2:end]...), P_in_f(gradVXsT), run_stats[1]
@@ -215,7 +217,7 @@ redirect_stderr(log_f)"""
 
     function fast_interp(_V_itp, tX_in; compute_grad=false)
         tX = Matrix(tX_in) # strange mp + torch + juliacall bug, only noticable here
-        # print("       Interpolating Xi across t... ")
+        # print("       julia: Interpolating Xi across t... ")
         # flush(log_f)
         V = zeros(size(tX, 2))
         for i=1:length(V); V[i] = _V_itp(tX[:,i][end:-1:1]...); end # (assumes t in first row)
@@ -230,6 +232,7 @@ redirect_stderr(log_f)"""
         end
     end"""
             fast_interp = cls.jl.seval(fast_interp_exec)
+            print(fast_interp)
 
             def V_N_DP_linear_itp_combo(tXg):
                 J = 0 * tXg[0,:]
@@ -284,7 +287,7 @@ redirect_stderr(log_f)"""
         if cls.use_hopf:
             if cls.solve_grad:
                 if tX_grad is not None:
-                    print("\n       Warm-starting the hopf solve with gradient data.")
+                    print("\n       Warm-starting the hopf solve with gradient data and returning gradients.")
                     J, V, DxV, solve_time = cls.V_hopf_grad_ws(Xi, tX_grad)
                 else:
                     J, V, DxV, solve_time = cls.V_hopf_grad(Xi)
@@ -298,10 +301,12 @@ redirect_stderr(log_f)"""
         ## Compute Value with Composed 2D Interpolation (for testing)
         else: 
             print(f"\n        Computing value with DP-Interpolations (not solving hopf), from {cls.interp_file_name}")
+            interp_time = time.time()
             if cls.solve_grad:
                 J, V, DxV = cls.V_hopf_gt_grad(tXi)
             else:
                 J, V = cls.V_hopf_gt(tXi)
+            solve_time = time.time() - interp_time
 
         mean_solve_time_ppt = solve_time / split_size
 
@@ -359,10 +364,10 @@ redirect_stderr(log_f)"""
     def solve_bank_starter(self, bank_params, n_splits=10, print_sample=False):
 
         ## Define Shared Memory
-        self.n_total, self.n_starter, self.n_deposit, ts = bank_params["n_total"], bank_params["n_starter"], bank_params["n_deposit"], time_step
+        self.n_total, self.n_starter, self.n_deposit = bank_params["n_total"], bank_params["n_starter"], bank_params["n_deposit"]
         if (self.n_total - self.n_starter) % self.n_deposit != 0: raise AssertionError(f"Your bank isn't divided well: ({(self.n_total - self.n_starter)} remainder must be divisble by {self.n_deposit} deposit). Change your parameters.\n") 
 
-        self.shm_states_shape = (self.n_total, 1 + self.N + 3 + dynamics.N + 1) # n_total x (time, state, bc, val, mse, state_grad, mse_grad)
+        self.shm_states_shape = (self.n_total, 1 + self.N + 3 + self.N + 1) # n_total x (time, state, bc, val, mse, state_grad, mse_grad)
         self.shm_algdat_shape = (1000, 6) # alg_log_max x (alg_iter, job_ix, total_time, mean_solve_time_ppt, avg_mse, avg_grad_mse)
 
         shm_states = SharedMemory(create=True, size=np.prod(self.shm_states_shape) * np.dtype(np.float32).itemsize)
@@ -446,13 +451,13 @@ redirect_stderr(log_f)"""
                 mlog.write(f"\n    WORKER     JOB      TOTAL (s)        MEAN (s/pt)      MSE              MSE GRAD\n") 
 
             ## Block until completion
-            time.sleep(12)
+            # time.sleep(12)
             while self.jobs:
                 for job in self.jobs:
                     if job.ready():
                         worker_id, job_id, total_time, mean_solve_time_ppt, MSE, MSE_grad = job.get()
                         with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
-                            mlog.write(f"    {worker_id:<9d}  {job_id:<7d}  {total_time:<10.2e}  {mean_solve_time_ppt:<10.2e}  {MSE:<10.2e}  {MSE_grad:<10.2e}\n".replace("e", " x 10^"))
+                            mlog.write(f"    {worker_id:<9d}  {job_id:<7d}  {total_time:<10.2e}  {mean_solve_time_ppt:<10.2e}  {MSE:<10.2e}  {MSE_grad:<10.2e}\n".replace("e", " x 10^").replace("nan", "unsolved"))
                         pbar.update(1)
                         self.jobs.remove(job)
         
@@ -511,17 +516,13 @@ redirect_stderr(log_f)"""
                 for j in range(self.tp):
                     tjXi = np.hstack((self.ts * (j+1) * np.ones((Xi.shape[0],1)), Xi))
                     bank[ix + j*split_spatial_pts: ix + (j+1)*split_spatial_pts, 0:self.N+1] = tjXi
-                    if self.hopf_warm_start: # FIXME
-                        print("tX_grad = model.coords_to_gradients(tX)")
-                        print("check formatting")
-                        print("TODO: here is where solve_bank_deposit will look up the grads if warmstarting")
-                        
-                        tX_grads[:,:,j,i] = 0.
-                        # model_input_model_coords = torch.from_numpy(tjXi.T).unsqueeze(0).cuda().float() # could be troublesome w cuda call, in this case has to happen outside! sampling will too for this fn
-                        # model_results = model({'coords':model_input_model_coords})
-                        # DxVi = self.dataset.dynamics.io_to_dv(model_results['model_in'], model_results['model_out'].squeeze(dim=-1)).squeeze(0).cpu().numpy().T[1:,:]
-                        # bank[ix + j*split_spatial_pts: ix + (j+1)*split_spatial_pts, self.N+4:] = DxVi
-                        # tX_grads[:,:,j,i] = DxVi
+                    if self.hopf_warm_start and model: 
+                        # tX_grads[:,:,j,i] = 0. # FIXME
+                        model_input_model_coords = torch.from_numpy(tjXi.T).unsqueeze(0).cuda().float() # could be troublesome w cuda call, in this case has to happen outside! sampling will too for deposit
+                        model_results = model({'coords':model_input_model_coords})
+                        DxVi = self.dataset.dynamics.io_to_dv(model_results['model_in'], model_results['model_out'].squeeze(dim=-1)).squeeze(0).cpu().numpy().T[1:,:]
+                        bank[ix + j*split_spatial_pts: ix + (j+1)*split_spatial_pts, self.N+4:] = DxVi
+                        tX_grads[:,:,j,i] = DxVi
                         
             ## Execute (blocking) on all workers 
             for i in range(n_splits):
@@ -580,11 +581,6 @@ redirect_stderr(log_f)"""
             self.start_bix += self.n_deposit
         self.start_aix += n_splits
 
-        ## will mostly be the same, but will ...
-        # - use model to warm start when alg_iter > 2
-        # - no blocking catch at the end... new function for storing the alg data?
-        # could this just be the same fn w/ some if's
-
     def dispose(self):
 
         self.pool.close()
@@ -611,23 +607,19 @@ if __name__ == '__main__':
     # time_step = 1e-3
     # time_step = 1e-1
     time_step = 5e-1
-    hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100} 
+    hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100}
 
     hjpool = HopfJuliaPool(dynamics_data, time_step, hopf_opt_p,
-                            use_hopf=True, solve_grad=True, hopf_warm_start=True, gt_metrics=True, num_hopf_workers=2)
+                            use_hopf=False, solve_grad=False, hopf_warm_start=False, gt_metrics=False, num_hopf_workers=2)
 
     # bank_params = {"n_total":200000, "n_starter":100000, "n_deposit":10000}
-    # bank_params = {"n_total":12, "n_starter":6, "n_deposit":2} BUG: w/ n_splits=2
     bank_params = {"n_total":12, "n_starter":8, "n_deposit":2}
     
     print_sample = True
     hjpool.solve_bank_starter(bank_params, n_splits=2, print_sample=print_sample)
     
-    hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
-    # hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
-    # hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
-    # hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
-    # hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
+    for _ in range(5):
+        hjpool.solve_bank_deposit(model=None, n_splits=1, print_sample=print_sample, blocking=True)
 
     hjpool.dispose()
 
