@@ -59,7 +59,7 @@ if __name__ == '__main__':
             p.add_argument('--' + param, type=experiment_params[param].annotation, required=True, help='special experiment_class argument')
 
         # simulation data source options
-        p.add_argument('--numpoints', type=int, default=1000, help='Number of points in simulation data source __getitem__.') # weird way to say batch size
+        p.add_argument('--numpoints', type=int, default=10000, help='Number of points in simulation data source __getitem__.') # weird way to say batch size
         p.add_argument('--pretrain', action='store_true', default=True, required=False, help='Pretrain dirichlet conditions')
         p.add_argument('--pretrain_iters', type=int, default=2000, required=False, help='Number of pretrain iterations')
         p.add_argument('--tMin', type=float, default=0.0, required=False, help='Start time of the simulation')

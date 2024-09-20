@@ -15,9 +15,9 @@ class ReachabilityDataset(Dataset):
     def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, 
                  use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0, record_gt_metrics=False, solve_grad=False,
                  manual_load=False, load_packet=None, no_curriculum=False, use_bank=False, bank_name=None, capacity_test=False,
-                 solve_hopf=False, hopf_warm_start=True, hopf_time_step=1e-3, num_hopf_workers=2, hopf_starter_numsplits=10, hopf_deposit_numsplits=5,
+                 solve_hopf=False, hopf_warm_start=True, hopf_time_step=5e-3, num_hopf_workers=5, hopf_starter_numsplits=10, hopf_deposit_numsplits=10,
                  hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100},
-                 hopf_bank_params = {"n_total":int(2e5), "n_starter":int(1e5), "n_deposit":int(1e4)}
+                 hopf_bank_params = {"n_total":int(2e5), "n_starter":int(1e5), "n_deposit":int(1e5)}
                  ):
 
         self.dynamics = dynamics
@@ -56,9 +56,11 @@ class ReachabilityDataset(Dataset):
         # self.hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100} #TODO load from run_exp.py 
         # self.hopf_bank_params = {"n_total":2e6, "n_starter":1e6, "n_deposit":1e5} # TODO load from run_exp.py  
         # self.hopf_bank_params = {"n_total":12, "n_starter":8, "n_deposit":2} # small test set
-        self.hopf_bank_params = {"n_total":4000, "n_starter":1000, "n_deposit":1000} # medium test set
-        self.hopf_starter_numsplits = 1
-        self.hopf_deposit_numsplits = 1
+        # self.hopf_time_step = 1e-2
+        # self.hopf_bank_params = {"n_total":4000, "n_starter":1000, "n_deposit":1000} # medium test set
+        # self.hopf_bank_params = {"n_total":40000, "n_starter":1000, "n_deposit":1000} # big test set
+        # self.hopf_starter_numsplits = 10
+        # self.hopf_deposit_numsplits = 10
         
         self.use_bank = use_bank
         if self.solve_hopf: self.make_bank = True # redundant safety
@@ -328,8 +330,8 @@ class ReachabilityDataset(Dataset):
                 self.hjpool.solve_bank_starter(self.hopf_bank_params, n_splits=self.hopf_starter_numsplits, print_sample=False)
                 self.solved_hopf_pts = self.hopf_bank_params["n_starter"]
 
-                ## Order initial bank deposit (non-blocking)
-                self.hjpool.solve_bank_deposit(model=None, n_splits=self.hopf_deposit_numsplits, blocking=True, print_sample=False)
+                ## Order initial bank deposit
+                self.hjpool.solve_bank_deposit(model=None, n_splits=self.hopf_deposit_numsplits, blocking=True, print_sample=False, concise=False)
 
         ## Load Memory Map of the Bank
         if self.use_bank:
@@ -393,11 +395,14 @@ class ReachabilityDataset(Dataset):
                         self.bank_index = torch.from_numpy(np.random.permutation(self.bank_total)) # reshuffle
                         self.block_counter = 0
 
+                    bank_sample = torch.from_numpy(self.bank[sample_index, :])
+
                 else:                    
                     sample_index = torch.from_numpy(np.random.permutation(min(self.solved_hopf_pts, self.hopf_bank_params["n_total"])))[:self.numpoints]
-                    ## TODO: do we want to select these in a more sophisticated matter? i.e. just last solved batch?
+                    ## FIXME: Iterate over all of them, dont be lazy
 
-                bank_sample = torch.from_numpy(self.bank[sample_index, :])
+                    with self.hjpool.lock:
+                        bank_sample = torch.from_numpy(self.bank[sample_index, :])                
 
                 # separate states so pde loss is not restricted to small bank sample
                 model_coords_hopf = bank_sample[:, 0:self.N+1] 

@@ -166,7 +166,7 @@ class Experiment(ABC):
 
                 ## if hopf-solving, check bank deposit orders
                 if self.dataset.solve_hopf:
-                    if self.dataset.hjpool.jobs:
+                    if epoch % 200 != 0: # self.dataset.hjpool.jobs
                         self.dataset.hjpool.check_jobs()
                     
                     ## Deposit jobs complete, recall with 
@@ -174,10 +174,11 @@ class Experiment(ABC):
                         self.dataset.solved_hopf_pts += self.dataset.hopf_bank_params["n_deposit"]
                         print(f"\nIn total, {self.dataset.solved_hopf_pts} hopf pts have been solved.")
 
+                        deposit_blocking = True
                         if self.dataset.hjpool.hopf_warm_start: #FIXME, blocking and print sample
-                            self.dataset.hjpool.solve_bank_deposit(model=self.model, n_splits=self.dataset.hopf_deposit_numsplits, blocking=False, print_sample=False)
+                            self.dataset.hjpool.solve_bank_deposit(model=self.model, n_splits=self.dataset.hopf_deposit_numsplits, blocking=deposit_blocking, print_sample=False, concise=False)
                         else:
-                            self.dataset.hjpool.solve_bank_deposit(model=None, n_splits=self.dataset.hopf_deposit_numsplits, blocking=False, print_sample=False)
+                            self.dataset.hjpool.solve_bank_deposit(model=None, n_splits=self.dataset.hopf_deposit_numsplits, blocking=deposit_blocking, print_sample=False, concise=False)
 
                         # if reset_after_deposit: #TODO
                         #     reset grad steps
