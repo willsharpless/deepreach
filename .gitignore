@@ -133,6 +133,9 @@ wandb
 
 # experiment data
 runs
+
+# hopf banked data
 Bank*
+alg_data_for_Bank*
 
 launch.json

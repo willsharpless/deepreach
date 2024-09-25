@@ -89,6 +89,7 @@ class HopfJuliaPool(object):
         with tqdm(total=num_hopf_workers) as pbar:
             
             for jid in range(num_hopf_workers):
+                # print("time_step", time_step)
                 job = self.pool.apply_async(self.init_solver, (dynamics_data, time_step, hopf_opt_p, settings))
                 self.jobs.append(job)
 

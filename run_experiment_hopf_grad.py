@@ -59,7 +59,7 @@ if __name__ == '__main__':
             p.add_argument('--' + param, type=experiment_params[param].annotation, required=True, help='special experiment_class argument')
 
         # simulation data source options
-        p.add_argument('--numpoints', type=int, default=10000, help='Number of points in simulation data source __getitem__.') # weird way to say batch size
+        p.add_argument('--numpoints', type=int, default=100000, help='Number of points in simulation data source __getitem__.') # weird way to say batch size
         p.add_argument('--pretrain', action='store_true', default=True, required=False, help='Pretrain dirichlet conditions')
         p.add_argument('--pretrain_iters', type=int, default=2000, required=False, help='Number of pretrain iterations')
         p.add_argument('--tMin', type=float, default=0.0, required=False, help='Start time of the simulation')
@@ -131,7 +131,7 @@ if __name__ == '__main__':
 
         # record set metrics
         p.add_argument('--gt_metrics', action='store_true', default=True, required=False, help='Compute and Score the Learned Set Similarity (Needs Ground Truth)')
-        p.add_argument('--temporal_loss', action='store_true', default=False, required=False, help='Compute the loss over time chunks (Slower)')
+        p.add_argument('--temporal_loss', action='store_true', default=True, required=False, help='Compute the loss over time chunks (Slower)')
         p.add_argument('--capacity_test', action='store_true', default=False, required=False, help='Use separate lr for Hopf Pretraining and Training')
 
         # load dynamics_class choices dynamically from dynamics module
@@ -195,7 +195,7 @@ if __name__ == '__main__':
                 # if opt.hopf_warm_start:
                 #     print(" DeepReach gradients will be passed to the hopf solvers to warm-start them.")
             else:
-                if opt.make_bank: print("   - made by interpolation of 2D DP, and stored in a static bank.")
+                if opt.use_bank and opt.bank_name == 'none': print("   - made by interpolation of 2D DP, and stored in a static bank.")
                 else: print(f"   - loaded from a static bank file, {opt.bank_name}.")
         else:
             print("   - sampled each iteration")
