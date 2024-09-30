@@ -401,7 +401,7 @@ redirect_stderr(log_f)"""
         with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
             mlog.write("\n############################# Bank Starter Log #############################")
 
-        print(f"\nSolving {self.n_starter} points to start the bank (in {n_splits} jobs for {self.num_hopf_workers} workers), composed of {total_spatial_pts} spatial x {self.tp} time pts ({split_size} per job).\n")
+        print(f"\n\nSolving {self.n_starter} points to start the bank (in {n_splits} jobs for {self.num_hopf_workers} workers), composed of {total_spatial_pts} spatial x {self.tp} time pts ({split_size} per job).")
 
         with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
 
@@ -486,8 +486,12 @@ redirect_stderr(log_f)"""
                         mlog.write('\n    ' + ' '.join(f"{bank[j, i]:<6.3f}" for i in range(bank.shape[1])))
                 mlog.write("\n")
 
+        self.alg_iter_comp_time = alg_data[self.start_aix:self.start_aix+n_splits, 3].mean()
+        self.alg_iter_MSE = alg_data[self.start_aix:self.start_aix+n_splits, 4].mean()
+        self.alg_iter_grad_MSE = alg_data[self.start_aix:self.start_aix+n_splits, 5].mean()
+
         self.alg_iter += 1
-        self.start_bix += self.n_starter
+        self.start_bix = self.n_starter % self.n_total
         self.start_aix += n_splits
     
     def solve_bank_deposit(self, model=None, n_splits=10, print_sample=False, blocking=False, print_sample_skip=100, concise=False):
@@ -510,7 +514,7 @@ redirect_stderr(log_f)"""
         if self.n_deposit / self.tp     != total_spatial_pts: raise AssertionError(f"Your bank isn't divided well: {self.n_deposit} deposit pts with {self.tp} tp gives {self.n_deposit / self.tp} pts/split, not an integer. Change your parameters.\n") 
         if total_spatial_pts == 0 or split_spatial_pts == 0 or split_size == 0: raise AssertionError(f"Your bank isn't divided well, one of your splits is 0. Change your parameters.\n")
 
-        print(f"\nSolving {self.n_deposit} points to deposit into the bank (in {n_splits} jobs for {self.num_hopf_workers} workers), composed of {total_spatial_pts} spatial x {self.tp} time pts ({split_size} per job).\n")
+        print(f"\n\nSolving {self.n_deposit} points to deposit into the bank (in {n_splits} jobs for {self.num_hopf_workers} workers), composed of {total_spatial_pts} spatial x {self.tp} time pts ({split_size} per job).")
 
         if self.alg_iter == 1 or not concise:
             with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
@@ -523,56 +527,60 @@ redirect_stderr(log_f)"""
                 mlog.write(f"\n    Time       : {self.tp} pts")
 
         tX_grads = np.zeros((self.N, split_spatial_pts, self.tp, n_splits))
-        # with tqdm(total=n_splits) as pbar:
-        
-        ## Define Xi splits and store
-        for i, ix in enumerate(range(self.start_bix, self.start_bix + self.n_deposit, split_size)):
-            Xi = np.random.uniform(-1, 1, (split_spatial_pts, self.N)) 
-            # TODO: try w/ fixed Xi to check BC for solve_hopf & w/o (to see alignment)
 
-            for j in range(self.tp):
-                tjXi = np.hstack((self.ts * (j+1) * np.ones((Xi.shape[0],1)), Xi))
-                with self.lock:
-                    bank[ix + j*split_spatial_pts: ix + (j+1)*split_spatial_pts, 0:self.N+1] = tjXi
-                
-                if self.hopf_warm_start and model: 
-                    model_input_model_coords = torch.from_numpy(tjXi).unsqueeze(0).cuda().float() # could be troublesome w cuda call, in this case has to happen outside! sampling will too for deposit
-                    model_results = model({'coords':model_input_model_coords})
-                    DxVi = self.dynamics.io_to_dv(model_results['model_in'], model_results['model_out'].squeeze(dim=-1)).squeeze(0).detach().cpu().numpy()[:,1:]
-                    tX_grads[:,:,j,i] = DxVi.T                    
+        ctx = tqdm(total=n_splits) if blocking else contextlib.nullcontext()
+
+        with ctx as pbar:
+            
+            ## Define Xi splits and store
+            for i, ix in enumerate(range(self.start_bix, self.start_bix + self.n_deposit, split_size)):
+                Xi = np.random.uniform(-1, 1, (split_spatial_pts, self.N)) 
+                # TODO: try w/ fixed Xi to check BC for solve_hopf & w/o (to see alignment)
+
+                for j in range(self.tp):
+                    tjXi = np.hstack((self.ts * (j+1) * np.ones((Xi.shape[0],1)), Xi))
                     with self.lock:
-                        bank[ix + j*split_spatial_pts: ix + (j+1)*split_spatial_pts, self.N+4:2*self.N+4] = DxVi
+                        bank[ix + j*split_spatial_pts: ix + (j+1)*split_spatial_pts, 0:self.N+1] = tjXi
                     
-        ## Execute (blocking) on all workers 
-        for i in range(n_splits):
+                    if self.hopf_warm_start and model: 
+                        model_input_model_coords = torch.from_numpy(tjXi).unsqueeze(0).cuda().float() # could be troublesome w cuda call, in this case has to happen outside! sampling will too for deposit
+                        model_results = model({'coords':model_input_model_coords})
+                        DxVi = self.dynamics.io_to_dv(model_results['model_in'], model_results['model_out'].squeeze(dim=-1)).squeeze(0).detach().cpu().numpy()[:,1:]
+                        tX_grads[:,:,j,i] = DxVi.T                    
+                        with self.lock:
+                            bank[ix + j*split_spatial_pts: ix + (j+1)*split_spatial_pts, self.N+4:2*self.N+4] = DxVi
+                        
+            ## Execute (blocking) on all workers 
+            for i in range(n_splits):
 
-            job_id, bank_ix, alg_dat_ix = i, self.start_bix + i*split_size, self.start_aix + i
-            shm_ix = (job_id, bank_ix, alg_dat_ix)
+                job_id, bank_ix, alg_dat_ix = i, self.start_bix + i*split_size, self.start_aix + i
+                shm_ix = (job_id, bank_ix, alg_dat_ix)
 
-            with self.lock:
-                Xi = bank[self.start_bix + i*split_size: self.start_bix + i*split_size + split_spatial_pts, 1:self.N+1].T
+                with self.lock:
+                    Xi = bank[self.start_bix + i*split_size: self.start_bix + i*split_size + split_spatial_pts, 1:self.N+1].T
+                
+                if self.hopf_warm_start:
+                    tX_grad = tX_grads[:,:,:,i]
+                else:
+                    tX_grad = None
+                
+                job = self.pool.apply_async(self.solve_hopf, (Xi, shm_data, shm_ix, tX_grad))
+                self.jobs.append(job)
             
-            if self.hopf_warm_start:
-                tX_grad = tX_grads[:,:,:,i]
-            else:
-                tX_grad = None
-            
-            job = self.pool.apply_async(self.solve_hopf, (Xi, shm_data, shm_ix, tX_grad))
-            self.jobs.append(job)
-        
-        if self.alg_iter == 1 or not concise:
-            with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
-                mlog.write(f"\n\n  ALGORITHM LOG")
-                mlog.write(f"\n    ITER       WORKER     JOB      TOTAL (s)        MEAN (s/pt)      MSE              MSE GRAD\n") 
+            if self.alg_iter == 1 or not concise:
+                with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
+                    mlog.write(f"\n\n  ALGORITHM LOG")
+                    mlog.write(f"\n    ITER       WORKER     JOB      TOTAL (s)        MEAN (s/pt)      MSE              MSE GRAD\n") 
 
-        if blocking:
-            while self.jobs:
-                for job in self.jobs:
-                    if job.ready():
-                        worker_id, job_id, total_time, mean_solve_time_ppt, MSE, MSE_grad = job.get()
-                        with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
-                            mlog.write(f"    {self.alg_iter:<9d}  {worker_id:<9d}  {job_id:<7d}  {total_time:<10.2e}  {mean_solve_time_ppt:<10.2e}  {MSE:<10.2e}  {MSE_grad:<10.2e}\n".replace("e", " x 10^"))
-                        self.jobs.remove(job)
+            if blocking:
+                while self.jobs:
+                    for job in self.jobs:
+                        if job.ready():
+                            worker_id, job_id, total_time, mean_solve_time_ppt, MSE, MSE_grad = job.get()
+                            with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
+                                mlog.write(f"    {self.alg_iter:<9d}  {worker_id:<9d}  {job_id:<7d}  {total_time:<10.2e}  {mean_solve_time_ppt:<10.2e}  {MSE:<10.2e}  {MSE_grad:<10.2e}\n".replace("e", " x 10^"))
+                            self.jobs.remove(job)
+                            pbar.update(1)
             
         print("Finished executing bank despoit.\n")
 
@@ -602,11 +610,12 @@ redirect_stderr(log_f)"""
                         mlog.write('\n    ' + ' '.join(f"{bank[j, i]:<6.3f}" for i in range(bank.shape[1])))
                 mlog.write("\n")
 
-        self.alg_iter += 1 ## maybe should move to check_jobs (waiting for their completion), 
-        if self.start_bix + self.n_deposit == self.n_total:
-            self.start_bix = 0
-        else:
-            self.start_bix += self.n_deposit
+        self.alg_iter_comp_time = alg_data[self.start_aix:self.start_aix+n_splits, 3].mean()
+        self.alg_iter_MSE = alg_data[self.start_aix:self.start_aix+n_splits, 4].mean()
+        self.alg_iter_grad_MSE = alg_data[self.start_aix:self.start_aix+n_splits, 5].mean()
+
+        self.alg_iter += 1 # maybe should move to check_jobs (waiting for their completion)
+        self.start_bix = (self.start_bix + self.n_deposit) % self.n_total
         self.start_aix += n_splits
 
     def check_jobs(self):
