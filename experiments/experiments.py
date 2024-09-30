@@ -98,10 +98,12 @@ class Experiment(ABC):
             val_x_resolution, val_y_resolution, val_z_resolution, val_time_resolution,
             use_CSL, CSL_lr, CSL_dt, epochs_til_CSL, num_CSL_samples, CSL_loss_frac_cutoff, max_CSL_epochs, CSL_loss_weight, CSL_batch_size,
             dual_lr=False, lr_decay_w=1., lr_hopf=2e-5, lr_hopf_decay_w=1., smoothing_factor=0.8, 
-            hopf_loss='none', hopf_loss_decay_early = True, hopf_loss_decay=True, hopf_loss_decay_w=0.9998, 
+            hopf_loss='none', hopf_loss_decay_early = True, hopf_loss_decay=True, hopf_loss_decay_w=0.9998,
+            reset_loss_w=False, reset_loss_period=0, 
             diff_con_loss_incr=False, hopf_loss_decay_rate = 'exponential',
             nonlin_scale=False, nl_scale_epoch_step=10000, nl_scale_epoch_post=10000, 
-            record_temporal_loss = False,
+            record_temporal_loss = False, 
+            deposit_blocking = True, deposit_blocking_period = 5000 # seg faults if nonblocking rn...
         ):
         was_eval = not self.model.training
         self.model.train()
@@ -154,6 +156,7 @@ class Experiment(ABC):
             loss_weights['hopf'] = 1 - (hopf_loss_decay_w ** (epochs - 1 - total_pretrain_iters))
         if hopf_loss == 'lin_val_grad_diff':
             loss_weights['hopf_grad'] = loss_weights['hopf']
+        og_loss_weights = loss_weights.copy()
 
         with tqdm(total=len(train_dataloader) * epochs) as pbar:
             train_losses = []
@@ -164,23 +167,29 @@ class Experiment(ABC):
                 time_interval_length = (self.dataset.counter/self.dataset.counter_end)*(self.dataset.tMax-self.dataset.tMin)
                 CSL_tMax = self.dataset.tMin + int(time_interval_length/CSL_dt)*CSL_dt
 
-                ## if hopf-solving, check bank deposit orders
-                if self.dataset.solve_hopf:
-                    if epoch % 200 != 0: # self.dataset.hjpool.jobs
+                if reset_loss_w and epoch % reset_loss_period == 0 and not self.dataset.pretrain and not self.dataset.hopf_pretrain:
+                    loss_weights = og_loss_weights.copy()
+
+                ## If hopf-solving, Bank Deposits
+                if self.dataset.solve_hopf and epoch > self.dataset.pretrain_iters and (loss_weights['hopf'] > 0. or reset_loss_w):
+                    
+                    ## Check Deposit Jobs
+                    if not deposit_blocking and self.dataset.hjpool.jobs: # self.dataset.hjpool.jobs # FIXME: fix segf's
                         self.dataset.hjpool.check_jobs()
                     
-                    ## Deposit jobs complete, recall with 
-                    else:
-                        self.dataset.solved_hopf_pts += self.dataset.hopf_bank_params["n_deposit"]
-                        print(f"\nIn total, {self.dataset.solved_hopf_pts} hopf pts have been solved.")
+                    ## Reorder Deposit Jobs
+                    elif (not deposit_blocking and not self.dataset.hjpool.jobs) or (deposit_blocking and (epoch-self.dataset.pretrain_iters) % deposit_blocking_period == 0):
 
-                        deposit_blocking = True
-                        if self.dataset.hjpool.hopf_warm_start: #FIXME, blocking and print sample
-                            self.dataset.hjpool.solve_bank_deposit(model=self.model, n_splits=self.dataset.hopf_deposit_numsplits, blocking=deposit_blocking, print_sample=False, concise=False)
+                        if self.dataset.hjpool.hopf_warm_start:
+                            self.dataset.hjpool.solve_bank_deposit(model=self.model, n_splits=self.dataset.hopf_deposit_numsplits, blocking=deposit_blocking)
                         else:
-                            self.dataset.hjpool.solve_bank_deposit(model=None, n_splits=self.dataset.hopf_deposit_numsplits, blocking=deposit_blocking, print_sample=False, concise=False)
+                            self.dataset.hjpool.solve_bank_deposit(model=None, n_splits=self.dataset.hopf_deposit_numsplits, blocking=deposit_blocking)
 
-                        # if reset_after_deposit: #TODO
+                        self.dataset.solved_hopf_pts += self.dataset.hopf_bank_params["n_deposit"]
+                        self.max_solved_ix = min(self.dataset.solved_hopf_pts, self.dataset.hopf_bank_params["n_total"])
+                        print(f"In total, {self.dataset.solved_hopf_pts} hopf pts have been solved.\n")
+
+                        # if reset_loss_w: #TODO
                         #     reset grad steps
 
                 ## Parameter Scaling for Nonlinearity Curriculum #TODO: generalize to other dynamics
@@ -393,6 +402,11 @@ class Experiment(ABC):
                             if hopf_loss_decay and epoch >= total_pretrain_iters:
                                 log_dict['hopf_weight'] = loss_weights['hopf']
                                 log_dict['pde_weight'] = loss_weights['diff_constraint_hom']
+
+                            if self.dataset.solve_hopf and self.dataset.record_gt_metrics:
+                                log_dict['Hopf Value MSE'] = self.dataset.hjpool.alg_iter_MSE
+                                log_dict['Hopf Gradient MSE'] = self.dataset.hjpool.alg_iter_grad_MSE
+                                log_dict['Hopf Compute Time (ppt)'] = self.dataset.hjpool.alg_iter_comp_time
 
                             if record_temporal_loss:
                                 for ti in range(len(temporal_loss_times)-1):
