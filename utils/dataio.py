@@ -15,11 +15,12 @@ class ReachabilityDataset(Dataset):
     def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, 
                  use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0, record_gt_metrics=False, solve_grad=False,
                  manual_load=False, load_packet=None, no_curriculum=False, use_bank=False, bank_name=None, capacity_test=False,
-                 solve_hopf=False, hopf_warm_start=True, hopf_time_step=5e-2, num_hopf_workers=5, hopf_starter_numsplits=400, hopf_deposit_numsplits=5,
+                 solve_hopf=False, hopf_warm_start=False, hopf_time_step=1e-1, num_hopf_workers=5, hopf_starter_numsplits=1000, hopf_deposit_numsplits=1000,
                  hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100},
-                 hopf_bank_params = {"n_total":int(2e6), "n_starter":int(2e6), "n_deposit":int(1e4)}, 
+                 hopf_bank_params = {"n_total":int(2e6), "n_starter":int(2e6), "n_deposit":int(1e6)}, 
+                #  hopf_bank_params = {"n_total":int(4e6), "n_starter":int(4e6), "n_deposit":int(2e6)}, 
                 #  hopf_bank_params = {"n_total":int(1e5), "n_starter":int(1e5), "n_deposit":int(1e3)}, 
-                 save_hopf_bank=True,
+                 hopf_bank_save_quit=False,
                  ):
 
         self.dynamics = dynamics
@@ -72,8 +73,9 @@ class ReachabilityDataset(Dataset):
 
         if self.solve_hopf:
             self.bank_total = hopf_bank_params["n_total"]
+            self.numblocks = int(self.bank_total / numpoints) 
         else:
-            self.numblocks = 20 # batch-sizes per bank, #FIXME: doesn't work w hopf-loaded
+            self.numblocks = 40 # batch-sizes per bank, #FIXME: should be automatic
             self.bank_total = numpoints * self.numblocks
 
         if self.bank_total >= 1e6:
@@ -91,7 +93,7 @@ class ReachabilityDataset(Dataset):
             bank_name = "Bank_" + make_tag + str(self.N)+"D_"+ qty_tag + "pts_r" + str(int(100 * dynamics.goalR_2d)) + "e-2_g" + str(int(dynamics.gamma)) + "m" + str(int(dynamics.mu)) + "a" + str(int(dynamics.alpha)) + ".npy"
         self.bank_name = bank_name
         self.mp_bank = "mp" in bank_name
-        self.save_hopf_bank = save_hopf_bank
+        self.hopf_bank_save_quit = hopf_bank_save_quit
 
         if manual_load: # added this to skirt WandB sweep + PyCall imcompatibility (not working)
             self.V_hopf_itp, self.fast_interp, self.V_hopf, self.V_DP_itp, self.V_DP = load_packet
@@ -171,6 +173,7 @@ class ReachabilityDataset(Dataset):
                                                     num_hopf_workers=self.num_hopf_workers)      
                 
         ## Get Ground Truth for Special N-Dimensional Decomposable LessLinear System
+        # TODO put this into a fn jesus
         if record_gt_metrics:
             if not(manual_load):
 
@@ -342,18 +345,20 @@ class ReachabilityDataset(Dataset):
                 ## Solve bank starter (blocks until completion)
                 self.hjpool.solve_bank_starter(self.hopf_bank_params, n_splits=self.hopf_starter_numsplits, print_sample=False)
                 self.solved_hopf_pts = self.hopf_bank_params["n_starter"]
+                self.max_solved_ix = min(self.solved_hopf_pts, self.hopf_bank_params["n_total"])
 
-                ## Order initial bank deposit
-                if not self.save_hopf_bank:
-                    self.hjpool.solve_bank_deposit(model=None, n_splits=self.hopf_deposit_numsplits, blocking=True, print_sample=False, concise=False)
+                # ## Order initial bank deposit
+                # if not self.hopf_bank_save_quit: ## FIXME blocking = True due to segf
+                #     self.hjpool.solve_bank_deposit(model=None, n_splits=self.hopf_deposit_numsplits, blocking=True, print_sample=False, concise=False) ## BUG: concise causes segf...?
+                #     self.alg_iter_comp_time_deposit = self.hjpool.alg_iter_comp_time
+                #     self.alg_iter_MSE_deposit = self.hjpool.alg_iter_MSE
+                #     self.alg_iter_grad_MSE_deposit = self.hjpool.alg_iter_grad_MSE
 
         ## Load Memory Map of the Bank
         if self.use_bank:
             
             if not self.solve_hopf:
                 self.bank = np.load(self.llnd_path + "banks/" + self.bank_name, mmap_mode='r')
-                self.bank_index = torch.from_numpy(np.random.permutation(self.bank_total)) # random shuffle for sampling
-                self.block_counter = 0
             
             else:
                 self.shm_states = SharedMemory(name=self.hjpool.shm_states_id)
@@ -361,12 +366,16 @@ class ReachabilityDataset(Dataset):
                 self.bank = np.ndarray(self.hjpool.shm_states_shape, dtype=np.float32, buffer=self.shm_states.buf)
                 self.alg_data = np.ndarray(self.hjpool.shm_algdat_shape, dtype=np.float32, buffer=self.shm_algdat.buf)
 
-                if self.save_hopf_bank:
+                if self.hopf_bank_save_quit:
                     print("Done. Written to " + self.bank_name + ".\n")
                     np.save(self.llnd_path + "banks/" + self.bank_name, self.bank)
                     np.save(self.llnd_path + "banks/alg_data_for_" + self.bank_name, self.bank)
                     self.hjpool.dispose()
                     sys.exit()
+            
+            if not self.solve_hopf or self.hopf_bank_params["n_starter"] == self.hopf_bank_params["n_total"]:
+                self.bank_index = torch.from_numpy(np.random.permutation(self.bank_total)) # random shuffle for sample bank
+                self.block_counter = 0
                     
     def __len__(self):
         return 1
@@ -408,20 +417,19 @@ class ReachabilityDataset(Dataset):
             ## Sample Bank of Hopf-Evaluated Points
             elif self.use_bank:
 
-                if not self.solve_hopf:
+                if not self.solve_hopf or self.hopf_bank_params["n_starter"] == self.hopf_bank_params["n_total"]:
                     sample_index = self.bank_index[self.block_counter * self.numpoints : (self.block_counter+1) * self.numpoints]
                 
                     self.block_counter += 1
                     if self.block_counter == self.numblocks:
                         self.bank_index = torch.from_numpy(np.random.permutation(self.bank_total)) # reshuffle
                         self.block_counter = 0
-
-                    bank_sample = torch.from_numpy(self.bank[sample_index, :])
-
                 else:                    
-                    sample_index = torch.from_numpy(np.random.permutation(min(self.solved_hopf_pts, self.hopf_bank_params["n_total"])))[:self.numpoints]
-                    ## FIXME: Iterate over all of them, dont be lazy
+                    sample_index = torch.from_numpy(np.random.permutation(self.max_solved_ix))[:self.numpoints]
 
+                if not self.solve_hopf or self.hopf_bank_params["n_starter"] == self.hopf_bank_params["n_total"]:
+                    bank_sample = torch.from_numpy(self.bank[sample_index, :])
+                else:
                     with self.hjpool.lock:
                         bank_sample = torch.from_numpy(self.bank[sample_index, :])                
 
