@@ -14,10 +14,8 @@ from experiments import experiments
 from utils import modules, dataio, losses
 
 import multiprocessing as mp
-# mp.set_start_method('spawn', force=True)
 
 if __name__ == '__main__':
-    # mp.freeze_support()
     mp.set_start_method('spawn', force=True)
         
     p = configargparse.ArgumentParser()
@@ -31,13 +29,14 @@ if __name__ == '__main__':
 
     # general options
     p.add_argument('--N', default=7, required=False, type=int, help='Dimension of validation model')
-    p.add_argument('--timing', action='store_true', default=False, required=False, help='Gives detailed computation times')
+    p.add_argument('--timing', action='store_true', default=False, required=False, help='Gives detailed breakdown of computation times per iteration')
     p.add_argument('--use_bank', action='store_true', default=False, required=False, help='Makes/loads a state & value bank to reduce compute')
     p.add_argument('--bank_name', type=str, default='none', required=False, help='Name of the state & value bank file (if none and using bank, will make)')
     p.add_argument('--solve_hopf', action='store_true', default=False, required=False, help='Dynamically makes a state & value bank by iteratively solving the Hopf formula')
     p.add_argument('--hopf_warm_start', action='store_true', default=False, required=False, help='Passes estimated gradients from DeepReach to the Hopf solvers to warm-start them')
     p.add_argument('--load_hopf_model', action='store_true', default=False, required=False, help='Model to load for the supervision')
     p.add_argument('--load_hopf_model_name', type=str, default='capacity_linear', help='Supervision model name')
+    p.add_argument('--load_model_type', type=str, default='learned', choices=['learned', 'DP'], help='Type of loaded model')
 
     use_wandb = p.parse_known_args()[0].use_wandb
     if use_wandb:
@@ -113,7 +112,7 @@ if __name__ == '__main__':
         ## loss options
         p.add_argument('--minWith', type=str, default='target', choices=['none', 'zero', 'target'], help='BRS vs BRT computation (typically should be using target for BRT)') #FIXME: required=True instead of default
         
-        ## hopf options
+        ## Hopf options
         p.add_argument('--hopf_loss', type=str, default='lin_val_diff', choices=['none', 'lin_val_diff', 'lin_val_grad_diff'], help='Method for using Hopf data')
         p.add_argument('--hopf_loss_divisor', default=5, required=False, type=float, help='What to divide the hopf loss by for loss reweighting')
         p.add_argument('--solve_grad', action='store_true', default=False, required=False, help='Compute gradient of linear guide (forced true if grad loss), but slower')
@@ -128,17 +127,18 @@ if __name__ == '__main__':
         p.add_argument('--dual_lr', action='store_true', default=True, required=False, help='Use separate lr for Hopf Pretraining and Training')
         p.add_argument('--lr_hopf', default=2e-5, required=False, type=float, help='Learning rate in hopf pretraining')
         p.add_argument('--lr_hopf_decay_w', default=1, required=False, type=float, help='LR exponential decay rate in hopf pretraining')
-        p.add_argument('--nl_scale', action='store_true', default=False, required=False, help='Scales the "amount" of nonlinearity over training') # TODO: add choice of epochs, add correct contour
+        p.add_argument('--nl_scale', action='store_true', default=False, required=False, help='Scales the "amount" of nonlinearity over training') # TODO: add correct contour?
         p.add_argument('--nl_scale_epoch_step', type=int, default=10000, required=False, help='Interval (after pt) to step the nonlinearity scale')
         p.add_argument('--nl_scale_epoch_post', type=int, default=50000, required=False, help='Number of epochs to add after nonlinearity scaling')
-        # p.add_argument('--temporal_weighting', action='store_true', default=False, required=False, help='Inversely weights the samples in the loss w.r.t. time')
-        # p.add_argument('--reset_loss_w', action='store_true', default=False, required=False, help='Resets the loss weights to their values at the beginning of training (pre-decay)')
-        # p.add_argument('--reset_loss_period', type=int, default=500, required=False, help='The loss weight reset period')
+        p.add_argument('--temporal_weighting', action='store_true', default=False, required=False, help='Inversely weights the samples in the loss w.r.t. time')
+        p.add_argument('--reset_loss_w', action='store_true', default=False, required=False, help='Resets the loss weights to their values at the beginning of training (pre-decay)')
+        p.add_argument('--reset_loss_period', type=int, default=500, required=False, help='The loss weight reset period')
 
         ## other WAS args
         p.add_argument('--gt_metrics', action='store_true', default=True, required=False, help='Compute and score the learned value and set (needs ground truth)')
         p.add_argument('--temporal_loss', action='store_true', default=True, required=False, help='Compute the loss over time chunks (slower)')
         p.add_argument('--capacity_test', action='store_true', default=False, required=False, help='Will use supervised-learning to train with the true solution (needs ground truth)')
+        p.add_argument('--debug_params', action='store_true', default=False, required=False, help='Quick params for debugging')
 
         # load dynamics_class choices dynamically from dynamics module
         dynamics_classes_dict = {name: clss for name, clss in inspect.getmembers(dynamics, inspect.isclass) if clss.__bases__[0] == dynamics.Dynamics}
@@ -162,6 +162,13 @@ if __name__ == '__main__':
         p.add_argument('--data_step', type=str, default='run_basic_recovery', choices=['plot_violations', 'run_basic_recovery', 'plot_basic_recovery', 'collect_samples', 'train_binner', 'run_binned_recovery', 'plot_binned_recovery', 'plot_cost_function'], help='The data processing step to run')
 
     opt = p.parse_args()
+
+    if opt.debug_params:
+        opt.pretrain_iters = 2
+        opt.hopf_pretrain_iters = 2
+        opt.num_epochs = 20
+        opt.epochs_til_ckpt = 10
+        opt.use_bank = False
 
     if opt.capacity_test:
         opt.pretrain_iters = 1
@@ -194,11 +201,6 @@ if __name__ == '__main__':
     if opt.capacity_test: print(" - using supervised learning of ground truth (capacity test)")
     elif opt.hopf_loss != 'none': 
         print(f" - with hopf loss {opt.hopf_loss}")
-        if opt.hopf_loss_decay:
-            if opt.diff_con_loss_incr:
-                print(f"  - decayed in a(n) {opt.hopf_loss_decay_type} fashion, and similarly PDE introduction")
-            else:
-                print(f"  - decayed in a(n) {opt.hopf_loss_decay_type} fashion")
         print("  - linear data will be,")
         if opt.use_bank:
             if opt.solve_hopf:
@@ -209,20 +211,19 @@ if __name__ == '__main__':
                 if opt.use_bank and opt.bank_name == 'none': print("   - made by interpolation of 2D DP, and stored in a static bank.")
                 else: print(f"   - loaded from a static bank file, {opt.bank_name}.")
         else:
-            print("   - sampled each iteration")
+            print(f"   - sampled each iteration from a {opt.load_model_type} linear model")
         if opt.solve_grad:
             print( "  - linear gradients will be solved")
+        if opt.hopf_loss_decay:
+            if opt.diff_con_loss_incr:
+                print(f"  - decayed in a(n) {opt.hopf_loss_decay_type} fashion, and similarly PDE introduction")
+            else:
+                print(f"  - decayed in a(n) {opt.hopf_loss_decay_type} fashion")
+        if opt.nl_scale:
+            print(f"  - nonlinearly transitioned by {100 * (opt.nl_scale_epoch_step/(opt.num_epochs-(opt.pretrain_iters+opt.hopf_pretrain_iters+opt.nl_scale_epoch_post))):2.1f} % per {opt.nl_scale_epoch_step} epochs")
     else: 
         print(" - via the original method (baseline).")
     print("")
-
-    debugging = False
-    if debugging:
-        opt.pretrain_iters = 2
-        opt.hopf_pretrain_iters = 2
-        opt.num_epochs = 10
-        opt.epochs_til_ckpt = 15
-        opt.use_bank = False
         
     # start wandb
     if use_wandb:

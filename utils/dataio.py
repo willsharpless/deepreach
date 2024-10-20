@@ -101,19 +101,20 @@ class ReachabilityDataset(Dataset):
         self.mp_bank = "mp" in bank_name
         self.hopf_bank_save_quit = hopf_bank_save_quit
 
-        # added this to skirt WandB sweep + PyCall imcompatibility (still not working)
+        # Dynamic Programming Manual Load (added this to skirt WandB sweep + PyCall imcompatibility but still not working)
         if dp_manual_load: 
             self.V_hopf_itp, self.fast_interp, self.V_hopf, self.V_DP_itp, self.V_DP = load_packet
 
         # Load a pretrained model for hopf supervision
-        self.loaded_model = loaded_model.cuda()
+        self.loaded_model = loaded_model
+        if loaded_model: self.loaded_model = loaded_model.cuda()
         self.load_hopf_model = loaded_model is not None
         
         ## Compute Linear Value from Model (if hopf loss)
         if use_hopf and not(dp_manual_load):
 
             if self.load_hopf_model:
-                pass # clean the system
+                pass # done
 
             ## Load Linear DP Solution for Proof-of-Concept (Faster & Higher-Fidelity than actual Hopf Solving)
             elif not self.solve_hopf:

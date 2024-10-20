@@ -309,7 +309,7 @@ class Experiment(ABC):
                                 loss_weights['hopf'] = 1 - hopf_loss_decay_w * (epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters)
                             elif hopf_loss_decay_type == 'negative_exponential' and epoch > total_pretrain_iters:
                                 loss_weights['hopf'] = 1 - ((1 - loss_weights['hopf']) / hopf_loss_decay_w)
-                            else:
+                            elif hopf_loss_decay_type not in ['exponential', 'linear', 'negative_exponential']:
                                 raise NotImplementedError
                         loss_weights['hopf'] = min(max(loss_weights['hopf'], 0.), 1.)
                         
