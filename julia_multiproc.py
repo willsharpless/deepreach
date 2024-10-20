@@ -492,7 +492,7 @@ redirect_stderr(log_f)"""
 
         self.alg_iter += 1
         self.start_bix = self.n_starter % self.n_total
-        self.start_aix += n_splits
+        self.start_aix += n_splits % self.shm_algdat_shape[0]
     
     def solve_bank_deposit(self, model=None, n_splits=10, print_sample=False, blocking=False, print_sample_skip=100, concise=False):
         
@@ -616,7 +616,7 @@ redirect_stderr(log_f)"""
 
         self.alg_iter += 1 # maybe should move to check_jobs (waiting for their completion)
         self.start_bix = (self.start_bix + self.n_deposit) % self.n_total
-        self.start_aix += n_splits
+        self.start_aix = (self.start_aix + n_splits) % self.shm_algdat_shape[0]
 
     def check_jobs(self):
         for job in self.jobs:
