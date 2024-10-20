@@ -540,6 +540,7 @@ class LessLinearND(Dynamics):
         self.C = torch.cat((torch.zeros(1,N-1), 0.1*torch.eye(N-1)), 0)
         self.Cdmax = d_max * torch.matmul(self.C, torch.ones(self.N-1)).unsqueeze(0).unsqueeze(0).cuda()
         self.gamma, self.mu, self.alpha = gamma, mu, alpha
+        self.gamma_orig, self.mu_orig, self.alpha_orig = gamma, mu, alpha
 
         self.goalR_2d = goalR
         self.goalR = ((N-1) ** 0.5) * self.goalR_2d # accounts for N-dimensional combination
@@ -556,6 +557,11 @@ class LessLinearND(Dynamics):
             value_normto=0.02,
             deepreach_model="exact",
         )
+
+    def vary_nonlinearity(self, epsilon):
+        self.gamma = epsilon * self.gamma_orig
+        self.mu = epsilon * self.mu_orig
+        self.alpha = epsilon * self.alpha_orig
 
     def state_test_range(self):
         return [[-1, 1] for _ in range(self.N)]

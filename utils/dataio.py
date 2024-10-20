@@ -14,13 +14,16 @@ import julia_multiproc
 class ReachabilityDataset(Dataset):
     def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, 
                  use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0, record_gt_metrics=False, solve_grad=False,
-                 manual_load=False, load_packet=None, no_curriculum=False, use_bank=False, bank_name=None, capacity_test=False,
-                 solve_hopf=False, hopf_warm_start=False, hopf_time_step=1e-1, num_hopf_workers=5, hopf_starter_numsplits=1000, hopf_deposit_numsplits=1000,
+                 dp_manual_load=False, load_packet=None, no_curriculum=False, use_bank=False, bank_name=None, capacity_test=False,
+                 solve_hopf=False, hopf_warm_start=False, hopf_time_step=1e-2, num_hopf_workers=10, hopf_starter_numsplits=1000, hopf_deposit_numsplits=1000,
+                #  solve_hopf=False, hopf_warm_start=False, hopf_time_step=1e-1, num_hopf_workers=10, hopf_starter_numsplits=200, hopf_deposit_numsplits=200,
                  hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100},
-                 hopf_bank_params = {"n_total":int(2e6), "n_starter":int(2e6), "n_deposit":int(1e6)}, 
+                #  hopf_bank_params = {"n_total":int(4e6), "n_starter":int(4e6), "n_deposit":int(4e6)}, # to make static bank
+                 hopf_bank_params = {"n_total":int(1e5), "n_starter":int(1e5), "n_deposit":int(1e5)}, # dynamic refresh
                 #  hopf_bank_params = {"n_total":int(4e6), "n_starter":int(4e6), "n_deposit":int(2e6)}, 
                 #  hopf_bank_params = {"n_total":int(1e5), "n_starter":int(1e5), "n_deposit":int(1e3)}, 
-                 hopf_bank_save_quit=False,
+                 hopf_bank_save_quit=False, refine_bank=False,
+                 loaded_model=None,
                  ):
 
         self.dynamics = dynamics
@@ -67,6 +70,7 @@ class ReachabilityDataset(Dataset):
         
         self.use_bank = use_bank
         self.make_bank = use_bank and bank_name == 'none'
+        self.refine_bank = refine_bank
 
         if self.solve_hopf: 
             self.make_bank = True # redundant safety
@@ -87,7 +91,9 @@ class ReachabilityDataset(Dataset):
 
         if bank_name is None or bank_name == 'none': 
             if self.solve_hopf:
-                make_tag = "DPitp_mp_" 
+                make_tag = "Hopf_mp_" 
+                if self.refine_bank:
+                    make_tag = make_tag + "refined_"
             else:
                 make_tag = "DPitp_"
             bank_name = "Bank_" + make_tag + str(self.N)+"D_"+ qty_tag + "pts_r" + str(int(100 * dynamics.goalR_2d)) + "e-2_g" + str(int(dynamics.gamma)) + "m" + str(int(dynamics.mu)) + "a" + str(int(dynamics.alpha)) + ".npy"
@@ -95,14 +101,22 @@ class ReachabilityDataset(Dataset):
         self.mp_bank = "mp" in bank_name
         self.hopf_bank_save_quit = hopf_bank_save_quit
 
-        if manual_load: # added this to skirt WandB sweep + PyCall imcompatibility (not working)
+        # added this to skirt WandB sweep + PyCall imcompatibility (still not working)
+        if dp_manual_load: 
             self.V_hopf_itp, self.fast_interp, self.V_hopf, self.V_DP_itp, self.V_DP = load_packet
+
+        # Load a pretrained model for hopf supervision
+        self.loaded_model = loaded_model.cuda()
+        self.load_hopf_model = loaded_model is not None
         
         ## Compute Linear Value from Model (if hopf loss)
-        if use_hopf and not(manual_load):
+        if use_hopf and not(dp_manual_load):
+
+            if self.load_hopf_model:
+                pass # clean the system
 
             ## Load Linear DP Solution for Proof-of-Concept (Faster & Higher-Fidelity than actual Hopf Solving)
-            if not self.solve_hopf:
+            elif not self.solve_hopf:
                 
                 ## julia code opt returns values or values and grads
                 jl.seval("using JLD, JLD2, Interpolations")
@@ -134,7 +148,7 @@ class ReachabilityDataset(Dataset):
                     
                     ## Load 2D DP Solution
                     # LessLinear2D_interpolations = jl.load(self.llnd_path + "interps/old/LessLinear2D1i_interpolations_res1e-2_r15e-2.jld", "LessLinear2D_interpolations")
-                    LessLinear2D_interpolations = jl.load(self.llnd_path + "interps/LessLinear2D1i_interpolations_res1e-2_r15e-2_c20.jld", "LessLinear2D_interpolations")
+                    LessLinear2D_interpolations = jl.load(self.llnd_path + "interps/LessLinear2D1i_interpolations_res1e-2_r15e-2_c5.jld", "LessLinear2D_interpolations")
                     self.V_hopf_itp = LessLinear2D_interpolations["g0_m0_a0"] ## (using gt)
                     
                     ## Capacity Test: Load Ground Truth for Supervised-Learning
@@ -175,7 +189,7 @@ class ReachabilityDataset(Dataset):
         ## Get Ground Truth for Special N-Dimensional Decomposable LessLinear System
         # TODO put this into a fn jesus
         if record_gt_metrics:
-            if not(manual_load):
+            if not(dp_manual_load):
 
                 jl.seval("using JLD, JLD2, Interpolations")
                 fast_interp_exec = """
@@ -204,7 +218,7 @@ class ReachabilityDataset(Dataset):
 
                 elif self.N > 2:
                     # LessLinear2D_interpolations = jl.load(self.llnd_path + "interps/old/LessLinear2D1i_interpolations_res1e-2_r15e-2.jld", "LessLinear2D_interpolations")
-                    LessLinear2D_interpolations = jl.load(self.llnd_path + "interps/LessLinear2D1i_interpolations_res1e-2_r15e-2_c20.jld", "LessLinear2D_interpolations")
+                    LessLinear2D_interpolations = jl.load(self.llnd_path + "interps/LessLinear2D1i_interpolations_res1e-2_r15e-2_c5.jld", "LessLinear2D_interpolations")
                     
                     model_key = "g" + str(int(self.dynamics.gamma)) + "_m" + str(int(self.dynamics.mu)) + "_a"  + str(int(self.dynamics.alpha))
                     self.V_DP_itp = LessLinear2D_interpolations[model_key]
@@ -347,12 +361,39 @@ class ReachabilityDataset(Dataset):
                 self.solved_hopf_pts = self.hopf_bank_params["n_starter"]
                 self.max_solved_ix = min(self.solved_hopf_pts, self.hopf_bank_params["n_total"])
 
-                # ## Order initial bank deposit
-                # if not self.hopf_bank_save_quit: ## FIXME blocking = True due to segf
-                #     self.hjpool.solve_bank_deposit(model=None, n_splits=self.hopf_deposit_numsplits, blocking=True, print_sample=False, concise=False) ## BUG: concise causes segf...?
-                #     self.alg_iter_comp_time_deposit = self.hjpool.alg_iter_comp_time
-                #     self.alg_iter_MSE_deposit = self.hjpool.alg_iter_MSE
-                #     self.alg_iter_grad_MSE_deposit = self.hjpool.alg_iter_grad_MSE
+                ## Refine Bank 
+                # (this is inefficient unless we have synergy, otherwise TODO hopf solve samples in curriculum-like fashion)
+                if refine_bank:
+                    if hopf_bank_params["n_total"] != hopf_bank_params["n_starter"] and hopf_bank_params["n_total"] != hopf_bank_params["n_deposit"]: raise AssertionError("Bank refinement needs equivalent bank params")
+                    
+                    self.shm_states = SharedMemory(name=self.hjpool.shm_states_id)
+                    self.bank = np.ndarray(self.hjpool.shm_states_shape, dtype=np.float32, buffer=self.shm_states.buf)
+
+                    self.refined_bank = np.zeros(self.hjpool.shm_states_shape, dtype=np.float32)
+                    n_spatial = int(self.bank_total * self.hopf_time_step)
+                    n_spatial_split = int(n_spatial / hopf_starter_numsplits)
+                    n_split_size = int(self.bank_total / hopf_starter_numsplits)
+                    n_tp = int(1/self.hopf_time_step)
+                    c_refines = 0
+
+                    for j in range(hopf_starter_numsplits):
+                        for i in range(n_spatial_split):
+                            bix = j * n_split_size + i + np.random.randint(n_tp) * n_spatial_split
+                            rbix = c_refines * n_spatial + j * n_spatial_split + i
+                            self.refined_bank[rbix, :] = self.bank[bix, :]
+                    c_refines += 1
+
+                    for k in range(n_tp-1):
+                        refine_start = time.time()
+                        self.hjpool.solve_bank_deposit(model=None, n_splits=self.hopf_deposit_numsplits, blocking=True) ## BUG: concise causes segf...?
+                        for j in range(hopf_starter_numsplits):
+                            for i in range(n_spatial_split):
+                                bix = j * n_split_size + i + np.random.randint(n_tp) * n_spatial_split
+                                rbix = c_refines * n_spatial + j * n_spatial_split + i
+                                self.refined_bank[rbix, :] = self.bank[bix, :]
+                        c_refines += 1
+                        refine_time = (time.time() - refine_start)
+                        print(f"Completed ({c_refines}/{n_tp}), est. time left: {refine_time*(n_tp  - c_refines)/60:<4.1f} mins")
 
         ## Load Memory Map of the Bank
         if self.use_bank:
@@ -368,8 +409,11 @@ class ReachabilityDataset(Dataset):
 
                 if self.hopf_bank_save_quit:
                     print("Done. Written to " + self.bank_name + ".\n")
-                    np.save(self.llnd_path + "banks/" + self.bank_name, self.bank)
-                    np.save(self.llnd_path + "banks/alg_data_for_" + self.bank_name, self.bank)
+                    if self.refine_bank:
+                        np.save(self.llnd_path + "banks/" + self.bank_name, self.refined_bank)
+                    else:
+                        np.save(self.llnd_path + "banks/" + self.bank_name, self.bank)
+                    np.save(self.llnd_path + "banks/alg_data_for_" + self.bank_name, self.alg_data)
                     self.hjpool.dispose()
                     sys.exit()
             
@@ -382,7 +426,7 @@ class ReachabilityDataset(Dataset):
 
     def __getitem__(self, idx):
         
-        ## Sample Points and Evaluate
+        ## Sample Points and Evaluate 
         # uniformly sample domain and include coordinates where source is non-zero 
         model_states = torch.zeros(self.numpoints, self.dynamics.state_dim).uniform_(-1, 1)
         if self.num_target_samples > 0:
@@ -409,7 +453,7 @@ class ReachabilityDataset(Dataset):
         ## Get Hopf value
         if self.use_hopf:   
 
-            if self.pretrain:
+            if self.pretrain or self.load_hopf_model:
                 hopf_values = torch.zeros(self.numpoints)
                 if self.solve_grad:
                     hopf_grads = torch.zeros(self.numpoints, self.N)
@@ -443,9 +487,7 @@ class ReachabilityDataset(Dataset):
                     else:
                         hopf_grads = bank_sample[:, self.N+3:]
 
-                # print(bank_sample)
-            
-            ## Compute Value from Hopf-Interpolation
+            ## Compute Dynamic Programming Interpolation
             else:
                 try: 
                     if self.solve_grad:

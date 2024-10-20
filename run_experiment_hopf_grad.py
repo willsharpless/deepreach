@@ -26,7 +26,7 @@ if __name__ == '__main__':
 
     # save/load directory options
     p.add_argument('--experiments_dir', type=str, default='./runs', help='Where to save the experiment subdirectory.')
-    p.add_argument('--experiment_name', type=str, default='test_run', help='Name of the experient subdirectory.') #FIXME: required=True instead of default
+    p.add_argument('--experiment_name', type=str, default='test', help='Name of the experient subdirectory.') #FIXME: required=True instead of default
     p.add_argument('--use_wandb', default=False, action='store_true', help='use wandb for logging')
 
     # general options
@@ -36,6 +36,8 @@ if __name__ == '__main__':
     p.add_argument('--bank_name', type=str, default='none', required=False, help='Name of the state & value bank file (if none and using bank, will make)')
     p.add_argument('--solve_hopf', action='store_true', default=False, required=False, help='Dynamically makes a state & value bank by iteratively solving the Hopf formula')
     p.add_argument('--hopf_warm_start', action='store_true', default=False, required=False, help='Passes estimated gradients from DeepReach to the Hopf solvers to warm-start them')
+    p.add_argument('--load_hopf_model', action='store_true', default=False, required=False, help='Model to load for the supervision')
+    p.add_argument('--load_hopf_model_name', type=str, default='capacity_linear', help='Supervision model name')
 
     use_wandb = p.parse_known_args()[0].use_wandb
     if use_wandb:
@@ -60,7 +62,7 @@ if __name__ == '__main__':
             p.add_argument('--' + param, type=experiment_params[param].annotation, required=True, help='special experiment_class argument')
 
         # simulation data source options
-        p.add_argument('--numpoints', type=int, default=100000, help='Number of points in simulation data source __getitem__.') # weird way to say batch size
+        p.add_argument('--numpoints', type=int, default=65000, help='Number of points in simulation data source __getitem__.') # weird way to say batch size
         p.add_argument('--pretrain', action='store_true', default=True, required=False, help='Pretrain dirichlet conditions')
         p.add_argument('--pretrain_iters', type=int, default=2000, required=False, help='Number of pretrain iterations')
         p.add_argument('--tMin', type=float, default=0.0, required=False, help='Start time of the simulation')
@@ -69,6 +71,7 @@ if __name__ == '__main__':
         p.add_argument('--counter_end', type=int, default=-1, required=False, help='Defines the linear step for curriculum training starting from the initial time')
         p.add_argument('--num_src_samples', type=int, default=1000, required=False, help='Number of source samples (initial-time samples) at each time step')
         p.add_argument('--num_target_samples', type=int, default=0, required=False, help='Number of samples inside the target set')
+        p.add_argument('--baseline', action='store_true', default=False, required=False, help='Baseline DeepReach method (no Hopf)')
 
         # model options
         p.add_argument('--model', type=str, default='sine', required=False, choices=['sine', 'tanh', 'sigmoid', 'relu'], help='Type of model to evaluate, default is sine.')
@@ -113,12 +116,12 @@ if __name__ == '__main__':
         ## hopf options
         p.add_argument('--hopf_loss', type=str, default='lin_val_diff', choices=['none', 'lin_val_diff', 'lin_val_grad_diff'], help='Method for using Hopf data')
         p.add_argument('--hopf_loss_divisor', default=5, required=False, type=float, help='What to divide the hopf loss by for loss reweighting')
-        p.add_argument('--solve_grad', action='store_true', default=False, required=False, help='Compute gradient of linear guide (forced true if grad loss)')
+        p.add_argument('--solve_grad', action='store_true', default=False, required=False, help='Compute gradient of linear guide (forced true if grad loss), but slower')
         p.add_argument('--hopf_grad_loss_divisor', default=25, required=False, type=float, help='What to divide the hopf grad loss by for loss reweighting')
         p.add_argument('--hopf_pretrain', action='store_true', default=True, required=False, help='Pretrain hopf conditions')
-        p.add_argument('--hopf_pretrain_iters', type=int, default=2500, required=False, help='Number of pretrain iterations with Hopf loss')
+        p.add_argument('--hopf_pretrain_iters', type=int, default=5000, required=False, help='Number of pretrain iterations with Hopf loss')
         p.add_argument('--hopf_loss_decay', action='store_true', default=False, required=False, help='Hopf loss weight decay')
-        p.add_argument('--hopf_loss_decay_rate', type=str, default='linear', choices=['exponential', 'linear', 'negative_exponential'], help='Type of decay for hopf loss term')
+        p.add_argument('--hopf_loss_decay_type', type=str, default='linear', choices=['exponential', 'linear', 'negative_exponential'], help='Type of decay for hopf loss term')
         p.add_argument('--hopf_loss_decay_w', default=1., required=False, type=float, help='Hopf loss decay rate weight')
         p.add_argument('--hopf_loss_decay_early', action='store_true', default=False, required=False, help='Starts hopf loss decay in pretraining')
         p.add_argument('--diff_con_loss_incr', action='store_true', default=False, required=False, help='Increments PDE loss introduction of (1 - hopf decay)')
@@ -128,14 +131,14 @@ if __name__ == '__main__':
         p.add_argument('--nl_scale', action='store_true', default=False, required=False, help='Scales the "amount" of nonlinearity over training') # TODO: add choice of epochs, add correct contour
         p.add_argument('--nl_scale_epoch_step', type=int, default=10000, required=False, help='Interval (after pt) to step the nonlinearity scale')
         p.add_argument('--nl_scale_epoch_post', type=int, default=50000, required=False, help='Number of epochs to add after nonlinearity scaling')
-        p.add_argument('--temporal_weighting', action='store_true', default=False, required=False, help='Inversely weights the samples in the loss w.r.t. time')
-        p.add_argument('--reset_loss_w', action='store_true', default=False, required=False, help='Resets the loss weights to their values at the beginning of training (pre-decay)')
-        p.add_argument('--reset_loss_period', type=int, default=500, required=False, help='The loss weight reset period')
+        # p.add_argument('--temporal_weighting', action='store_true', default=False, required=False, help='Inversely weights the samples in the loss w.r.t. time')
+        # p.add_argument('--reset_loss_w', action='store_true', default=False, required=False, help='Resets the loss weights to their values at the beginning of training (pre-decay)')
+        # p.add_argument('--reset_loss_period', type=int, default=500, required=False, help='The loss weight reset period')
 
         ## other WAS args
-        p.add_argument('--gt_metrics', action='store_true', default=True, required=False, help='Compute and Score the Learned Set Similarity (Needs Ground Truth)')
-        p.add_argument('--temporal_loss', action='store_true', default=True, required=False, help='Compute the loss over time chunks (Slower)')
-        p.add_argument('--capacity_test', action='store_true', default=False, required=False, help='Use separate lr for Hopf Pretraining and Training')
+        p.add_argument('--gt_metrics', action='store_true', default=True, required=False, help='Compute and score the learned value and set (needs ground truth)')
+        p.add_argument('--temporal_loss', action='store_true', default=True, required=False, help='Compute the loss over time chunks (slower)')
+        p.add_argument('--capacity_test', action='store_true', default=False, required=False, help='Will use supervised-learning to train with the true solution (needs ground truth)')
 
         # load dynamics_class choices dynamically from dynamics module
         dynamics_classes_dict = {name: clss for name, clss in inspect.getmembers(dynamics, inspect.isclass) if clss.__bases__[0] == dynamics.Dynamics}
@@ -161,9 +164,8 @@ if __name__ == '__main__':
     opt = p.parse_args()
 
     if opt.capacity_test:
-        opt.pretrain_iters = 1 ## FIXME: something weird happens when = 0
+        opt.pretrain_iters = 1
         opt.hopf_pretrain_iters = opt.num_epochs
-        # opt.hopf_pretrain_iters = opt.num_epochs - opt.pretrain_iters
         opt.hopf_loss = 'lin_val_grad_diff'
         opt.solve_grad = True
         opt.solve_hopf = False
@@ -181,6 +183,12 @@ if __name__ == '__main__':
     if opt.hopf_loss == 'none':
         opt.diff_con_loss_incr = False
 
+    if opt.baseline:
+        opt.hopf_loss = 'none'
+        opt.solve_grad = True
+        opt.temporal_loss = False
+        # opt.numpoints, opt.lr, opt.lr_decay_w = 60000, 1e-5, 1.
+
     ## Clarity prints
     print("\n\nTraining DeepReach,\n")
     if opt.capacity_test: print(" - using supervised learning of ground truth (capacity test)")
@@ -188,9 +196,9 @@ if __name__ == '__main__':
         print(f" - with hopf loss {opt.hopf_loss}")
         if opt.hopf_loss_decay:
             if opt.diff_con_loss_incr:
-                print(f"  - decayed in a(n) {opt.hopf_loss_decay_rate} fashion, and similarly PDE introduction")
+                print(f"  - decayed in a(n) {opt.hopf_loss_decay_type} fashion, and similarly PDE introduction")
             else:
-                print(f"  - decayed in a(n) {opt.hopf_loss_decay_rate} fashion")
+                print(f"  - decayed in a(n) {opt.hopf_loss_decay_type} fashion")
         print("  - linear data will be,")
         if opt.use_bank:
             if opt.solve_hopf:
@@ -227,6 +235,9 @@ if __name__ == '__main__':
         wandb.config.update(opt)
 
     experiment_dir = os.path.join(opt.experiments_dir, opt.experiment_name)
+    if opt.load_hopf_model:
+        load_dir = os.path.join(opt.experiments_dir, opt.load_hopf_model_name)
+
     if (mode == 'all') or (mode == 'train'):
         # create experiment dir
         if os.path.exists(experiment_dir): 
@@ -273,6 +284,21 @@ if __name__ == '__main__':
     if orig_opt.hopf_loss != 'none':
         dynamics.loss_type = 'brt_hjivi_hopf' ## TODO: why is loss type in dynamics?
 
+
+    if opt.load_hopf_model:
+        with open(os.path.join(load_dir, 'orig_opt.pickle'), 'rb') as opt_file:
+            loaded_opt = pickle.load(opt_file)
+
+        loaded_model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=loaded_opt.model, mode=loaded_opt.model_mode,
+                                    final_layer_factor=1., hidden_features=loaded_opt.num_nl, num_hidden_layers=loaded_opt.num_hl)
+        loaded_model.cuda()
+        
+        model_path = os.path.join(load_dir, 'training', 'checkpoints', 'model_final.pth')
+        loaded_model.load_state_dict(torch.load(model_path)['model']) # FIXME, key only needed for chkpts
+        
+    else:
+        loaded_model = None
+
     dataset = dataio.ReachabilityDataset(
         dynamics=dynamics, numpoints=orig_opt.numpoints, 
         pretrain=orig_opt.pretrain, pretrain_iters=orig_opt.pretrain_iters, 
@@ -283,7 +309,8 @@ if __name__ == '__main__':
         hopf_pretrain=orig_opt.hopf_pretrain, hopf_pretrain_iters=orig_opt.hopf_pretrain_iters,
         no_curriculum=orig_opt.no_curr, record_gt_metrics=orig_opt.gt_metrics,
         use_bank=orig_opt.use_bank, bank_name=orig_opt.bank_name, capacity_test=orig_opt.capacity_test,
-        solve_hopf=orig_opt.solve_hopf, solve_grad=orig_opt.solve_grad, hopf_warm_start=orig_opt.hopf_warm_start)
+        solve_hopf=orig_opt.solve_hopf, solve_grad=orig_opt.solve_grad, hopf_warm_start=orig_opt.hopf_warm_start,
+        loaded_model=loaded_model)
 
     model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
                                 final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl)
@@ -310,7 +337,7 @@ if __name__ == '__main__':
             use_CSL=orig_opt.use_CSL, CSL_lr=orig_opt.CSL_lr, CSL_dt=orig_opt.CSL_dt, epochs_til_CSL=orig_opt.epochs_til_CSL, num_CSL_samples=orig_opt.num_CSL_samples, CSL_loss_frac_cutoff=orig_opt.CSL_loss_frac_cutoff, max_CSL_epochs=orig_opt.max_CSL_epochs, CSL_loss_weight=orig_opt.CSL_loss_weight, CSL_batch_size=orig_opt.CSL_batch_size,
             dual_lr=orig_opt.dual_lr, lr_decay_w=orig_opt.lr_decay_w, lr_hopf=orig_opt.lr_hopf, lr_hopf_decay_w=orig_opt.lr_hopf_decay_w, 
             hopf_loss=orig_opt.hopf_loss, hopf_loss_decay=orig_opt.hopf_loss_decay, hopf_loss_decay_early=orig_opt.hopf_loss_decay_early, diff_con_loss_incr=orig_opt.diff_con_loss_incr, 
-            hopf_loss_decay_rate=orig_opt.hopf_loss_decay_rate, hopf_loss_decay_w=orig_opt.hopf_loss_decay_w, 
+            hopf_loss_decay_type=orig_opt.hopf_loss_decay_type, hopf_loss_decay_w=orig_opt.hopf_loss_decay_w, 
             reset_loss_w=orig_opt.reset_loss_w, reset_loss_period=orig_opt.reset_loss_period,
             nonlin_scale=orig_opt.nl_scale, nl_scale_epoch_step=orig_opt.nl_scale_epoch_step, nl_scale_epoch_post=orig_opt.nl_scale_epoch_post,
             record_temporal_loss=orig_opt.temporal_loss)

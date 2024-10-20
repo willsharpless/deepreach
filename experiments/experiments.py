@@ -100,10 +100,10 @@ class Experiment(ABC):
             dual_lr=False, lr_decay_w=1., lr_hopf=2e-5, lr_hopf_decay_w=1., smoothing_factor=0.8, 
             hopf_loss='none', hopf_loss_decay_early = True, hopf_loss_decay=True, hopf_loss_decay_w=0.9998,
             reset_loss_w=False, reset_loss_period=0, 
-            diff_con_loss_incr=False, hopf_loss_decay_rate = 'exponential',
+            diff_con_loss_incr=False, hopf_loss_decay_type = 'exponential',
             nonlin_scale=False, nl_scale_epoch_step=10000, nl_scale_epoch_post=10000, 
             record_temporal_loss = False, 
-            deposit_blocking = True, deposit_blocking_period = 5000 # seg faults if nonblocking rn...
+            deposit_blocking = True, deposit_blocking_period = 1000 # seg faults if nonblocking rn...
         ):
         was_eval = not self.model.training
         self.model.train()
@@ -111,6 +111,7 @@ class Experiment(ABC):
 
         train_dataloader = DataLoader(self.dataset, shuffle=True, batch_size=batch_size, pin_memory=True, num_workers=0)
 
+        ## Define Optimizers and Schedulers ## TODO, would SGD be better than Adam?
         if dual_lr and self.dataset.hopf_pretrain:
             optim_hopf = torch.optim.Adam(lr=lr_hopf, params=self.model.parameters())
             optim_std = torch.optim.Adam(lr=lr, params=self.model.parameters())
@@ -140,9 +141,9 @@ class Experiment(ABC):
 
         writer = SummaryWriter(summaries_dir)
 
+        ## Params
         total_steps = 0
         JIp_s_max, JIp_s = 0., 0.
-        gamma_orig, mu_orig, alpha_orig = self.dataset.dynamics.gamma, self.dataset.dynamics.mu, self.dataset.dynamics.alpha
         total_pretrain_iters = self.dataset.pretrain_iters + self.dataset.hopf_pretrain_iters
         self.total_pretrain_iters = total_pretrain_iters
         self.epochs = epochs
@@ -152,21 +153,25 @@ class Experiment(ABC):
         loss_weights = {'dirichlet': 1., 'hopf': 1., 'diff_constraint_hom': 1.}
         if diff_con_loss_incr:
             loss_weights['diff_constraint_hom'] = 0.
-        if hopf_loss_decay_rate == 'negative_exponential': 
+        if hopf_loss_decay_type == 'negative_exponential': 
             loss_weights['hopf'] = 1 - (hopf_loss_decay_w ** (epochs - 1 - total_pretrain_iters))
         if hopf_loss == 'lin_val_grad_diff':
             loss_weights['hopf_grad'] = loss_weights['hopf']
         og_loss_weights = loss_weights.copy()
-
+        
+        ## Train
         with tqdm(total=len(train_dataloader) * epochs) as pbar:
+
             train_losses = []
             last_CSL_epoch = -1
             for epoch in range(0, epochs):
+
                 if self.dataset.pretrain: # skip CSL
                     last_CSL_epoch = epoch
                 time_interval_length = (self.dataset.counter/self.dataset.counter_end)*(self.dataset.tMax-self.dataset.tMin)
                 CSL_tMax = self.dataset.tMin + int(time_interval_length/CSL_dt)*CSL_dt
 
+                ## Reset Weights
                 if reset_loss_w and epoch % reset_loss_period == 0 and not self.dataset.pretrain and not self.dataset.hopf_pretrain:
                     loss_weights = og_loss_weights.copy()
 
@@ -192,16 +197,14 @@ class Experiment(ABC):
                         # if reset_loss_w: #TODO
                         #     reset grad steps
 
-                ## Parameter Scaling for Nonlinearity Curriculum #TODO: generalize to other dynamics
+                ## Parameter Scaling for Nonlinearity Curriculum
                 not_pretraining = not(self.dataset.pretrain) and not(self.dataset.hopf_pretrain)
                 if nonlin_scale:
                     if not_pretraining and ((epoch-total_pretrain_iters) % nl_scale_epoch_step) == 0 and epoch <= (epochs-nl_scale_epoch_post):
                         nl_perc = ((epoch - total_pretrain_iters)/((epochs - nl_scale_epoch_post) - total_pretrain_iters)) # instead of epoch/(epochs-post), this gives 1 step to switch from hopf to pde loss w/o changin dynamcis
                     elif epoch == (epochs - nl_scale_epoch_post) + 1: # jic epoch / nl_scale_epoch_step is not an integer
                         nl_perc = 1
-                    self.dataset.dynamics.gamma = nl_perc * gamma_orig
-                    self.dataset.dynamics.mu = nl_perc * mu_orig
-                    self.dataset.dynamics.alpha = nl_perc * alpha_orig
+                    self.dataset.dynamics.vary_nonlinearity(nl_perc)
 
                 ## Learn
                 for step, (model_input, gt) in enumerate(train_dataloader):
@@ -233,14 +236,23 @@ class Experiment(ABC):
                     ## Standard BRT
                     if self.dataset.dynamics.loss_type == 'brt_hjivi':
                         losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'])
-
+                    
+                    ## Standard BRAT
+                    elif self.dataset.dynamics.loss_type == 'brat_hjivi':
+                        losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, reach_values, avoid_values, dirichlet_masks, model_results['model_out'])
+                    
                     ## Linear Supervision BRT (Hopf-based)
                     elif hopf_loss != 'none':
-                        
                         hopf_values = gt['hopf_values']
 
                         if hopf_loss == 'lin_val_grad_diff':
                             hopf_grads = gt['hopf_grads']
+
+                        if self.dataset.load_hopf_model:
+                            loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords']})
+                            hopf_values = self.dataset.dynamics.io_to_value(loaded_model_results['model_in'].detach(), loaded_model_results['model_out'].squeeze(dim=-1))
+                            if self.dataset.solve_grad:
+                                hopf_grads = self.dataset.dynamics.io_to_dv(loaded_model_results['model_in'], loaded_model_results['model_out'].squeeze(dim=-1))[..., 1:]
                         
                         # the following allows separate coordinates for the hopf loss (to allow unrestricted sampling for PDE loss)
                         if not(self.dataset.use_bank) or self.dataset.hopf_pretrain_counter == 0:
@@ -261,21 +273,12 @@ class Experiment(ABC):
                         else:
                             losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, learned_hopf_values, epoch, state_times)
 
-                    ## Standard BRAT
-                    elif self.dataset.dynamics.loss_type == 'brat_hjivi':
-                        losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, reach_values, avoid_values, dirichlet_masks, model_results['model_out'])
-                    
                     else:
                         raise NotImplementedError
                     
                     if self.timing: print("Loss Computation took:", time.time() - start_time_2)
 
-                    # print("B/C  loss:", losses['dirichlet'])
-                    # print("Hopf loss:", losses['hopf'])
-                    # print("Hopf Grad loss:", losses['hopf_grad'])
-                    # print("PDE  loss:", losses['diff_constraint_hom'])
-
-                    ## Compute & Record Temporal Loss Distribution
+                    ## Compute & Record Temporal Loss Quartiles #FIXME doesn't work for baseline
                     if record_temporal_loss:
                         losses_t = {}
                         temporal_loss_times = [0., 0.25, 0.5, 0.75, 1.] 
@@ -289,8 +292,6 @@ class Experiment(ABC):
                             elif hopf_loss == 'lin_val_grad_diff':
                                 hopf_grads_t, learned_grads_t = hopf_grads[t_ix].unsqueeze(0), learned_hopf_grads[t_ix].unsqueeze(0)
                                 losses_t[str(tp)] = loss_fn(states_t, values_t, dvs_t[..., 0], dvs_t[..., 1:], boundary_values_t, dirichlet_masks_t, model_results_t, hopf_values_t, learned_hopf_values_t, hopf_grads_t, learned_grads_t, epoch, state_times_t)
-
-                            # print("PDE  loss", tp, ':', losses_t[str(tp)]['diff_constraint_hom'].item())
                     
                     ## Switch Optimizers/Rates (after Hopf Pretraining)
                     if self.timing: start_time_2 = time.time()
@@ -302,15 +303,14 @@ class Experiment(ABC):
                     ## Decay Hopf Loss(es)
                     if hopf_loss_decay and hopf_loss != 'none': #                         
                         if epoch >= total_pretrain_iters or hopf_loss_decay_early:
-                            if hopf_loss_decay_rate == 'exponential' and epoch > total_pretrain_iters or hopf_loss_decay_early:
+                            if hopf_loss_decay_type == 'exponential' and epoch > total_pretrain_iters or hopf_loss_decay_early:
                                 loss_weights['hopf'] = hopf_loss_decay_w * loss_weights['hopf']
-                            elif hopf_loss_decay_rate == 'linear':
+                            elif hopf_loss_decay_type == 'linear':
                                 loss_weights['hopf'] = 1 - hopf_loss_decay_w * (epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters)
-                            elif hopf_loss_decay_rate == 'negative_exponential' and epoch > total_pretrain_iters:
+                            elif hopf_loss_decay_type == 'negative_exponential' and epoch > total_pretrain_iters:
                                 loss_weights['hopf'] = 1 - ((1 - loss_weights['hopf']) / hopf_loss_decay_w)
-                            # else:
-                            #     raise NotImplementedError
-                            # print("epoch", epoch, ", loss_weights['hopf']=", loss_weights['hopf'])
+                            else:
+                                raise NotImplementedError
                         loss_weights['hopf'] = min(max(loss_weights['hopf'], 0.), 1.)
                         
                         if hopf_loss == 'lin_val_grad_diff':
@@ -318,12 +318,8 @@ class Experiment(ABC):
 
                         ## Incrementally Introduce Differential Constraint Loss (After All Pretraining)
                         if diff_con_loss_incr and epoch >= total_pretrain_iters:
-                            # new_weight_diff_con = 1. - new_weight_hopf
                             loss_weights['diff_constraint_hom'] = 1 - loss_weights['hopf']
-                            # print("epoch", epoch, ", loss_weights['diff_constraint_hom']=", loss_weights['diff_constraint_hom'])
                         
-                    # import ipdb; ipdb.set_trace()
-
                     ## Combine Losses
                     if self.timing: start_time_2 = time.time()
                     train_loss = 0.
@@ -331,7 +327,6 @@ class Experiment(ABC):
                         single_loss = loss.mean() ## TODO: this is not the right place for this
                         writer.add_scalar(loss_name, single_loss, total_steps)
                         train_loss += loss_weights[loss_name] * single_loss
-                        # print(loss_name, ":", loss_weights[loss_name] * single_loss.detach().item())
 
                     train_losses.append(train_loss.item())
                     writer.add_scalar("total_train_loss", train_loss, total_steps)
