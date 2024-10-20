@@ -33,7 +33,7 @@ sweep_configuration = {
 
 sweep_id = wandb.sweep(sweep=sweep_configuration, project='test_sweep')
 
-# manual_load
+# dp_manual_load
 jl.seval("using JLD2, Interpolations")
 V_hopf_itp = jl.load("lin2d_hopf_interp_linear.jld")["V_itp"] #self.
 fast_interp_exec = """
@@ -257,7 +257,7 @@ def main():
         hopf_loss_decay=opt.hopf_loss_decay, hopf_loss_decay_w=wandb.config.hopf_loss_decay_w,
         diff_con_loss_incr=opt.diff_con_loss_incr,
         record_set_metrics=opt.set_metrics,
-        manual_load=True, load_packet = [V_hopf_itp, fast_interp, V_hopf, V_DP_itp, V_DP]
+        dp_manual_load=True, load_packet = [V_hopf_itp, fast_interp, V_hopf, V_DP_itp, V_DP]
         )
     
     print("Defined the dataset!")

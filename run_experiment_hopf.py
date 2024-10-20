@@ -110,7 +110,7 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--hopf_pretrain', action='store_true', default=True, required=False, help='Pretrain hopf conditions')
     p.add_argument('--hopf_pretrain_iters', type=int, default=10000, required=False, help='Number of pretrain iterations with Hopf loss')
     p.add_argument('--hopf_loss_decay', action='store_true', default=False, required=False, help='Hopf loss weight decay')
-    p.add_argument('--hopf_loss_decay_rate', type=str, default='linear', choices=['exponential', 'linear', 'negative_exponential'], help='Type of decay for hopf loss term')
+    p.add_argument('--hopf_loss_decay_type', type=str, default='linear', choices=['exponential', 'linear', 'negative_exponential'], help='Type of decay for hopf loss term')
     p.add_argument('--hopf_loss_decay_w', default=1., required=False, type=float, help='Hopf loss decay rate weight')
     p.add_argument('--hopf_loss_decay_early', action='store_true', default=False, required=False, help='Starts hopf loss decay in pretraining')
     p.add_argument('--diff_con_loss_incr', action='store_true', default=False, required=False, help='Increments PDE loss introduction of (1 - hopf decay)')
@@ -270,7 +270,7 @@ if (mode == 'all') or (mode == 'train'):
         use_CSL=orig_opt.use_CSL, CSL_lr=orig_opt.CSL_lr, CSL_dt=orig_opt.CSL_dt, epochs_til_CSL=orig_opt.epochs_til_CSL, num_CSL_samples=orig_opt.num_CSL_samples, CSL_loss_frac_cutoff=orig_opt.CSL_loss_frac_cutoff, max_CSL_epochs=orig_opt.max_CSL_epochs, CSL_loss_weight=orig_opt.CSL_loss_weight, CSL_batch_size=orig_opt.CSL_batch_size,
         dual_lr=orig_opt.dual_lr, lr_decay_w=orig_opt.lr_decay_w, lr_hopf=orig_opt.lr_hopf, lr_hopf_decay_w=orig_opt.lr_hopf_decay_w, 
         hopf_loss=orig_opt.hopf_loss, hopf_loss_decay=orig_opt.hopf_loss_decay, hopf_loss_decay_early=orig_opt.hopf_loss_decay_early, diff_con_loss_incr=orig_opt.diff_con_loss_incr, 
-        hopf_loss_decay_rate=orig_opt.hopf_loss_decay_rate, hopf_loss_decay_w=orig_opt.hopf_loss_decay_w, 
+        hopf_loss_decay_type=orig_opt.hopf_loss_decay_type, hopf_loss_decay_w=orig_opt.hopf_loss_decay_w, 
         nonlin_scale=orig_opt.nl_scale, nl_scale_epoch_step=orig_opt.nl_scale_epoch_step, nl_scale_epoch_post=orig_opt.nl_scale_epoch_post,
         record_temporal_loss=orig_opt.temporal_loss,)
 
