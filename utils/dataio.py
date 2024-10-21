@@ -58,15 +58,6 @@ class ReachabilityDataset(Dataset):
         self.hopf_bank_params = hopf_bank_params
         self.hopf_starter_numsplits = hopf_starter_numsplits
         self.hopf_deposit_numsplits = hopf_deposit_numsplits
-        # self.hopf_time_step = 1e-3 #FIXME load from run_exp.py  
-        # self.hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100} #TODO load from run_exp.py 
-        # self.hopf_bank_params = {"n_total":2e6, "n_starter":1e6, "n_deposit":1e5} # TODO load from run_exp.py  
-        # self.hopf_bank_params = {"n_total":12, "n_starter":8, "n_deposit":2} # small test set
-        # self.hopf_time_step = 1e-2
-        # self.hopf_bank_params = {"n_total":4000, "n_starter":1000, "n_deposit":1000} # medium test set
-        # self.hopf_bank_params = {"n_total":40000, "n_starter":1000, "n_deposit":1000} # big test set
-        # self.hopf_starter_numsplits = 10
-        # self.hopf_deposit_numsplits = 10
         
         self.use_bank = use_bank
         self.make_bank = use_bank and bank_name == 'none'
@@ -157,24 +148,22 @@ class ReachabilityDataset(Dataset):
     def __getitem__(self, idx):
         
         ## Sample Points and Evaluate 
-        # uniformly sample domain and include coordinates where source is non-zero 
         model_states = torch.zeros(self.numpoints, self.dynamics.state_dim).uniform_(-1, 1)
         if self.num_target_samples > 0:
             target_state_samples = self.dynamics.sample_target_state(self.num_target_samples)
             model_states[-self.num_target_samples:] = self.dynamics.coord_to_input(torch.cat((torch.zeros(self.num_target_samples, 1), target_state_samples), dim=-1))[:, 1:self.dynamics.state_dim+1]
 
         if self.pretrain:
-            # only sample in time around the initial condition
             times = torch.full((self.numpoints, 1), self.tMin)
+
         else:
-            # slowly grow time values from start time (unless Hopf)
             if self.hopf_pretrain or self.hopf_pretrained or self.no_curriculum:
-                # times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * ((self.counter + self.hopf_pretrain_counter)/(self.counter_end + self.hopf_pretrain_iters)))
                 times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin)) # during hopf pt, sample across all time?
+
             else:
                 times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * (self.counter/self.counter_end))
-            # make sure we always have training samples at the initial time
-            times[-self.num_src_samples:, 0] = self.tMin
+
+            times[-self.num_src_samples:, 0] = self.tMin # force include initial time samples
 
         model_coords = torch.cat((times, model_states), dim=1)        
         if self.dynamics.input_dim > self.dynamics.state_dim + 1: # temporary workaround for having to deal with dynamics classes for parametrized models with extra inputs
