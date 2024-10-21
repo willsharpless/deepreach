@@ -15,14 +15,11 @@ class ReachabilityDataset(Dataset):
     def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, 
                  use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0, record_gt_metrics=False, solve_grad=False,
                  dp_manual_load=False, load_packet=None, no_curriculum=False, use_bank=False, bank_name=None, capacity_test=False,
-                 solve_hopf=False, hopf_warm_start=False, hopf_time_step=1e-2, num_hopf_workers=10, hopf_starter_numsplits=1000, hopf_deposit_numsplits=1000,
-                #  solve_hopf=False, hopf_warm_start=False, hopf_time_step=1e-1, num_hopf_workers=10, hopf_starter_numsplits=200, hopf_deposit_numsplits=200,
+                 solve_hopf=False, hopf_warm_start=False, hopf_time_step=1e-2, num_hopf_workers=10, hopf_starter_numsplits=500, hopf_deposit_numsplits=500,
                  hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100},
-                #  hopf_bank_params = {"n_total":int(4e6), "n_starter":int(4e6), "n_deposit":int(4e6)}, # to make static bank
                  hopf_bank_params = {"n_total":int(1e5), "n_starter":int(1e5), "n_deposit":int(1e5)}, # dynamic refresh
-                #  hopf_bank_params = {"n_total":int(4e6), "n_starter":int(4e6), "n_deposit":int(2e6)}, 
-                #  hopf_bank_params = {"n_total":int(1e5), "n_starter":int(1e5), "n_deposit":int(1e3)}, 
-                 hopf_bank_save_quit=False, refine_bank=False,
+                #  hopf_bank_params = {"n_total":int(4e6), "n_starter":int(4e6), "n_deposit":int(2e6)}, # to make static bank
+                 just_make_hopf_bank=False, refine_bank=False,
                  loaded_model=None,
                  ):
 
@@ -73,24 +70,11 @@ class ReachabilityDataset(Dataset):
             self.numblocks = 40 # batch-sizes per bank, #FIXME: should be automatic
             self.bank_total = numpoints * self.numblocks
 
-        if self.bank_total >= 1e6:
-            qty_tag = str(int(self.bank_total // 1e6)) + 'M'
-        elif self.bank_total >= 1e3:
-            qty_tag = str(int(self.bank_total // 1e3)) + 'K'
-        else:
-            qty_tag = str(self.bank_total)
-
         if bank_name is None or bank_name == 'none': 
-            if self.solve_hopf:
-                make_tag = "Hopf_mp_" 
-                if self.refine_bank:
-                    make_tag = make_tag + "refined_"
-            else:
-                make_tag = "DPitp_"
-            bank_name = "Bank_" + make_tag + str(self.N)+"D_"+ qty_tag + "pts_r" + str(int(100 * dynamics.goalR_2d)) + "e-2_g" + str(int(dynamics.gamma)) + "m" + str(int(dynamics.mu)) + "a" + str(int(dynamics.alpha)) + ".npy"
+            bank_name = self.make_bank_name()
         self.bank_name = bank_name
         self.mp_bank = "mp" in bank_name
-        self.hopf_bank_save_quit = hopf_bank_save_quit
+        self.just_make_hopf_bank = just_make_hopf_bank
 
         # Dynamic Programming Manual Load (added this to skirt WandB sweep + PyCall imcompatibility but still not working)
         self.dp_manual_load = dp_manual_load
@@ -283,7 +267,8 @@ class ReachabilityDataset(Dataset):
         if self.N == 2:
 
             ## Load 2D DP Solution
-            self.V_hopf_itp = jl.load("lin2d_hopf_interp_linear.jld")["V_itp"] ## (using gt)
+            # self.V_hopf_itp = jl.load("lin2d_hopf_interp_linear.jld")["V_itp"] ## (using gt)
+            self.V_hopf_itp = LessLinear2D_interpolations = jl.load(self.llnd_path + f"interps/LessLinear2D1i_interpolations_res1e-2_r{int(100*self.dynamics.goalR_2d)}e-2_c{int(abs(self.dynamics.gamma))}.jld", "LessLinear2D_interpolations")["g0_m0_a0"]
             self.V_hopf = lambda tXg: torch.from_numpy(self.fast_interp(self.V_hopf_itp, tXg.numpy()).to_numpy())
             if self.solve_grad:
                 self.V_hopf_grad = lambda tXg: torch.from_numpy(self.fast_interp(self.V_hopf_itp, tXg.numpy(), compute_grad=True).to_numpy())
@@ -291,8 +276,7 @@ class ReachabilityDataset(Dataset):
         elif self.N > 2:
             
             ## Load 2D DP Solution
-            # LessLinear2D_interpolations = jl.load(self.llnd_path + "interps/old/LessLinear2D1i_interpolations_res1e-2_r15e-2.jld", "LessLinear2D_interpolations")
-            LessLinear2D_interpolations = jl.load(self.llnd_path + "interps/LessLinear2D1i_interpolations_res1e-2_r15e-2_c5.jld", "LessLinear2D_interpolations")
+            LessLinear2D_interpolations = jl.load(self.llnd_path + f"interps/LessLinear2D1i_interpolations_res1e-2_r{int(100*self.dynamics.goalR_2d)}e-2_c{int(abs(self.dynamics.gamma))}.jld", "LessLinear2D_interpolations")
             self.V_hopf_itp = LessLinear2D_interpolations["g0_m0_a0"] ## (using gt)
             
             ## Capacity Test: Load Ground Truth for Supervised-Learning
@@ -339,21 +323,17 @@ class ReachabilityDataset(Dataset):
             """
             if not(hasattr(self, 'fast_interp')):
                 self.fast_interp = jl.seval(fast_interp_exec)
+
+            LessLinear2D_interpolations = jl.load(self.llnd_path + f"interps/LessLinear2D1i_interpolations_res1e-2_r{int(100*self.dynamics.goalR_2d)}e-2_c{int(abs(self.dynamics.gamma))}.jld", "LessLinear2D_interpolations")
+            model_key = "g" + str(int(self.dynamics.gamma)) + "_m" + str(int(self.dynamics.mu)) + "_a"  + str(int(self.dynamics.alpha))
+            self.V_DP_itp = LessLinear2D_interpolations[model_key]
             
             if self.N == 2:
-                # self.V_DP_itp = jl.load(self.llnd_path + "interps/old/llin2d_g20_m-20_a1_DP_interp_linear.jld")["V_itp"]
-                model_key = "g" + str(int(self.dynamics.gamma)) + "_m" + str(int(self.dynamics.mu)) + "_a"  + str(int(self.dynamics.alpha))
-                self.V_DP_itp = jl.load(self.llnd_path + "interps/LessLinear2D1i_interpolations_res1e-2_r15e-2_c20.jld", "LessLinear2D_interpolations")[model_key]
                 self.V_DP = lambda tXg: torch.from_numpy(self.fast_interp(self.V_DP_itp, tXg.numpy()).to_numpy())
                 if self.solve_grad:
                     self.V_DP_grad = lambda tXg: torch.from_numpy(self.fast_interp(self.V_DP_itp, tXg.numpy(), compute_grad=True).to_numpy())
 
             elif self.N > 2:
-                # LessLinear2D_interpolations = jl.load(self.llnd_path + "interps/old/LessLinear2D1i_interpolations_res1e-2_r15e-2.jld", "LessLinear2D_interpolations")
-                LessLinear2D_interpolations = jl.load(self.llnd_path + "interps/LessLinear2D1i_interpolations_res1e-2_r15e-2_c5.jld", "LessLinear2D_interpolations")
-                
-                model_key = "g" + str(int(self.dynamics.gamma)) + "_m" + str(int(self.dynamics.mu)) + "_a"  + str(int(self.dynamics.alpha))
-                self.V_DP_itp = LessLinear2D_interpolations[model_key]
                 def V_N_DP_itp_combo(tXg):
                     V = 0 * tXg[0,:]
                     for i in range(self.N-1):
@@ -384,7 +364,6 @@ class ReachabilityDataset(Dataset):
 
         self.n_grid_t_pts, self.n_grid_t_pts_hi = 5, 20
         xig = torch.arange(-0.99, 1.01, 0.02) # 100 x 100
-        # xig = torch.arange(-1., 1.01, 0.01) # 201 x 201
         self.X1g, self.X2g = torch.meshgrid(xig, xig)
         self.model_states_grid = torch.cat((self.X1g.ravel().reshape((1,xig.size()[0]**2)), self.X2g.ravel().reshape((1,xig.size()[0]**2))), dim=0).t()
         self.n_grid_pts = xig.size()[0]**2
@@ -535,7 +514,7 @@ class ReachabilityDataset(Dataset):
             self.bank = np.ndarray(self.hjpool.shm_states_shape, dtype=np.float32, buffer=self.shm_states.buf)
             self.alg_data = np.ndarray(self.hjpool.shm_algdat_shape, dtype=np.float32, buffer=self.shm_algdat.buf)
 
-            if self.hopf_bank_save_quit:
+            if self.just_make_hopf_bank:
                 print("Done. Written to " + self.bank_name + ".\n")
                 if self.refine_bank:
                     np.save(self.llnd_path + "banks/" + self.bank_name, self.refined_bank)
@@ -548,3 +527,19 @@ class ReachabilityDataset(Dataset):
         if not self.solve_hopf or self.hopf_bank_params["n_starter"] == self.hopf_bank_params["n_total"]:
             self.bank_index = torch.from_numpy(np.random.permutation(self.bank_total)) # random shuffle for sample bank
             self.block_counter = 0
+
+    def make_bank_name(self):
+        if self.bank_total >= 1e6:
+            qty_tag = str(int(self.bank_total // 1e6)) + 'M'
+        elif self.bank_total >= 1e3:
+            qty_tag = str(int(self.bank_total // 1e3)) + 'K'
+        else:
+            qty_tag = str(self.bank_total)
+
+        if self.solve_hopf:
+            make_tag = "Hopf_mp_" 
+            if self.refine_bank:
+                make_tag = make_tag + "refined_"
+        else:
+            make_tag = "DPitp_"
+        return "Bank_" + make_tag + str(self.N)+"D_"+ qty_tag + "pts_r" + str(int(100 * self.dynamics.goalR_2d)) + "e-2_g" + str(int(self.dynamics.gamma)) + "m" + str(int(self.dynamics.mu)) + "a" + str(int(self.dynamics.alpha)) + ".npy"
