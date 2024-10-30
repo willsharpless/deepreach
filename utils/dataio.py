@@ -276,7 +276,10 @@ class ReachabilityDataset(Dataset):
         elif self.N > 2:
             
             ## Load 2D DP Solution
-            LessLinear2D_interpolations = jl.load(self.llnd_path + f"interps/LessLinear2D1i_interpolations_res1e-2_r{int(100*self.dynamics.goalR_2d)}e-2_c{int(abs(self.dynamics.gamma))}.jld", "LessLinear2D_interpolations")
+            if self.dynamics.gamma != 0:
+                LessLinear2D_interpolations = jl.load(self.llnd_path + f"interps/LessLinear2D1i_interpolations_res1e-2_r{int(100*self.dynamics.goalR_2d)}e-2_c{int(abs(self.dynamics.gamma))}.jld", "LessLinear2D_interpolations")
+            else:
+                LessLinear2D_interpolations = jl.load(self.llnd_path + f"interps/LessLinear2D1i_interpolations_res1e-2_r{int(100*self.dynamics.goalR_2d)}e-2_c5.jld", "LessLinear2D_interpolations")
             self.V_hopf_itp = LessLinear2D_interpolations["g0_m0_a0"] ## (using gt)
             
             ## Capacity Test: Load Ground Truth for Supervised-Learning
@@ -324,7 +327,11 @@ class ReachabilityDataset(Dataset):
             if not(hasattr(self, 'fast_interp')):
                 self.fast_interp = jl.seval(fast_interp_exec)
 
-            LessLinear2D_interpolations = jl.load(self.llnd_path + f"interps/LessLinear2D1i_interpolations_res1e-2_r{int(100*self.dynamics.goalR_2d)}e-2_c{int(abs(self.dynamics.gamma))}.jld", "LessLinear2D_interpolations")
+            if self.dynamics.gamma != 0:
+                LessLinear2D_interpolations = jl.load(self.llnd_path + f"interps/LessLinear2D1i_interpolations_res1e-2_r{int(100*self.dynamics.goalR_2d)}e-2_c{int(abs(self.dynamics.gamma))}.jld", "LessLinear2D_interpolations")
+            else:
+                LessLinear2D_interpolations = jl.load(self.llnd_path + f"interps/LessLinear2D1i_interpolations_res1e-2_r{int(100*self.dynamics.goalR_2d)}e-2_c5.jld", "LessLinear2D_interpolations")
+            
             model_key = "g" + str(int(self.dynamics.gamma)) + "_m" + str(int(self.dynamics.mu)) + "_a"  + str(int(self.dynamics.alpha))
             self.V_DP_itp = LessLinear2D_interpolations[model_key]
             
