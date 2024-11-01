@@ -180,8 +180,10 @@ redirect_stderr(log_f)"""
 
     ## Grad Reshape Fn
     P_in_f(gradVX) = reshape(hcat(gradVX[2:end]...), size(gradVX[1])..., length(gradVX)-1)"""
+            print("\n\n TEST -- BEFORE SETUP EVAL, CRASH?\n\n")
             print(hopf_setup_exec)
             cls.jl.seval(hopf_setup_exec)
+            print("\n\n TEST -- AFTER SETUP EVAL, CRASH?\n\n") ## CRASHES BEFORE THIS
 
             solve_Hopf_BRS_exec = f"""\n
     # Wrapper for Hopf Solver
@@ -202,8 +204,11 @@ redirect_stderr(log_f)"""
             return VXsT[1], vcat(VXsT[2:end]...), run_stats[1]
         end
     end"""
-            cls.solve_hopf_BRS = cls.jl.seval(solve_Hopf_BRS_exec)
             print(solve_Hopf_BRS_exec)
+            print("\n\n TEST -- BEFORE WRAPPER EVAL, CRASH?\n\n")
+            cls.solve_hopf_BRS = cls.jl.seval(solve_Hopf_BRS_exec)
+            print("\n\n TEST -- AFTER WRAPPER EVAL, CRASH?\n\n")
+
             cls.V_hopf = staticmethod(lambda tX: cls.solve_hopf_BRS(tX, return_grad=False))
             cls.V_hopf_ws = staticmethod(lambda tX, P_in: cls.solve_hopf_BRS(tX, P_in=P_in, return_grad=False))
             cls.V_hopf_grad = staticmethod(lambda tX: cls.solve_hopf_BRS(tX, return_grad=True))
@@ -213,10 +218,16 @@ redirect_stderr(log_f)"""
         if not cls.use_hopf or cls.gt_metrics:
             cls.jl.seval("using JLD, JLD2, Interpolations")
 
+            ## Load 2D DP Solution
             llnd_path = "value_fns/LessLinear/"
             # V_itp = cls.jl.load(llnd_path + "interps/old/lin2d_hopf_interp_linear.jld")["V_itp"]
-            cls.interp_file_name = f"LessLinear2D1i_interpolations_res1e-2_r{int(100 * dynamics_data['goalR_2d'])}e-2_c20.jld"
-            V_DP_itp = cls.jl.load(llnd_path + f"interps/{cls.interp_file_name}", "LessLinear2D_interpolations")["g0_m0_a0"] # FIXME: flexible c param value
+            # cls.interp_file_name = f"LessLinear2D1i_interpolations_res1e-2_r{int(100 * dynamics_data['goalR_2d'])}e-2_c20.jld"
+            # V_DP_itp = cls.jl.load(llnd_path + f"interps/{cls.interp_file_name}", "LessLinear2D_interpolations")["g0_m0_a0"] # FIXME: flexible c param value
+            if dynamics_data['gamma'] != 0:
+                LessLinear2D_interpolations = cls.jl.load(llnd_path + f"interps/LessLinear2D1i_interpolations_res1e-2_r{int(100 * dynamics_data['goalR_2d'])}e-2_c{int(abs(dynamics_data['gamma']))}.jld", "LessLinear2D_interpolations")
+            else:
+                LessLinear2D_interpolations = cls.jl.load(llnd_path + f"interps/LessLinear2D1i_interpolations_res1e-2_r{int(100 * dynamics_data['goalR_2d'])}e-2_c5.jld", "LessLinear2D_interpolations")
+            V_DP_itp = LessLinear2D_interpolations["g0_m0_a0"] ## (using gt)
 
             fast_interp_exec = """\n
     # Wrapper for Interpolation
