@@ -15,10 +15,10 @@ class ReachabilityDataset(Dataset):
     def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, 
                  use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0, record_gt_metrics=False, solve_grad=False,
                  dp_manual_load=False, load_packet=None, no_curriculum=False, use_bank=False, bank_name=None, capacity_test=False,
-                 solve_hopf=False, hopf_warm_start=False, hopf_time_step=1e-2, num_hopf_workers=10, hopf_starter_numsplits=500, hopf_deposit_numsplits=500,
+                 solve_hopf=False, hopf_warm_start=False, hopf_time_step=5e-2, num_hopf_workers=2, hopf_starter_numsplits=100000, hopf_deposit_numsplits=100000,
                  hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100},
-                 hopf_bank_params = {"n_total":int(1e5), "n_starter":int(1e5), "n_deposit":int(1e5)}, # dynamic refresh
-                #  hopf_bank_params = {"n_total":int(4e6), "n_starter":int(4e6), "n_deposit":int(2e6)}, # to make static bank
+                #  hopf_bank_params = {"n_total":int(1e5), "n_starter":int(1e5), "n_deposit":int(1e5)}, # dynamic refresh
+                 hopf_bank_params = {"n_total":int(4e6), "n_starter":int(4e6), "n_deposit":int(2e6)}, # to make static bank
                  just_make_hopf_bank=False, refine_bank=False,
                  loaded_model=None,
                  ):
@@ -394,17 +394,32 @@ class ReachabilityDataset(Dataset):
         ## In N dimension, using same 2D grid on 3 slices of total space
         elif self.N > 2:
 
-            xnxi_plane = torch.zeros(self.n_grid_pts, self.N)
-            xnxi_plane[:, 0] = self.model_states_grid[:, 0]
-            xnxi_plane[:, 1] = self.model_states_grid[:, 1]
-            xixj_plane = torch.zeros(self.n_grid_pts, self.N)
-            xixj_plane[:, 1] = self.model_states_grid[:, 0]
-            xixj_plane[:, 2] = self.model_states_grid[:, 1]
+            # xnxi_plane = torch.zeros(self.n_grid_pts, self.N)
+            # xnxi_plane[:, 0] = self.model_states_grid[:, 0]
+            # xnxi_plane[:, 1] = self.model_states_grid[:, 1]
+
+            # xixj_plane = torch.zeros(self.n_grid_pts, self.N)
+            # xixj_plane[:, 1] = self.model_states_grid[:, 0]
+            # xixj_plane[:, 2] = self.model_states_grid[:, 1]
+
             xnxixj_plane = torch.zeros(self.n_grid_pts, self.N)
             xnxixj_plane[:, 0] = self.model_states_grid[:, 0]
             xnxixj_plane[:, 1:] = (self.model_states_grid[:, 1]* torch.ones(self.N-1, self.n_grid_pts)).t()
 
-            self.model_states_grid = torch.cat((xnxi_plane, xixj_plane, xnxixj_plane), dim=0)
+            xnxixj_plane2 = torch.zeros(self.n_grid_pts, self.N)
+            xnxixj_plane2[:, 0] = self.model_states_grid[:, 0] + 1/300
+            xnxixj_plane2[:, 1:] = (self.model_states_grid[:, 1]* torch.ones(self.N-1, self.n_grid_pts)).t() + 1/300
+
+            xnxixj_plane3 = torch.zeros(self.n_grid_pts, self.N)
+            xnxixj_plane3[:, 0] = self.model_states_grid[:, 0] + 2/300
+            xnxixj_plane3[:, 1:] = (self.model_states_grid[:, 1]* torch.ones(self.N-1, self.n_grid_pts)).t() + 2/300
+
+            # self.model_states_grid = torch.cat((xnxi_plane, xixj_plane, xnxixj_plane), dim=0)
+            # self.n_grid_pts = 3 * self.n_grid_pts
+
+            ## only scoring on xn-(xi=xj) plane
+            # self.model_states_grid = xnxixj_plane
+            self.model_states_grid = torch.cat((xnxixj_plane, xnxixj_plane2, xnxixj_plane3), dim=0)
             self.n_grid_pts = 3 * self.n_grid_pts
 
             times = torch.full((self.n_grid_pts, 1), self.tMin) # TODO: remove first time-point if model='exact'
