@@ -28,12 +28,12 @@ if __name__ == '__main__':
     p.add_argument('--use_wandb', default=False, action='store_true', help='use wandb for logging')
 
     ## Hopf options
-    p.add_argument('--hopf_loss', type=str, default='lin_val_diff', choices=['none', 'lin_val_diff', 'lin_val_grad_diff'], help='Method for using Hopf data')
+    p.add_argument('--hopf_loss', type=str, default='none', choices=['none', 'lin_val_diff', 'lin_val_grad_diff'], help='Method for using Hopf data')
     p.add_argument('--hopf_loss_divisor', default=5, required=False, type=float, help='What to divide the hopf loss by for loss reweighting')
     p.add_argument('--solve_grad', action='store_true', default=False, required=False, help='Compute gradient of linear guide (forced true if grad loss), but slower')
     p.add_argument('--hopf_grad_loss_divisor', default=25, required=False, type=float, help='What to divide the hopf grad loss by for loss reweighting')
     p.add_argument('--hopf_pretrain', action='store_true', default=True, required=False, help='Pretrain hopf conditions')
-    p.add_argument('--hopf_pretrain_iters', type=int, default=5000, required=False, help='Number of pretrain iterations with Hopf loss')
+    p.add_argument('--hopf_pretrain_iters', type=int, default=10000, required=False, help='Number of pretrain iterations with Hopf loss')
     
     p.add_argument('--hopf_loss_decay', action='store_true', default=False, required=False, help='Hopf loss weight decay')
     p.add_argument('--hopf_loss_decay_type', type=str, default='linear', choices=['exponential', 'linear', 'negative_exponential'], help='Type of decay for hopf loss term')
@@ -51,7 +51,7 @@ if __name__ == '__main__':
     p.add_argument('--reset_loss_period', type=int, default=500, required=False, help='The loss weight reset period')
 
     p.add_argument('--gt_metrics', action='store_true', default=True, required=False, help='Compute and score the learned value and set (needs ground truth)')
-    p.add_argument('--temporal_loss', action='store_true', default=True, required=False, help='Compute the loss over time chunks (slower)')
+    p.add_argument('--temporal_loss', action='store_true', default=False, required=False, help='Compute the loss over time chunks (slower)')
     p.add_argument('--capacity_test', action='store_true', default=False, required=False, help='Will use supervised-learning to train with the true solution (needs ground truth)')
     p.add_argument('--debug_params', action='store_true', default=False, required=False, help='Quick params for debugging')
     p.add_argument('--timing', action='store_true', default=False, required=False, help='Gives detailed breakdown of computation times per iteration')
@@ -192,8 +192,7 @@ if __name__ == '__main__':
 
     if opt.baseline:
         opt.hopf_loss = 'none'
-        opt.solve_grad = True
-        opt.temporal_loss = False
+        opt.temporal_loss = False ## bug
         # opt.numpoints, opt.lr, opt.lr_decay_w = 60000, 1e-5, 1.
 
     ## Clarity prints
