@@ -133,6 +133,7 @@ wandb
 
 # experiment data
 runs
+runs_benchmark
 
 # hopf banked data
 Bank*
