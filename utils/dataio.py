@@ -306,7 +306,7 @@ class ReachabilityDataset(Dataset):
                     return V, DV
                 self.V_hopf_grad = V_N_hopf_grad_itp
     
-    def init_groundtruth_tests(self):
+    def init_groundtruth_tests(self, load_lambda_var=False):
         
         if not(self.dp_manual_load):
 
@@ -366,6 +366,23 @@ class ReachabilityDataset(Dataset):
                             DV[:, [0, 1+i]] += torch.from_numpy(DVi.to_numpy()) # assumes xN first
                         return V, DV
                     self.V_DP_grad = V_N_DP_itp_grad_combo
+
+                if load_lambda_var:
+                    self.V_DP_inlam1_itp = LessLinear2D_interpolations["g0_m0_a0"]
+                    self.V_DP_inlam2_itp = LessLinear2D_interpolations["g0_m0_a0"]
+                    def V_N_DP_inlam1_itp_combo(tXg):
+                        V = 0 * tXg[0,:]
+                        for i in range(self.N-1):
+                            V += torch.from_numpy(self.fast_interp(self.V_DP_inlam1_itp, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
+                        return V
+                    def V_N_DP_inlam2_itp_combo(tXg):
+                        V = 0 * tXg[0,:]
+                        for i in range(self.N-1):
+                            V += torch.from_numpy(self.fast_interp(self.V_DP_inlam2_itp, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
+                        return V
+                    self.V_DP_inlam1 = V_N_DP_inlam1_itp_combo # for plotting the BRT of Linear Solution
+                    self.V_DP_inlam2 = V_N_DP_inlam2_itp_combo # for plotting the BRT of Linear Solution
+
 
         ## Define a fixed spatiotemporal grid to score Jaccard
 
@@ -452,6 +469,11 @@ class ReachabilityDataset(Dataset):
         self.model_coords_grid_allt = self.model_coords_grid_allt.cuda()
         self.model_coords_grid_allt_hi = self.model_coords_grid_allt_hi.cuda()
         self.model_states_grid = self.model_states_grid.cuda()
+
+        if load_lambda_var:
+            self.values_DP_grid_inlam1 = self.V_DP_inlam1(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
+            self.values_DP_grid_inlam2 = self.V_DP_inlam2(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
+
     
     def make_DP_bank(self):
         

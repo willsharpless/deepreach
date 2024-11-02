@@ -549,7 +549,7 @@ class LessLinearND(Dynamics):
         self.u_max, self.d_max = u_max, d_max
         super().__init__(
             loss_type='brt_hjivi', set_mode=set_mode,
-            state_dim=N, input_dim=N+1, control_dim=N-1, disturbance_dim=N-1, # TODO What is input_dim and what should it be?
+            state_dim=N, input_dim=N+1, control_dim=N-1, disturbance_dim=N-1,
             state_mean=[0 for _ in range(N)], 
             state_var=[1 for _ in range(N)],
             value_mean=0.25, 
@@ -561,7 +561,7 @@ class LessLinearND(Dynamics):
     def vary_nonlinearity(self, epsilon):
         self.gamma = epsilon * self.gamma_orig
         self.mu = epsilon * self.mu_orig
-        self.alpha = epsilon * self.alpha_orig
+        # self.alpha = epsilon * self.alpha_orig #shouldn't be varied since its not a scalar (1-\lambda) l(\cdot) +  \lambda f(\cdot)
 
     def state_test_range(self):
         return [[-1, 1] for _ in range(self.N)]
@@ -640,9 +640,128 @@ class LessLinearND(Dynamics):
             'z_axis_idx': 2,
         }
     
-# class LinearND(LessLinearND):
-#     def __init__(self, N:int, gamma:float, mu:float, alpha:float):
-#         super().__init__(self, N, 0, 0, 0)
+class LessLinearNDlambda(Dynamics):
+    def __init__(self, N:int, gamma:float, mu:float, alpha:float, goalR:float):
+    # def __init__(self, N:int):
+        # gamma, mu, alpha = 0, 0, 0
+        # gamma, mu, alpha = 20, 0, 0
+        # gamma, mu, alpha = 20, -20, 1
+        u_max, d_max, set_mode = 0.5, 0.3, "reach" # TODO: unfix
+
+        self.N = N 
+        self.u_max, self.d_max = u_max, d_max
+        self.input_center = torch.zeros(N-1)
+        self.input_shape = "box"
+        self.game = set_mode
+        
+        self.A = (-0.5 * torch.eye(N) - torch.cat((torch.cat((torch.zeros(1,1),torch.ones(N-1,1)),0),torch.zeros(N,N-1)),1)).cuda()
+        self.B = torch.cat((torch.zeros(1,N-1), 0.4*torch.eye(N-1)), 0)
+        self.Bumax = u_max * torch.matmul(self.B, torch.ones(self.N-1)).unsqueeze(0).unsqueeze(0).cuda()
+        self.C = torch.cat((torch.zeros(1,N-1), 0.1*torch.eye(N-1)), 0)
+        self.Cdmax = d_max * torch.matmul(self.C, torch.ones(self.N-1)).unsqueeze(0).unsqueeze(0).cuda()
+        self.gamma, self.mu, self.alpha = gamma, mu, alpha
+        self.gamma_orig, self.mu_orig, self.alpha_orig = gamma, mu, alpha
+
+        self.goalR_2d = goalR
+        self.goalR = ((N-1) ** 0.5) * self.goalR_2d # accounts for N-dimensional combination
+        self.ellipse_params = torch.cat((((N-1) ** 0.5) * torch.ones(1), torch.ones(N-1) / 1.), 0) # accounts for N-dimensional combination
+
+        self.u_max, self.d_max = u_max, d_max
+        super().__init__(
+            loss_type='brt_hjivi', set_mode=set_mode,
+            state_dim=N, input_dim=N+2, control_dim=N-1, disturbance_dim=N-1,
+            state_mean=[0 for _ in range(N+1)], 
+            state_var=[1 for _ in range(N+1)],
+            value_mean=0.25, 
+            value_var=0.5, 
+            value_normto=0.02,
+            deepreach_model="exact",
+        )
+
+    # def vary_nonlinearity(self, epsilon):
+    #     self.gamma = epsilon * self.gamma_orig
+    #     self.mu = epsilon * self.mu_orig
+    #     # self.alpha = epsilon * self.alpha_orig #shouldn't be varied since its not a scalar (1-\lambda) l(\cdot) +  \lambda f(\cdot)
+
+    def state_test_range(self):
+        return [[-1, 1] for _ in range(self.N+1)]
+
+    def equivalent_wrapped_state(self, state):
+        wrapped_state = torch.clone(state)
+        # wrapped_state[..., 2] = (wrapped_state[..., 2] + math.pi) % (2*math.pi) - math.pi
+        return wrapped_state
+        
+    # LessLinear dynamics
+    # \dot xN    = (aN \cdot x) + (no ctrl or dist) + lam * [mu * sin(alpha * xN) * xN^2]
+    # \dot xi    = (ai \cdot x) + bi * ui + ci * di - lam * [gamma * xi * xN^2]
+    # \dot lam   = 0
+    # i.e.
+    # \dot x = Ax + Bu + Cd + NLterm(x, gamma, mu, alpha)
+    def dsdt(self, state, control, disturbance):
+        dsdt = torch.zeros_like(state)
+
+        nl_term_N = self.mu * torch.sin(self.alpha * state[..., 0]) * state[..., 0] * state[..., 0]
+        nl_term_i = torch.multiply(-self.gamma * state[..., 0] * state[..., 0], state[..., 1:-1])
+        lambda_normal = (1 + state[..., -1])/2
+
+        dsdt[..., :-1] = torch.matmul(self.A, state[..., :-1]) + torch.matmul(self.B, control[..., :]) + torch.matmul(self.C, disturbance[..., :]) + lambda_normal * torch.cat((nl_term_N, nl_term_i), 0)
+        dsdt[..., -1] = 0
+        return dsdt
+    
+    def boundary_fn(self, state):
+        if self.ellipse_params.device != state.device: # FIXME: Patch to cover de/attached state bug
+            if state.device.type == 'cuda':
+                self.ellipse_params = self.ellipse_params.cuda()
+            else:
+                self.ellipse_params = self.ellipse_params.cpu()
+        return 0.5 * (torch.square(torch.norm(self.ellipse_params * state[..., :-1], dim=-1)) - (self.goalR ** 2))
+        # return 0.5 * (torch.square(torch.norm(torch.cat((((self.N-1)**0.5)*torch.ones(1),torch.ones(self.N-1)),0) * state[..., :], dim=-1)) - (self.goalR ** 2))
+
+    def sample_target_state(self, num_samples):
+        raise NotImplementedError
+    
+    def cost_fn(self, state_traj):
+        return torch.min(self.boundary_fn(state_traj), dim=-1).values
+    
+    def hamiltonian(self, state, dvds):
+
+        nl_term_N = (self.mu * torch.sin(self.alpha * state[..., 0]) * state[..., 0] * state[..., 0]).unsqueeze(-1)
+        nl_term_i = (-self.gamma * state[..., 0] * state[..., 0]).t() * state[..., 1:-1]
+        lambda_normal = (1 + state[..., -1])/2 # [-1,1] -> [0,1]
+
+        pAx = (dvds * (torch.matmul(state, self.A.t()) + lambda_normal * torch.cat((nl_term_N, nl_term_i), 2))).sum(2)
+        pBumax = (torch.abs(dvds) * self.Bumax).sum(2)
+        pCdmax = (torch.abs(dvds) * self.Cdmax).sum(2)
+
+        if self.set_mode == 'reach':
+            return pAx - pBumax + pCdmax
+        elif self.set_mode == 'avoid':
+            return pAx + pBumax - pCdmax
+
+    def optimal_control(self, state, dvds):
+        if self.set_mode == 'reach':
+            # return torch.cat((-self.u_max * torch.sign(dvds[..., 0]), -self.u_max * torch.sign(dvds[..., 1])), dim=-1)
+            return -self.u_max * torch.sign(dvds[..., :])
+        elif self.set_mode == 'avoid':
+            # return torch.cat((self.u_max * torch.sign(dvds[..., 0]), self.u_max * torch.sign(dvds[..., 1])), dim=-1)
+            return self.u_max * torch.sign(dvds[..., :])
+
+    def optimal_disturbance(self, state, dvds):
+        if self.set_mode == 'reach':
+            # return torch.cat((self.d_max * torch.sign(dvds[..., 0]), self.d_max * torch.sign(dvds[..., 1])), dim=-1)
+            return self.d_max * torch.sign(dvds[..., :]) # or should it be dvds[..., 1:-1]
+        elif self.set_mode == 'avoid':
+            # return torch.cat((-self.d_max * torch.sign(dvds[..., 0]), -self.d_max * torch.sign(dvds[..., 1])), dim=-1)
+            return -self.d_max * torch.sign(dvds[..., :])
+    
+    def plot_config(self): # FIXME
+        return {
+            'state_slices': [0 for _ in range(self.N+1)],
+            'state_labels': ['xN'] + ['x' + str(i) for i in range(1, self.N)] + ['lam'],
+            'x_axis_idx': 0,
+            'y_axis_idx': 1,
+            'z_axis_idx': 2,
+        }
 
 class Dubins4D(Dynamics):
     def __init__(self, bound_mode:str):

@@ -640,7 +640,7 @@ class DeepReachHopf(Experiment):
                 ax.zaxis.set_tick_params(pad=ax_pad)
 
             coords[:, 1 + plot_config['x_axis_idx']] = xys[:, 0]
-            coords[:, 2:] = (xys[:, 1] * torch.ones(self.N-1, xys.size()[0])).t()
+            coords[:, 2:-1] = (xys[:, 1] * torch.ones(self.N-1, xys.size()[0])).t()
 
             with torch.no_grad():
                 model_results = self.model({'coords': self.dataset.dynamics.coord_to_input(coords.cuda())})
@@ -661,12 +661,12 @@ class DeepReachHopf(Experiment):
 
             if learned_value.min() > 0:
                 # RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', [(1,1,1), (0.5,0.5,1), (0,0,1), (0,0,1)])
-                scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0., 0.4, 256))))
+                scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0.6, 1., 256))))
                 RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
 
             elif learned_value.max() < 0:
                 # RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', [(1,0,0), (1,0,0), (1,0.5,0.5), (1,1,1)])
-                scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0.6, 1., 256))))
+                scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0., 0.4, 256))))
                 RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
 
             else:
@@ -768,6 +768,221 @@ class DeepReachHopf(Experiment):
         if was_training:
             self.model.train()
             self.model.requires_grad_(True)
+
+    def validateNDlambda(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution, plot_value=True):
+        was_training = self.model.training
+        self.model.eval()
+        self.model.requires_grad_(False)
+
+        plot_config = self.dataset.dynamics.plot_config()
+
+        state_test_range = self.dataset.dynamics.state_test_range()
+        x_min, x_max = state_test_range[plot_config['x_axis_idx']]
+        y_min, y_max = state_test_range[plot_config['y_axis_idx']]
+        # z_min, z_max = state_test_range[plot_config['z_axis_idx']]
+
+        times = torch.linspace(0, self.dataset.tMax, time_resolution)
+        xs = torch.linspace(x_min, x_max, x_resolution)
+        ys = torch.linspace(y_min, y_max, y_resolution)
+        # zs = torch.linspace(z_min, z_max, z_resolution)
+        xys = torch.cartesian_prod(xs, ys)
+        Xg, Yg = torch.meshgrid(xs, ys)
+        
+        ## Plot Set and Value Fn
+        
+        # fig_set = plt.figure(figsize=(5*len(times), 2*5*1))
+        # fig_val = plt.figure(figsize=(5*len(times), 2*5*1), facecolor='white')
+
+        fig = plt.figure(figsize=(5*len(times), 4*5*1), facecolor='white')
+        
+        plt.rcParams['text.usetex'] = False
+
+        for i in range(4*len(times)):
+        # for i in range(2*len(times)):
+            
+            # ax_set = fig_set.add_subplot(2, len(times), 1+i)
+            # ax_val = fig_val.add_subplot(2, len(times), 1+i, projection='3d')
+            # ax_set.set_title('t = %0.2f' % (times[i % len(times)]))
+            # ax_val.set_title('t = %0.2f' % (times[i % len(times)]))
+
+            if i < len(times):
+                lambda_val = 0 
+            elif i < 2*len(times):
+                lambda_val = 1/3
+            elif i < 3*len(times):
+                lambda_val = 2/3 
+            else:
+                lambda_val = 1 
+
+            ax = fig.add_subplot(4, len(times), 1+i)
+            ax.set_title(f"t = {times[i % len(times)]:0.2f}, lambda = {lambda_val:1.1f}")
+
+            ## Define Grid Slice to Plot
+
+            coords = torch.zeros(x_resolution*y_resolution, self.dataset.dynamics.state_dim + 1)
+            coords[:, 0] = times[i % len(times)]
+            coords[:, 1:-1] = torch.tensor(plot_config['state_slices']) # initialized to zero (nothing else to set!)
+            coords[:, -1] = lambda_val
+
+            # if i < len(times): # xN - xi plane
+            #     ax_set.set_xlabel("xN"); ax_set.set_ylabel("xi")
+            #     ax_val.set_xlabel("xN"); ax_val.set_ylabel("xi")
+            #     coords[:, 1 + plot_config['x_axis_idx']] = xys[:, 0]
+            #     coords[:, 1 + plot_config['y_axis_idx']] = xys[:, 1]
+
+            # elif i < 2*len(times): # xi - xj plane
+            #     ax_set.set_xlabel("xi"); ax_set.set_ylabel("xj")
+            #     ax_val.set_xlabel("xi"); ax_val.set_ylabel("xj")
+            #     coords[:, 1 + plot_config['y_axis_idx']] = xys[:, 0]
+            #     coords[:, 1 + plot_config['z_axis_idx']] = xys[:, 1]
+
+            # xN - (xi = xj) plane
+            pad_label = 0
+            ax.set_xlabel(r"$x_N$", fontsize=12, labelpad=pad_label); ax.set_ylabel(r"$x_i = x_j$", fontsize=12, labelpad=pad_label)
+            ax.set_xticks([-1, 1])
+            ax.set_xticklabels([r'$-1$', r'$1$'])
+            ax.set_yticks([-1, 1])
+            ax.set_yticklabels([r'$-1$', r'$1$'])
+
+            ax_pad = 0
+            ax.xaxis.set_tick_params(pad=ax_pad)
+            ax.yaxis.set_tick_params(pad=ax_pad)
+
+            coords[:, 1 + plot_config['x_axis_idx']] = xys[:, 0]
+            coords[:, 2:-1] = (xys[:, 1] * torch.ones(self.N-1, xys.size()[0])).t()
+
+            with torch.no_grad():
+                model_results = self.model({'coords': self.dataset.dynamics.coord_to_input(coords.cuda())})
+                values = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach())
+            
+            learned_value = values.detach().cpu().numpy().reshape(x_resolution, y_resolution)
+
+            n_grid_plane_pts = int(self.dataset.n_grid_pts/3)
+            n_grid_len = int(n_grid_plane_pts ** 0.5)
+            pix_start = (i // len(times)) * n_grid_plane_pts
+            tix_start = (i % len(times)) * self.dataset.n_grid_pts
+            ix = pix_start + tix_start
+
+            if i < len(times):
+                Vgt = self.dataset.values_DP_linear_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len).cpu()
+            elif i < 2*len(times):
+                Vgt = self.dataset.values_DP_grid_inlam1[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len).cpu()
+            elif i < 3*len(times):
+                Vgt = self.dataset.values_DP_grid_inlam2[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len).cpu()
+            else:
+                Vgt = self.dataset.values_DP_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len).cpu() 
+
+            ## Make Value-Based Colormap
+            # cmap_name = "coolwarm"
+            cmap_name = "RdBu"
+
+            if learned_value.min() > 0:
+                # RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', [(1,1,1), (0.5,0.5,1), (0,0,1), (0,0,1)])
+                scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0.6, 1., 256))))
+                RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
+
+            elif learned_value.max() < 0:
+                # RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', [(1,0,0), (1,0,0), (1,0.5,0.5), (1,1,1)])
+                scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0., 0.4, 256))))
+                RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
+
+            else:
+                # n_bins_high = int(256 * (learned_value.max()/(learned_value.max() - learned_value.min())) // 1)
+                n_bins_high = round(256 * learned_value.max()/(learned_value.max() - learned_value.min()))
+
+                # RdWh = matplotlib.colors.LinearSegmentedColormap.from_list('RdWh', [(1,0,0), (1,0,0), (1,0.5,0.5), (1,1,1)])
+                # WhBl = matplotlib.colors.LinearSegmentedColormap.from_list('WhBl', [(1,1,1), (0.5,0.5,1), (0,0,1), (0,0,1)])
+                # RdWh = matplotlib.colors.LinearSegmentedColormap.from_list('RdWh', [(1,0,0), (1,0,0), (0.5, 0.,0.), (0,0,0)])
+                # WhBl = matplotlib.colors.LinearSegmentedColormap.from_list('WhBl', [(0,0,0), (0.,0.,0.5), (0,0,1), (0,0,1)])
+                # RdWh = matplotlib.colors.LinearSegmentedColormap.from_list('RdWh', [(153/255, 21/255, 39/255), (153/255, 21/255, 39/255), (153/255, 21/255, 39/255), (10/255,10/255,15/255)])
+                # WhBl = matplotlib.colors.LinearSegmentedColormap.from_list('WhBl', [(10/255,10/255,15/255), (38/255, 69/255, 168/255), (38/255, 69/255, 168/255), (38/255, 69/255, 168/255)])
+                                                                                    
+                # colors = np.vstack((RdWh(np.linspace(0., 1, 256-n_bins_high)), WhBl(np.linspace(0., 1, n_bins_high))))
+                # RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', colors)
+
+                # gray_band_width = 4
+                # Gray = matplotlib.colors.LinearSegmentedColormap.from_list('Gray', [(10/255,10/255,15/255),(10/255,10/255,15/255)])
+                # colors = np.vstack((matplotlib.colormaps["RdBu"](np.linspace(0., 0.5, 256-n_bins_high)), Gray(np.linspace(0., 1., int(gray_band_width))), matplotlib.colormaps["RdBu"](np.linspace(0.5, 1., n_bins_high-gray_band_width))))
+                # RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', colors)
+
+                offset = 0
+                scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0., 0.4, 256-n_bins_high+offset)), matplotlib.colormaps[cmap_name](np.linspace(0.6, 1., n_bins_high-offset))))
+                RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
+
+            ## Plot Zero-level Set of Learned Value
+            
+            # s = ax.imshow(1*(learned_value.T <= 0), cmap='bwr', origin='lower', extent=(-1., 1., -1., 1.))
+            s = ax.imshow(learned_value.T, cmap=RdWhBl_vscaled, origin='lower', extent=(-1., 1., -1., 1.))
+            # s = ax.contourf(Xg, Yg, learned_value, cmap=RdWhBl_vscaled, levels=256)
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes("right", size="5%", pad=0.05)
+            cbar = fig.colorbar(s, cax=cax)
+            cbar.set_ticks([learned_value.min(), 0., learned_value.max()])  # Define custom tick locations
+            cbar.set_ticklabels([f'{learned_value.min():1.1f}', '0', f'{learned_value.max():1.1f}'])  # Define custom tick labels
+
+            ## Plot Ground-Truth Zero-Level Contour
+
+            ax.contour(self.dataset.X1g, self.dataset.X2g, Vgt, [0.], linewidths=4, alpha=0.7, colors='k')
+
+            # ## Plot the Linear Ground-Truth (ideal warm-start) Zero-Level Contour
+
+            # Vgt = self.dataset.values_DP_linear_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len).cpu()
+            # ax.contour(self.dataset.X1g, self.dataset.X2g, Vgt, [0.], colors='gold', linestyles='dashed')
+
+            ## Plot 3D Value Fn
+
+            # else:
+            #     if plot_value:
+            #         # ax_val.grid(False)
+            #         ax.view_init(elev=15, azim=-60)
+            #         ax.set_facecolor((1, 1, 1, 1))
+            #         surf = ax.plot_surface(Xg, Yg, learned_value, cmap=RdWhBl_vscaled, alpha=0.8) #cmap='bwr_r')
+            #         # surf = ax.plot_surface(self.dataset.X1g, self.dataset.X2g, Vgt, cmap=RdWhBl_vscaled, alpha=0.8) #cmap='bwr_r')
+                    
+            #         # divider = make_axes_locatable(ax_set)
+            #         # cax = divider.append_axes("right", size="5%", pad=0.05)
+            #         # fig_set.colorbar(s, cax=cax)
+            #         cbar = fig.colorbar(surf, ax=ax, fraction=0.02, pad=0.0)
+
+            #         # cbar.ax.yaxis.set_ticks_position('left')
+            #         # cbar.ax.yaxis.set_label_position('left')
+
+            #         # ax.set_zlim(-max(ax.get_zlim()[1]/5, 0.5))
+            #         # ax.set_zlim(-max(learned_value.max()/5, 0.5), max(learned_value.max(), 2.5))
+            #         ax.set_zlim(learned_value.min() - (learned_value.max() - learned_value.min())/5)
+            #         # ax.contour(Xg, Yg, learned_value, zdir='z', offset=ax.get_zlim()[0], cmap=RdWh, levels=[0.]) #cmap='bwr_r')
+
+            #         ax.contour(Xg, Yg, learned_value, zdir='z', offset=ax.get_zlim()[0], colors='k', levels=[0.]) #cmap='bwr_r')
+            #         # ax.contour(self.dataset.X1g, self.dataset.X2g, Vgt, zdir='z', offset=ax.get_zlim()[0], colors='k', levels=[0.]) #cmap='bwr_r')
+
+            #         ax.set_facecolor((1, 1, 1, 1))
+            #         # ax_val.grid(False)
+
+        # fig_set.savefig(save_path)
+        # if plot_value: fig_val.savefig(save_path.split('_epoch')[0] + '_Vfn' + save_path.split('_epoch')[1])
+        # if self.use_wandb:
+        #     log_dict_plot = {'step': epoch,
+        #                 'val_plot': wandb.Image(fig_set),} # (silly) legacy name
+        #     if plot_value: log_dict_plot['val_fn_plot'] = wandb.Image(fig_val)
+        #     wandb.log(log_dict_plot)
+        # plt.close()
+
+        fig.savefig(save_path)
+        if self.use_wandb:
+            log_dict_plot = {'step': epoch,
+                        'val_plot': wandb.Image(fig),} # (silly) legacy name
+            wandb.log(log_dict_plot)
+        plt.close()
+
+        # if self.dataset.record_gt_metrics:
+        #     self.plot_set_metrics_eachtime(epoch, times)
+        #     if self.use_wandb:
+        #         wandb.log({'Time vs. Epoch vs. Set Accuracy compared to DP': wandb.Image(self.t_ep_acc_fig),})
+        #     plt.close()
+
+        if was_training:
+            self.model.train()
+            self.model.requires_grad_(True)            
 
     def compute_gt_metrics(self):
 
