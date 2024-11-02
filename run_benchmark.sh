@@ -12,8 +12,6 @@ readonly goalR="0.25"
 readonly num_epochs="200000"
 readonly bs="65000"
 
-# readonly wandb_name="LLND: NL $dim, baseline"
-# readonly base_args="run_experiment.py --dynamics_class LessLinearND --N $dim --goalR $goalR --num_epochs $num_epochs"
 readonly base_args="run_experiment.py --experiment_name $experiment_name --use_wandb --wandb_project $wandb_project --wandb_name baseline_run --dynamics_class LessLinearND --N $dim --goalR $goalR --num_epochs $num_epochs --numpoints $bs"
 
 readonly bench_mag="20"
@@ -36,8 +34,6 @@ readonly method_args="--baseline" ## Baseline
 mkdir -p $output_dir_name
 
 python $base_args $bench1 $method_args
-
-readonly output_dir_name="./runs_benchmark/baseline_bench"
 
 cp wandb/latest-run/files/wandb-summary.json $output_dir_name/wandb-summary_b1.json
 cp runs/$experiment_name/training/checkpoints/model_final.pth $output_dir_name/model_final_b1.pth
