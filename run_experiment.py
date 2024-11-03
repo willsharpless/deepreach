@@ -311,7 +311,7 @@ if __name__ == '__main__':
         use_bank=orig_opt.use_bank, bank_name=orig_opt.bank_name, capacity_test=orig_opt.capacity_test,
         solve_hopf=orig_opt.solve_hopf, solve_grad=orig_opt.solve_grad, hopf_warm_start=orig_opt.hopf_warm_start,
         just_make_hopf_bank=orig_opt.just_make_hopf_bank, refine_bank=orig_opt.refine_bank,
-        loaded_model=loaded_model)
+        loaded_model=loaded_model, lambda_var=orig_opt.dynamics_class.endswith("lambda"))
 
     model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
                                 final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl)

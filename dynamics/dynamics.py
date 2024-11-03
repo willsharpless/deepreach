@@ -669,7 +669,7 @@ class LessLinearNDlambda(Dynamics):
         self.u_max, self.d_max = u_max, d_max
         super().__init__(
             loss_type='brt_hjivi', set_mode=set_mode,
-            state_dim=N, input_dim=N+2, control_dim=N-1, disturbance_dim=N-1,
+            state_dim=N+1, input_dim=N+2, control_dim=N-1, disturbance_dim=N-1,
             state_mean=[0 for _ in range(N+1)], 
             state_var=[1 for _ in range(N+1)],
             value_mean=0.25, 
@@ -725,13 +725,13 @@ class LessLinearNDlambda(Dynamics):
     
     def hamiltonian(self, state, dvds):
 
-        nl_term_N = (self.mu * torch.sin(self.alpha * state[..., 0]) * state[..., 0] * state[..., 0]).unsqueeze(-1)
-        nl_term_i = (-self.gamma * state[..., 0] * state[..., 0]).t() * state[..., 1:-1]
         lambda_normal = (1 + state[..., -1])/2 # [-1,1] -> [0,1]
+        nl_term_N = (lambda_normal * self.mu * torch.sin(self.alpha * state[..., 0]) * state[..., 0] * state[..., 0]).unsqueeze(-1)
+        nl_term_i = (lambda_normal * (-self.gamma * state[..., 0] * state[..., 0])).t() * state[..., 1:-1]
 
-        pAx = (dvds * (torch.matmul(state, self.A.t()) + lambda_normal * torch.cat((nl_term_N, nl_term_i), 2))).sum(2)
-        pBumax = (torch.abs(dvds) * self.Bumax).sum(2)
-        pCdmax = (torch.abs(dvds) * self.Cdmax).sum(2)
+        pAx = (dvds[..., :-1] * (torch.matmul(state[..., :-1], self.A.t()) + torch.cat((nl_term_N, nl_term_i), 2))).sum(2)
+        pBumax = (torch.abs(dvds[..., :-1]) * self.Bumax).sum(2)
+        pCdmax = (torch.abs(dvds[..., :-1]) * self.Cdmax).sum(2)
 
         if self.set_mode == 'reach':
             return pAx - pBumax + pCdmax
@@ -741,7 +741,7 @@ class LessLinearNDlambda(Dynamics):
     def optimal_control(self, state, dvds):
         if self.set_mode == 'reach':
             # return torch.cat((-self.u_max * torch.sign(dvds[..., 0]), -self.u_max * torch.sign(dvds[..., 1])), dim=-1)
-            return -self.u_max * torch.sign(dvds[..., :])
+            return -self.u_max * torch.sign(dvds[..., :]) # or should it be dvds[..., 1:-1]?
         elif self.set_mode == 'avoid':
             # return torch.cat((self.u_max * torch.sign(dvds[..., 0]), self.u_max * torch.sign(dvds[..., 1])), dim=-1)
             return self.u_max * torch.sign(dvds[..., :])
@@ -749,7 +749,7 @@ class LessLinearNDlambda(Dynamics):
     def optimal_disturbance(self, state, dvds):
         if self.set_mode == 'reach':
             # return torch.cat((self.d_max * torch.sign(dvds[..., 0]), self.d_max * torch.sign(dvds[..., 1])), dim=-1)
-            return self.d_max * torch.sign(dvds[..., :]) # or should it be dvds[..., 1:-1]
+            return self.d_max * torch.sign(dvds[..., :]) # or should it be dvds[..., 1:-1]?
         elif self.set_mode == 'avoid':
             # return torch.cat((-self.d_max * torch.sign(dvds[..., 0]), -self.d_max * torch.sign(dvds[..., 1])), dim=-1)
             return -self.d_max * torch.sign(dvds[..., :])

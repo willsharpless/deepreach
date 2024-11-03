@@ -20,7 +20,7 @@ class ReachabilityDataset(Dataset):
                 #  hopf_bank_params = {"n_total":int(1e5), "n_starter":int(1e5), "n_deposit":int(1e5)}, # dynamic refresh
                  hopf_bank_params = {"n_total":int(4e6), "n_starter":int(4e6), "n_deposit":int(2e6)}, # to make static bank
                  just_make_hopf_bank=False, refine_bank=False,
-                 loaded_model=None,
+                 loaded_model=None, lambda_var=False
                  ):
 
         self.dynamics = dynamics
@@ -85,6 +85,11 @@ class ReachabilityDataset(Dataset):
         self.loaded_model = loaded_model
         if loaded_model: self.loaded_model = loaded_model.cuda()
         self.load_hopf_model = loaded_model is not None
+
+        # Lambda Variation Options
+        self.lambda_var = lambda_var
+        self.lambda_int_1 = 0.1
+        self.lambda_int_2 = 0.5
         
         ## Compute Linear Value from Model (if hopf loss)
         if use_hopf and not(self.dp_manual_load):
@@ -109,7 +114,7 @@ class ReachabilityDataset(Dataset):
                 
         ## Get Ground Truth for Special N-Dimensional Decomposable LessLinear System
         if record_gt_metrics:
-            self.init_groundtruth_tests()
+            self.init_groundtruth_tests(load_lambda_var=self.lambda_var)
 
         ## Make a bank of evaluated points, instead of evaluating online
         if self.make_bank:
@@ -159,7 +164,7 @@ class ReachabilityDataset(Dataset):
             if self.pretrain or self.load_hopf_model:
                 hopf_values = torch.zeros(self.numpoints)
                 if self.solve_grad:
-                    hopf_grads = torch.zeros(self.numpoints, self.N)
+                    hopf_grads = torch.zeros(self.numpoints, self.dynamics.state_dim)
 
             ## Sample Bank of Hopf-Evaluated Points
             elif self.use_bank:
@@ -181,14 +186,14 @@ class ReachabilityDataset(Dataset):
                         bank_sample = torch.from_numpy(self.bank[sample_index, :])                
 
                 # separate states so pde loss is not restricted to small bank sample
-                model_coords_hopf = bank_sample[:, 0:self.N+1]
-                hopf_values = bank_sample[:, self.N+2]
+                model_coords_hopf = bank_sample[:, 0:self.dynamics.state_dim+1]
+                hopf_values = bank_sample[:, self.dynamics.state_dim+2]
 
                 if self.solve_grad:
                     if self.solve_hopf or self.mp_bank: ## TODO: fix static bank format to match hopf
-                        hopf_grads = bank_sample[:, self.N+4:2*self.N+4]
+                        hopf_grads = bank_sample[:, self.dynamics.state_dim+4:2*self.dynamics.state_dim+4]
                     else:
-                        hopf_grads = bank_sample[:, self.N+3:]
+                        hopf_grads = bank_sample[:, self.dynamics.state_dim+3:]
 
             ## Compute Dynamic Programming Interpolation
             else:
@@ -368,8 +373,9 @@ class ReachabilityDataset(Dataset):
                     self.V_DP_grad = V_N_DP_itp_grad_combo
 
                 if load_lambda_var:
-                    self.V_DP_inlam1_itp = LessLinear2D_interpolations["g0_m0_a0"]
-                    self.V_DP_inlam2_itp = LessLinear2D_interpolations["g0_m0_a0"]
+                    LessLinear2D_interpolations_lam = jl.load(self.llnd_path + f"interps/LessLinear2D1i_interpolations_res1e-2_r{int(100*self.dynamics.goalR_2d)}e-2_c{int(abs(self.dynamics.gamma))}_lambdavar.jld", "LessLinear2D_interpolations")
+                    self.V_DP_inlam1_itp = LessLinear2D_interpolations_lam[model_key + f"_lp{int(10 * self.lambda_int_1):1d}"]
+                    self.V_DP_inlam2_itp = LessLinear2D_interpolations_lam[model_key + f"_lp{int(10 * self.lambda_int_2):1d}"]
                     def V_N_DP_inlam1_itp_combo(tXg):
                         V = 0 * tXg[0,:]
                         for i in range(self.N-1):
@@ -411,25 +417,42 @@ class ReachabilityDataset(Dataset):
         ## In N dimension, using same 2D grid on 3 slices of total space
         elif self.N > 2:
 
-            # xnxi_plane = torch.zeros(self.n_grid_pts, self.N)
+            # xnxi_plane = torch.zeros(self.n_grid_pts, self.dynamics.state_dim)
             # xnxi_plane[:, 0] = self.model_states_grid[:, 0]
             # xnxi_plane[:, 1] = self.model_states_grid[:, 1]
 
-            # xixj_plane = torch.zeros(self.n_grid_pts, self.N)
+            # xixj_plane = torch.zeros(self.n_grid_pts, self.dynamics.state_dim)
             # xixj_plane[:, 1] = self.model_states_grid[:, 0]
             # xixj_plane[:, 2] = self.model_states_grid[:, 1]
 
-            xnxixj_plane = torch.zeros(self.n_grid_pts, self.N)
-            xnxixj_plane[:, 0] = self.model_states_grid[:, 0]
-            xnxixj_plane[:, 1:] = (self.model_states_grid[:, 1]* torch.ones(self.N-1, self.n_grid_pts)).t()
+            if not load_lambda_var:
+                xnxixj_plane = torch.zeros(self.n_grid_pts, self.dynamics.state_dim)
+                xnxixj_plane[:, 0] = self.model_states_grid[:, 0]
+                xnxixj_plane[:, 1:] = (self.model_states_grid[:, 1]* torch.ones(self.dynamics.state_dim-1, self.n_grid_pts)).t()
 
-            xnxixj_plane2 = torch.zeros(self.n_grid_pts, self.N)
-            xnxixj_plane2[:, 0] = self.model_states_grid[:, 0] + 1/300
-            xnxixj_plane2[:, 1:] = (self.model_states_grid[:, 1]* torch.ones(self.N-1, self.n_grid_pts)).t() + 1/300
+                xnxixj_plane2 = torch.zeros(self.n_grid_pts, self.dynamics.state_dim)
+                xnxixj_plane2[:, 0] = self.model_states_grid[:, 0] + 1/300
+                xnxixj_plane2[:, 1:] = (self.model_states_grid[:, 1]* torch.ones(self.dynamics.state_dim-1, self.n_grid_pts)).t() + 1/300
 
-            xnxixj_plane3 = torch.zeros(self.n_grid_pts, self.N)
-            xnxixj_plane3[:, 0] = self.model_states_grid[:, 0] + 2/300
-            xnxixj_plane3[:, 1:] = (self.model_states_grid[:, 1]* torch.ones(self.N-1, self.n_grid_pts)).t() + 2/300
+                xnxixj_plane3 = torch.zeros(self.n_grid_pts, self.dynamics.state_dim)
+                xnxixj_plane3[:, 0] = self.model_states_grid[:, 0] + 2/300
+                xnxixj_plane3[:, 1:] = (self.model_states_grid[:, 1]* torch.ones(self.dynamics.state_dim-1, self.n_grid_pts)).t() + 2/300
+
+            else:
+                xnxixj_plane = torch.zeros(self.n_grid_pts, self.dynamics.state_dim)
+                xnxixj_plane[:, 0] = self.model_states_grid[:, 0]
+                xnxixj_plane[:, 1:-1] = (self.model_states_grid[:, 1]* torch.ones(self.dynamics.N-1, self.n_grid_pts)).t()
+                xnxixj_plane[:, -1] = torch.ones(self.n_grid_pts)
+
+                xnxixj_plane2 = torch.zeros(self.n_grid_pts, self.dynamics.state_dim)
+                xnxixj_plane2[:, 0] = self.model_states_grid[:, 0] + 1/300
+                xnxixj_plane2[:, 1:-1] = (self.model_states_grid[:, 1]* torch.ones(self.dynamics.N-1, self.n_grid_pts)).t() + 1/300
+                xnxixj_plane2[:, -1] = torch.ones(self.n_grid_pts)
+
+                xnxixj_plane3 = torch.zeros(self.n_grid_pts, self.dynamics.state_dim)
+                xnxixj_plane3[:, 0] = self.model_states_grid[:, 0] + 2/300
+                xnxixj_plane3[:, 1:-1] = (self.model_states_grid[:, 1]* torch.ones(self.dynamics.N-1, self.n_grid_pts)).t() + 2/300
+                xnxixj_plane3[:, -1] = torch.ones(self.n_grid_pts)
 
             # self.model_states_grid = torch.cat((xnxi_plane, xixj_plane, xnxixj_plane), dim=0)
             # self.n_grid_pts = 3 * self.n_grid_pts
@@ -463,23 +486,22 @@ class ReachabilityDataset(Dataset):
         self.values_DP_linear_grid = self.V_DP_linear(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
         self.values_DP_grid_sub0_ixs = torch.argwhere(self.values_DP_grid <= 0).flatten().cuda()
 
+        if load_lambda_var:
+            self.values_DP_grid_inlam1 = self.V_DP_inlam1(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
+            self.values_DP_grid_inlam2 = self.V_DP_inlam2(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
+        
         self.values_DP_grid_hi = self.V_DP(self.dynamics.input_to_coord(self.model_coords_grid_allt_hi).t()).cuda()
         self.values_DP_grid_sub0_ixs_hi = torch.argwhere(self.values_DP_grid_hi <= 0).flatten().cuda()
 
         self.model_coords_grid_allt = self.model_coords_grid_allt.cuda()
         self.model_coords_grid_allt_hi = self.model_coords_grid_allt_hi.cuda()
         self.model_states_grid = self.model_states_grid.cuda()
-
-        if load_lambda_var:
-            self.values_DP_grid_inlam1 = self.V_DP_inlam1(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
-            self.values_DP_grid_inlam2 = self.V_DP_inlam2(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
-
     
     def make_DP_bank(self):
         
         print("\nMaking a Static Bank of Interpolated Points ...")
-        bank = torch.zeros(self.bank_total, 2*(self.N)+3) # cols: time (1), state (2 - N+1), boundary value (N+2), value (N+3), spatial grad (N+4 - end)
-        bank[:, 1:self.N+1] = torch.zeros(self.bank_total, self.N).uniform_(-1, 1) 
+        bank = torch.zeros(self.bank_total, 2*(self.dynamics.state_dim)+3) # cols: time (1), state (2 - N+1), boundary value (N+2), value (N+3), spatial grad (N+4 - end)
+        bank[:, 1:self.dynamics.state_dim+1] = torch.zeros(self.bank_total, self.dynamics.state_dim).uniform_(-1, 1) 
         # TODO better sampling: latin hypercube? sparse grid? near boundary? uncertainty model?
 
         step = self.numpoints 
@@ -487,15 +509,15 @@ class ReachabilityDataset(Dataset):
             for i in range(0, self.bank_total, step):
 
                 # Make T & X (model_coords)
-                bank[i:i+step, 0:self.N+1] = torch.cat((torch.full((step, 1), (i//step)*(self.tMax-self.tMin)/(self.numblocks-1)),
-                                                            bank[i:i+step, 1:self.N+1]), dim=1)
+                bank[i:i+step, 0:self.dynamics.state_dim+1] = torch.cat((torch.full((step, 1), (i//step)*(self.tMax-self.tMin)/(self.numblocks-1)),
+                                                            bank[i:i+step, 1:self.dynamics.state_dim+1]), dim=1)
                 
                 # Solve Boundary & Hopf Value 
-                bank[i:i+step, self.N+1] = self.dynamics.boundary_fn(self.dynamics.input_to_coord(bank[i:i+step, 0:self.N+1])[..., 1:])
+                bank[i:i+step, self.dynamics.state_dim+1] = self.dynamics.boundary_fn(self.dynamics.input_to_coord(bank[i:i+step, 0:self.dynamics.state_dim+1])[..., 1:])
                 if self.solve_grad:
-                    bank[i:i+step, self.N+2], bank[i:i+step, self.N+3:] = self.V_hopf_grad(self.dynamics.input_to_coord(bank[i:i+step, 0:self.N+1]).t())
+                    bank[i:i+step, self.dynamics.state_dim+2], bank[i:i+step, self.dynamics.state_dim+3:] = self.V_hopf_grad(self.dynamics.input_to_coord(bank[i:i+step, 0:self.dynamics.state_dim+1]).t())
                 else:
-                    bank[i:i+step, self.N+2] = self.V_hopf(self.dynamics.input_to_coord(bank[i:i+step, 0:self.N+1]).t())
+                    bank[i:i+step, self.dynamics.state_dim+2] = self.V_hopf(self.dynamics.input_to_coord(bank[i:i+step, 0:self.dynamics.state_dim+1]).t())
 
                 pbar.update(1)
 

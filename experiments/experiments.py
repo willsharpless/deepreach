@@ -485,6 +485,8 @@ class DeepReachHopf(Experiment):
             self.validate = self.validate2D
         elif N > 2:
             self.validate = self.validateND
+            if self.dataset.lambda_var: 
+                self.validate = self.validateNDlambda
         pass        
     
     def validate2D(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution):
@@ -652,7 +654,8 @@ class DeepReachHopf(Experiment):
             n_grid_len = int(n_grid_plane_pts ** 0.5)
             pix_start = (i // len(times)) * n_grid_plane_pts
             tix_start = (i % len(times)) * self.dataset.n_grid_pts
-            ix = pix_start + tix_start
+            # ix = pix_start + tix_start # plane and grid no longer synced
+            ix = tix_start
             Vgt = self.dataset.values_DP_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len).cpu()
 
             ## Make Value-Based Colormap
@@ -808,9 +811,9 @@ class DeepReachHopf(Experiment):
             if i < len(times):
                 lambda_val = 0 
             elif i < 2*len(times):
-                lambda_val = 1/3
+                lambda_val = self.dataset.lambda_int_1
             elif i < 3*len(times):
-                lambda_val = 2/3 
+                lambda_val = self.dataset.lambda_int_2
             else:
                 lambda_val = 1 
 
@@ -821,7 +824,7 @@ class DeepReachHopf(Experiment):
 
             coords = torch.zeros(x_resolution*y_resolution, self.dataset.dynamics.state_dim + 1)
             coords[:, 0] = times[i % len(times)]
-            coords[:, 1:-1] = torch.tensor(plot_config['state_slices']) # initialized to zero (nothing else to set!)
+            coords[:, 1:] = torch.tensor(plot_config['state_slices']) # initialized to zero (nothing else to set!)
             coords[:, -1] = lambda_val
 
             # if i < len(times): # xN - xi plane
@@ -861,7 +864,8 @@ class DeepReachHopf(Experiment):
             n_grid_len = int(n_grid_plane_pts ** 0.5)
             pix_start = (i // len(times)) * n_grid_plane_pts
             tix_start = (i % len(times)) * self.dataset.n_grid_pts
-            ix = pix_start + tix_start
+            # ix = pix_start + tix_start # plane and grid no longer synced
+            ix = tix_start
 
             if i < len(times):
                 Vgt = self.dataset.values_DP_linear_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len).cpu()
