@@ -89,7 +89,8 @@ class ReachabilityDataset(Dataset):
         # Lambda Variation Options
         self.lambda_var = lambda_var
         self.lambda_int_1 = 0.1
-        self.lambda_int_2 = 0.5
+        self.lambda_int_2 = 0.2
+        self.lambda_int_3 = 0.5
         
         ## Compute Linear Value from Model (if hopf loss)
         if use_hopf and not(self.dp_manual_load):
@@ -376,6 +377,7 @@ class ReachabilityDataset(Dataset):
                     LessLinear2D_interpolations_lam = jl.load(self.llnd_path + f"interps/LessLinear2D1i_interpolations_res1e-2_r{int(100*self.dynamics.goalR_2d)}e-2_c{int(abs(self.dynamics.gamma))}_lambdavar.jld", "LessLinear2D_interpolations")
                     self.V_DP_inlam1_itp = LessLinear2D_interpolations_lam[model_key + f"_lp{int(10 * self.lambda_int_1):1d}"]
                     self.V_DP_inlam2_itp = LessLinear2D_interpolations_lam[model_key + f"_lp{int(10 * self.lambda_int_2):1d}"]
+                    self.V_DP_inlam3_itp = LessLinear2D_interpolations_lam[model_key + f"_lp{int(10 * self.lambda_int_3):1d}"]
                     def V_N_DP_inlam1_itp_combo(tXg):
                         V = 0 * tXg[0,:]
                         for i in range(self.N-1):
@@ -386,8 +388,14 @@ class ReachabilityDataset(Dataset):
                         for i in range(self.N-1):
                             V += torch.from_numpy(self.fast_interp(self.V_DP_inlam2_itp, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
                         return V
+                    def V_N_DP_inlam3_itp_combo(tXg):
+                        V = 0 * tXg[0,:]
+                        for i in range(self.N-1):
+                            V += torch.from_numpy(self.fast_interp(self.V_DP_inlam3_itp, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
+                        return V
                     self.V_DP_inlam1 = V_N_DP_inlam1_itp_combo # for plotting the BRT of Linear Solution
                     self.V_DP_inlam2 = V_N_DP_inlam2_itp_combo # for plotting the BRT of Linear Solution
+                    self.V_DP_inlam3 = V_N_DP_inlam3_itp_combo # for plotting the BRT of Linear Solution
 
 
         ## Define a fixed spatiotemporal grid to score Jaccard
