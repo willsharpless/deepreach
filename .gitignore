@@ -135,6 +135,7 @@ wandb
 runs
 runs_benchmark
 plots
+value_fns
 
 # hopf banked data
 Bank*
