@@ -1,4 +1,5 @@
 from juliacall import Main as jl, convert as jlconvert
+
 import torch
 import numpy as np
 from torch.utils.data import Dataset
@@ -20,7 +21,7 @@ class ReachabilityDataset(Dataset):
                  hopf_bank_params = {"n_total":int(1e5), "n_starter":int(1e5), "n_deposit":int(1e5)}, # dynamic refresh
                 #  hopf_bank_params = {"n_total":int(4e6), "n_starter":int(4e6), "n_deposit":int(2e6)}, # to make static bank
                  just_make_hopf_bank=False, refine_bank=False,
-                 loaded_model=None,
+                 loaded_model=None, test_mode=False
                  ):
 
         self.dynamics = dynamics
@@ -69,9 +70,9 @@ class ReachabilityDataset(Dataset):
         else:
             self.numblocks = 40 # batch-sizes per bank, #FIXME: should be automatic
             self.bank_total = numpoints * self.numblocks
-
-        if bank_name is None or bank_name == 'none': 
-            bank_name = self.make_bank_name()
+        if not self.dynamics.name  in ['QuadrotorLinear','Quadrotor','Quadrotor10D']:
+            if bank_name is None or bank_name == 'none': 
+                bank_name = self.make_bank_name()
         self.bank_name = bank_name
         self.mp_bank = "mp" in bank_name
         self.just_make_hopf_bank = just_make_hopf_bank
@@ -105,12 +106,18 @@ class ReachabilityDataset(Dataset):
 
             ## Load Linear DP Solution for Proof-of-Concept
             else:
-                self.load_julia_DP_interpolation()     
+                # pass
+                if test_mode:
+                    pass
+                else:
+                    self.load_julia_DP_interpolation()     ##ZF
                 
         ## Get Ground Truth for Special N-Dimensional Decomposable LessLinear System
         if record_gt_metrics:
-            self.init_groundtruth_tests()
-
+            self.init_groundtruth_tests()  
+        else: ##ZF
+            xig = torch.arange(-0.99, 1.01, 0.02) # 100 x 100
+            self.n_grid_pts =3* xig.size()[0]**2
         ## Make a bank of evaluated points, instead of evaluating online
         if self.make_bank:
 
@@ -148,7 +155,8 @@ class ReachabilityDataset(Dataset):
                 times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * (self.counter/self.counter_end))
 
             times[-self.num_src_samples:, 0] = self.tMin # force include initial time samples
-
+        if self.dynamics.name in ['QuadrotorLinear','Quadrotor']:
+            model_states = self.dynamics.normalize_q(model_states)
         model_coords = torch.cat((times, model_states), dim=1)        
         if self.dynamics.input_dim > self.dynamics.state_dim + 1: # temporary workaround for having to deal with dynamics classes for parametrized models with extra inputs
             model_coords = torch.cat((model_coords, torch.zeros(self.numpoints, self.dynamics.input_dim - self.dynamics.state_dim - 1)), dim=1)

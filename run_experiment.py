@@ -50,8 +50,8 @@ if __name__ == '__main__':
     p.add_argument('--reset_loss_w', action='store_true', default=False, required=False, help='Resets the loss weights to their values at the beginning of training (pre-decay)')
     p.add_argument('--reset_loss_period', type=int, default=500, required=False, help='The loss weight reset period')
 
-    p.add_argument('--gt_metrics', action='store_true', default=True, required=False, help='Compute and score the learned value and set (needs ground truth)')
-    p.add_argument('--temporal_loss', action='store_true', default=True, required=False, help='Compute the loss over time chunks (slower)')
+    p.add_argument('--gt_metrics', action='store_true', default=False, required=False, help='Compute and score the learned value and set (needs ground truth)')
+    p.add_argument('--temporal_loss', action='store_true', default=False, required=False, help='Compute the loss over time chunks (slower)')
     p.add_argument('--capacity_test', action='store_true', default=False, required=False, help='Will use supervised-learning to train with the true solution (needs ground truth)')
     p.add_argument('--debug_params', action='store_true', default=False, required=False, help='Quick params for debugging')
     p.add_argument('--timing', action='store_true', default=False, required=False, help='Gives detailed breakdown of computation times per iteration')
@@ -111,7 +111,7 @@ if __name__ == '__main__':
         p.add_argument('--epochs_til_ckpt', type=int, default=1000, help='Time interval in seconds until checkpoint is saved.')
         p.add_argument('--steps_til_summary', type=int, default=100, help='Time interval in seconds until tensorboard summary is saved.')
         p.add_argument('--batch_size', type=int, default=1, help='Batch size used during training (irrelevant, since len(dataset) == 1).')
-        p.add_argument('--lr', type=float, default=1e-5, help='learning rate. default=2e-6')
+        p.add_argument('--lr', type=float, default=2e-5, help='learning rate. default=2e-5')
         p.add_argument('--lr_decay_w', default=1., required=False, type=float, help='LR Exponential Decay Rate') # 1 or 0.9999
         p.add_argument('--num_epochs', type=int, default=30000, help='Number of epochs to train for.')
         p.add_argument('--clip_grad', default=0.0, type=float, help='Clip gradient.')
@@ -159,7 +159,7 @@ if __name__ == '__main__':
         p.add_argument('--num_scenarios', type=int, default=100000, help='The number of scenarios sampled in scenario optimization for testing')
         p.add_argument('--num_violations', type=int, default=1000, help='The number of violations to sample for in scenario optimization for testing')
         p.add_argument('--control_type', type=str, default='value', choices=['value', 'ttr', 'init_ttr'], help='The controller to use in scenario optimization for testing')
-        p.add_argument('--data_step', type=str, default='run_basic_recovery', choices=['plot_violations', 'run_basic_recovery', 'plot_basic_recovery', 'collect_samples', 'train_binner', 'run_binned_recovery', 'plot_binned_recovery', 'plot_cost_function'], help='The data processing step to run')
+        p.add_argument('--data_step', type=str, default='run_basic_recovery', choices=['plot_violations', 'run_basic_recovery', 'plot_basic_recovery', 'run_robust_recovery', 'plot_robust_recovery', 'collect_samples', 'train_binner', 'run_binned_recovery', 'plot_binned_recovery', 'plot_cost_function'], help='The data processing step to run')
 
     opt = p.parse_args()
 
@@ -190,11 +190,12 @@ if __name__ == '__main__':
     if opt.hopf_loss == 'none':
         opt.diff_con_loss_incr = False
 
-    if opt.baseline:
-        opt.hopf_loss = 'none'
-        opt.solve_grad = True
-        opt.temporal_loss = False
-        # opt.numpoints, opt.lr, opt.lr_decay_w = 60000, 1e-5, 1.
+    if ((mode == 'all') or (mode == 'train')):
+        if opt.baseline:
+            opt.hopf_loss = 'none'
+            opt.solve_grad = True
+            opt.temporal_loss = False
+            # opt.numpoints, opt.lr, opt.lr_decay_w = 60000, 1e-5, 1.
 
     ## Clarity prints
     print("\n\nTraining DeepReach,\n")
@@ -312,7 +313,7 @@ if __name__ == '__main__':
         use_bank=orig_opt.use_bank, bank_name=orig_opt.bank_name, capacity_test=orig_opt.capacity_test,
         solve_hopf=orig_opt.solve_hopf, solve_grad=orig_opt.solve_grad, hopf_warm_start=orig_opt.hopf_warm_start,
         just_make_hopf_bank=orig_opt.just_make_hopf_bank, refine_bank=orig_opt.refine_bank,
-        loaded_model=loaded_model)
+        loaded_model=loaded_model, test_mode= (mode=='test'))
 
     model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
                                 final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl)
