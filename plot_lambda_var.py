@@ -318,7 +318,7 @@ if __name__ == '__main__':
 
     model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
                                 final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl)
-    model.cuda()
+    # model.cuda()
 
     experiment_class = getattr(experiments, orig_opt.experiment_class)
     experiment = experiment_class(model=model, dataset=dataset, experiment_dir=experiment_dir, use_wandb=use_wandb)
