@@ -536,11 +536,12 @@ class Experiment(ABC):
         os.makedirs(testing_dir)
 
         if checkpoint_toload is None:
+            raise NotImplementedError
             print('running cross-checkpoint testing')
 
-            for i in tqdm(range(sidelen), desc='Checkpoint'):
-                self._load_checkpoint(epoch=checkpoints[i])
-                raise NotImplementedError
+            # for i in tqdm(range(sidelen), desc='Checkpoint'):
+            #     self._load_checkpoint(epoch=checkpoints[i])
+                # raise NotImplementedError
 
         else:
             print('running specific-checkpoint testing')
