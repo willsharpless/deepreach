@@ -22,6 +22,8 @@ from utils import diff_operators
 from utils.error_evaluators import scenario_optimization, ValueThresholdValidator, MultiValidator, MLPConditionedValidator, target_fraction, MLP, MLPValidator, SliceSampleGenerator
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
+import torch.profiler as profiler
+
 class Experiment(ABC):
     def __init__(self, model, dataset, experiment_dir, use_wandb):
         self.model = model
@@ -94,7 +96,7 @@ class Experiment(ABC):
     def train(
             self, batch_size, epochs, lr, 
             steps_til_summary, epochs_til_checkpoint, 
-            loss_fn, clip_grad, use_lbfgs, adjust_relative_grads, 
+            loss_fn, loss_fn_baseline, clip_grad, use_lbfgs, adjust_relative_grads, 
             val_x_resolution, val_y_resolution, val_z_resolution, val_time_resolution,
             use_CSL, CSL_lr, CSL_dt, epochs_til_CSL, num_CSL_samples, CSL_loss_frac_cutoff, max_CSL_epochs, CSL_loss_weight, CSL_batch_size,
             dual_lr=False, lr_decay_w=1., lr_hopf=2e-5, lr_hopf_decay_w=1., smoothing_factor=0.8, 
@@ -160,6 +162,9 @@ class Experiment(ABC):
         og_loss_weights = loss_weights.copy()
         
         ## Train
+        # with profiler.profile(activities=[profiler.ProfilerActivity.CPU, profiler.ProfilerActivity.CUDA], 
+        #               record_shapes=True, 
+        #               profile_memory=True) as prof:
         with tqdm(total=len(train_dataloader) * epochs) as pbar:
 
             train_losses = []
@@ -230,6 +235,11 @@ class Experiment(ABC):
                     dirichlet_masks = gt['dirichlet_masks']
                     if self.timing: print("Pre-loss Computation took:", time.time() - start_time_2)
 
+                    if self.dataset.memory_tracking:
+                        print(f"Epoch {epoch}-1, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch}-1, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+                        print()  
+
                     ## Compute Loss
                     if self.timing: start_time_2 = time.time()
 
@@ -241,20 +251,41 @@ class Experiment(ABC):
                     elif self.dataset.dynamics.loss_type == 'brat_hjivi':
                         losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, reach_values, avoid_values, dirichlet_masks, model_results['model_out'])
                     
-                    ## Linear Supervision BRT (Hopf-based)
+                    ## Linear Supervision BRT (non-baseline)
                     elif hopf_loss != 'none':
                         hopf_values = gt['hopf_values']
 
                         if hopf_loss == 'lin_val_grad_diff':
                             hopf_grads = gt['hopf_grads']
-
+                                            
+                        ## Load from Reference Linear Model
                         if self.dataset.load_hopf_model:
-                            loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords']})
-                            hopf_values = self.dataset.dynamics.io_to_value(loaded_model_results['model_in'].detach(), loaded_model_results['model_out'].squeeze(dim=-1))
-                            if self.dataset.solve_grad:
-                                hopf_grads = self.dataset.dynamics.io_to_dv(loaded_model_results['model_in'], loaded_model_results['model_out'].squeeze(dim=-1))[..., 1:]
-                        
-                        # the following allows separate coordinates for the hopf loss (to allow unrestricted sampling for PDE loss)
+                            with torch.inference_mode():
+                                if not self.dataset.lambda_var:
+                                    loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords']})
+                                    hopf_values = self.dataset.dynamics.io_to_value(loaded_model_results['model_in'], loaded_model_results['model_out'].squeeze(dim=-1)).detach()
+                                else:
+                                    loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords'][..., :-1]}) # remove lambda
+                                    # FIXME I'm not sure if the following properly associates the gradients wrt the lambda value. If it doesn't then it will be wrt the random uniform value, right?
+                                    # model_results_in_w_lambda = torch.cat((loaded_model_results['model_in'].detach(), torch.ones(model_input['model_coords'][..., -1].shape).unsqueeze(-1).cuda()), dim=2)
+                                    # hopf_values = self.dataset.dynamics.io_to_value(model_results_in_w_lambda, loaded_model_results['model_out'].squeeze(dim=-1)) 
+                                    hopf_values = self.dataset.dynamics.io_to_value(model_input['model_coords'], loaded_model_results['model_out'].squeeze(dim=-1)).detach() 
+                                    # TODO could replace with the og uniform random instead of zeros, to teach across lambdas
+
+                        if self.dataset.load_hopf_model and hopf_loss == 'lin_val_grad_diff':
+                            if not self.dataset.lambda_var:
+                                loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords']})
+                                hopf_grads = self.dataset.dynamics.io_to_dv(loaded_model_results['model_in'], loaded_model_results['model_out'].squeeze(dim=-1))[..., 1:].detach()
+                            else:
+                                loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords'][..., :-1]}) # remove lambda
+                                hopf_grads = self.dataset.dynamics.io_to_dv(model_input['model_coords'], loaded_model_results['model_out'].squeeze(dim=-1))[..., 1:].detach()
+                            
+                        if self.dataset.memory_tracking:
+                            print(f"Epoch {epoch}-2, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+                            print(f"Epoch {epoch}-2, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+                            print()
+
+                        ## Seperate Hopf Coords (for the hopf loss to allow unrestricted sampling for PDE loss)
                         if not(self.dataset.use_bank) or self.dataset.hopf_pretrain_counter == 0:
                             
                             learned_hopf_values = values
@@ -268,14 +299,26 @@ class Experiment(ABC):
                             if hopf_loss == 'lin_val_grad_diff':
                                 learned_hopf_grads = self.dataset.dynamics.io_to_dv(model_results_hopf['model_in'], model_results_hopf['model_out'].squeeze(dim=-1))[..., 1:]   
                         
+                        if self.dataset.memory_tracking:
+                            print(f"Epoch {epoch}-3, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+                            print(f"Epoch {epoch}-3, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+                            print()
+
                         if hopf_loss == 'lin_val_grad_diff':
                             losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, learned_hopf_values, hopf_grads, learned_hopf_grads, epoch, state_times)
                         else:
                             losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, learned_hopf_values, epoch, state_times)
+                            # losses = loss_fn_baseline(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'])
+                            # print("\nUsing the loaded hopf values")
 
                     else:
                         raise NotImplementedError
                     
+                    if self.dataset.memory_tracking:
+                        print(f"Epoch {epoch}-4, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch}-4, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+                        print()
+
                     if self.timing: print("Loss Computation took:", time.time() - start_time_2)
 
                     ## Compute & Record Temporal Loss Quartiles #FIXME doesn't work for baseline
@@ -293,6 +336,11 @@ class Experiment(ABC):
                                 hopf_grads_t, learned_grads_t = hopf_grads[t_ix].unsqueeze(0), learned_hopf_grads[t_ix].unsqueeze(0)
                                 losses_t[str(tp)] = loss_fn(states_t, values_t, dvs_t[..., 0], dvs_t[..., 1:], boundary_values_t, dirichlet_masks_t, model_results_t, hopf_values_t, learned_hopf_values_t, hopf_grads_t, learned_grads_t, epoch, state_times_t)
                     
+                    if self.dataset.memory_tracking:
+                        print(f"Epoch {epoch}-5, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch}-5, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+                        print()
+
                     ## Switch Optimizers/Rates (after Hopf Pretraining)
                     if self.timing: start_time_2 = time.time()
                     if dual_lr and not(self.dataset.hopf_pretrain) and self.dataset.hopf_pretrained:
@@ -300,6 +348,11 @@ class Experiment(ABC):
                         lr_scheduler = lr_scheduler_std
                     if self.timing: print("Loss Scheduler took:", time.time() - start_time_2)
                     
+                    if self.dataset.memory_tracking:
+                        print(f"Epoch {epoch}-6, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch}-6, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+                        print()
+
                     ## Decay Hopf Loss(es)
                     if hopf_loss_decay and hopf_loss != 'none': #                         
                         if epoch >= total_pretrain_iters or hopf_loss_decay_early:
@@ -319,7 +372,12 @@ class Experiment(ABC):
                         ## Incrementally Introduce Differential Constraint Loss (After All Pretraining)
                         if diff_con_loss_incr and epoch >= total_pretrain_iters:
                             loss_weights['diff_constraint_hom'] = 1 - loss_weights['hopf']
-                        
+
+                    if self.dataset.memory_tracking:
+                        print(f"Epoch {epoch}-7, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch}-7, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+                        print()
+
                     ## Combine Losses
                     if self.timing: start_time_2 = time.time()
                     train_loss = 0.
@@ -337,6 +395,11 @@ class Experiment(ABC):
                         torch.save(self.model.state_dict(),
                                 os.path.join(checkpoints_dir, 'model_current.pth'))
                         # summary_fn(model, model_input, gt, model_output, writer, total_steps)
+
+                    if self.dataset.memory_tracking:
+                        print(f"Epoch {epoch}-8, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch}-8, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+                        print()
 
                     ## Take Gradient Step
                     if not use_lbfgs:
@@ -358,6 +421,11 @@ class Experiment(ABC):
                         lr_scheduler.step()
                         if self.timing: print("Grad/Sched step took:", time.time() - start_time_2)
 
+                    if self.dataset.memory_tracking:
+                        print(f"Epoch {epoch}-9, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch}-9, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+                        print()
+
                     ## Record Data Summary
                     if not total_steps % steps_til_summary:
                         iter_time = time.time() - start_time
@@ -371,6 +439,11 @@ class Experiment(ABC):
                         else:
                             tqdm.write("Epoch %d, Total loss %0.6f, iter time %0.6f" % (epoch, train_loss, iter_time))
                         
+                        if self.dataset.memory_tracking:
+                            print(f"Epoch {epoch}-10, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+                            print(f"Epoch {epoch}-10, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+                            print()
+
                         if self.use_wandb:
                             log_dict = {
                                 'step': epoch,
@@ -411,6 +484,11 @@ class Experiment(ABC):
 
                             wandb.log(log_dict)
 
+                    if self.dataset.memory_tracking:
+                        print(f"Epoch {epoch}-end, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch}-end, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+                        print()
+
                     pbar.update(1)
                     total_steps += 1
 
@@ -434,6 +512,10 @@ class Experiment(ABC):
                         epoch=epoch+1, save_path=os.path.join(checkpoints_dir, 'BRS_validation_plot.png'), # overwriting to save data
                         x_resolution = val_x_resolution, y_resolution = val_y_resolution, z_resolution=val_z_resolution, time_resolution=val_time_resolution)
                 if self.timing: print("Checkpointing took:", time.time() - start_time_2)
+
+        # print("\n PROFILER RESULTS \n")
+        # print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+        # print()
 
         if was_eval:
             self.model.eval()
@@ -485,7 +567,7 @@ class DeepReachHopf(Experiment):
             self.validate = self.validate2D
         elif N > 2:
             self.validate = self.validateND
-            if self.dataset.lambda_var: 
+            if self.dataset.lambda_var:
                 self.validate = self.validateNDlambda
         pass        
     
@@ -990,17 +1072,22 @@ class DeepReachHopf(Experiment):
 
     def compute_gt_metrics(self):
 
-        # if self.N == 2: do whats here, else: use grid only on slices / actually jk, just fill .dataset loads with proper grids (full for 2D, slices for ND)
-        model_results_grid = self.model({'coords': self.dataset.model_coords_grid_allt})
-        DVXmse = 0
+        JIp, FIp, FEp, Vmse, DVXmse = 0, 0, 0, 0, 0
 
         ## Compute Value Gradient MSE on Grid
         if self.dataset.solve_grad:
+            model_results_grid = self.model({'coords': self.dataset.model_coords_grid_allt})
             DVX = self.dataset.dynamics.io_to_dv(model_results_grid['model_in'], model_results_grid['model_out'].squeeze(dim=-1))[..., 1:].detach()
             DVXmse = (self.dataset.value_grads_DP_grid - DVX).square().mean()
 
         with torch.no_grad():
-            values_grid = self.dataset.dynamics.io_to_value(model_results_grid['model_in'].detach(), model_results_grid['model_out'].squeeze(dim=-1))
+            if not self.dataset.solve_grad:
+                model_results_grid = self.model({'coords': self.dataset.model_coords_grid_allt})
+            values_grid = self.dataset.dynamics.io_to_value(model_results_grid['model_in'].detach(), model_results_grid['model_out'].squeeze(dim=-1)).detach()
+
+            del model_results_grid
+            torch.cuda.empty_cache()
+
             values_grid_sub0_ixs = torch.argwhere(values_grid <= 0).flatten()
 
             ## Compute MSE on Grid
@@ -1018,6 +1105,10 @@ class DeepReachHopf(Experiment):
             JIp = n_intersect / n_overlap
             ## FIXME: still wondering if there is a bug in FIp and JIp... they look slightly off sometimes 
         
+        del values_grid
+        del values_grid_sub0_ixs
+        torch.cuda.empty_cache()
+
         return JIp, FIp, FEp, Vmse, DVXmse
         
     def set_metrics_eachtime(self): 
@@ -1081,6 +1172,7 @@ class DeepReachHopf(Experiment):
         ## Plot Set and Value Fn
         
         fig = plt.figure(figsize=(5*len(lambdas), 2*5*1), facecolor='white')
+        # fig = plt.figure(figsize=(5*len(lambdas), 2*5*1), facecolor='white')
         
         plt.rcParams['text.usetex'] = False
 
@@ -1091,19 +1183,31 @@ class DeepReachHopf(Experiment):
             if i > len(lambdas):
                 ax = fig.add_subplot(2, len(lambdas), 1+i)
                 if i % len(lambdas) == 4:
-                    ax.set_title(r"$|V_\ell - V_\lambda|$, $\lambda = $ " + "1", fontsize=14)
-                else:
-                    ax.set_title(r"$|V_\ell - V_\lambda|$, $\lambda = $ " + f"{lambda_val:1.1f}", fontsize=14)
+                    ax.set_title(r"$|V_\ell - V_\lambda|$, $\lambda = 1$", fontsize=14)
+                elif i % len(lambdas) == 1:
+                    ax.set_title(r"$|V_\ell - V_\lambda|$, $\lambda = 1/10$", fontsize=16)
+                elif i % len(lambdas) == 2:
+                    ax.set_title(r"$|V_\ell - V_\lambda|$, $\lambda = 1/5$", fontsize=16)
+                elif i % len(lambdas) == 3:
+                    ax.set_title(r"$|V_\ell - V_\lambda|$, $\lambda = 1/2$", fontsize=16)
+                # else:
+                #     ax.set_title(r"$|V_\ell - V_\lambda|$, $\lambda = $ " + f"{lambda_val:1.1f}", fontsize=14)
             elif i == len(lambdas):
                 continue
             else:
                 ax = fig.add_subplot(2, len(lambdas), 1+i, projection='3d')
                 if i == 0:
-                    ax.set_title(r"$V_\ell = V_\lambda$, $\lambda = $ " + "0", fontsize=16)
-                elif i ==4:
-                    ax.set_title(r"$V_\ell = V_\lambda$, $\lambda = $ " + "1", fontsize=16)
-                else:
-                    ax.set_title(r"$V_\lambda$, $\lambda =$ " + f"{lambda_val:1.1f}", fontsize=16)
+                    ax.set_title(r"$V_\ell = V_\lambda$, $\lambda = 0$", fontsize=16)
+                elif i == 1:
+                    ax.set_title(r"$V_\lambda$, $\lambda = 1/10$", fontsize=16)
+                elif i == 2:
+                    ax.set_title(r"$V_\lambda$, $\lambda = 1/5$", fontsize=16)
+                elif i == 3:
+                    ax.set_title(r"$V_\lambda$, $\lambda = 1/2$", fontsize=16)
+                elif i == 4:
+                    ax.set_title(r"$V_\lambda$, $\lambda = 1$", fontsize=16)
+                # else:
+                #     ax.set_title(r"$V_\lambda$, $\lambda =$ " + f"{lambda_val:1.1f}", fontsize=16)
 
             ## Define Grid Slice to Plot
 
@@ -1192,7 +1296,9 @@ class DeepReachHopf(Experiment):
 
             else:
                 # n_bins_high = int(256 * (Vgt.max()/(Vgt.max() - Vgt.min())) // 1)
-                n_bins_high = round(256 * Vgt.max().item()/(Vgt.max().item() - Vgt.min().item()))
+                # n_bins_high = round(256 * Vgt.max().item()/(Vgt.max().item() - Vgt.min().item()))
+                max_v_3d = 2
+                n_bins_high = round(256 * max_v_3d/(max_v_3d - Vgt.min().item()))
 
                 # RdWh = matplotlib.colors.LinearSegmentedColormap.from_list('RdWh', [(1,0,0), (1,0,0), (1,0.5,0.5), (1,1,1)])
                 # WhBl = matplotlib.colors.LinearSegmentedColormap.from_list('WhBl', [(1,1,1), (0.5,0.5,1), (0,0,1), (0,0,1)])
@@ -1218,22 +1324,36 @@ class DeepReachHopf(Experiment):
                 
                 # s = ax.imshow(1*(Vgt.T <= 0), cmap='bwr', origin='lower', extent=(-1., 1., -1., 1.))
                 # s = ax.imshow(Vgt.T, cmap=matplotlib.colormaps["viridis"], origin='lower', extent=(-1., 1., -1., 1.))
-                max_v = 2
-                s = ax.imshow(torch.abs(Vgt - Vgt_linear).T, cmap=matplotlib.colormaps["rainbow"], origin='lower', extent=(-1., 1., -1., 1.), vmin=0, vmax=max_v) # viridis, terrain, nipy_spectral
+                max_v = 1.5
+
+                ## Log Colorbar
+                # offset = 1e-1
+                # log_norm = matplotlib.colors.LogNorm(vmin=offset, vmax=max_v)
+                # s = ax.imshow(torch.abs(Vgt - Vgt_linear).T + torch.tensor([offset]), cmap=matplotlib.colormaps["viridis"], origin='lower', extent=(-1., 1., -1., 1.), norm=log_norm) # viridis, terrain, nipy_spectral, rainbow
+                # # s = ax.contourf(Xg, Yg, Vgt, cmap=RdWhBl_vscaled, levels=256)
+                # divider = make_axes_locatable(ax)
+                # cax = divider.append_axes("right", size="5%", pad=0.05)
+                # cbar = fig.colorbar(s, cax=cax)
+                # cbar.set_ticks([offset, max_v])  # FIXME fixed max
+
+                ## Linear Colorbar
+                offset = 0
+                s = ax.imshow(torch.abs(Vgt - Vgt_linear).T + torch.tensor([offset]), cmap=matplotlib.colormaps["viridis"], origin='lower', extent=(-1., 1., -1., 1.), vmin=offset, vmax=max_v) # viridis, terrain, nipy_spectral, rainbow
                 # s = ax.contourf(Xg, Yg, Vgt, cmap=RdWhBl_vscaled, levels=256)
                 divider = make_axes_locatable(ax)
                 cax = divider.append_axes("right", size="5%", pad=0.05)
-
                 cbar = fig.colorbar(s, cax=cax)
+                cbar.set_ticks([offset, max_v])  # FIXME fixed max
+
                 # cbar.set_ticks([0., torch.abs(Vgt_full - Vgt_linear).max()])  # Define custom tick locations
                 # cbar.set_ticks([0., torch.abs(Vgt - Vgt_linear).max()])  # FIXME fixed max
-                cbar.set_ticks([0., max_v])  # FIXME fixed max
                 # cbar.set_ticklabels([f'0', f'{torch.abs(Vgt_full - Vgt_linear).max():1.1f}'])  # Define custom tick labels
-                cbar.set_ticklabels([f'0', f'{max_v:1d}'])  # Define custom tick labels
+                # cbar.set_ticklabels([f'0', f'{max_v:1d}'])  # Define custom tick labels
+                cbar.set_ticklabels([f'0', f'{max_v:1.1f}'])  # Define custom tick labels
 
                 # ## Plot Ground-Truth Zero-Level Contour
 
-                # ax.contour(Xg, Yg, Vgt, [0.], linewidths=4, alpha=0.7, colors='k')
+                ax.contour(Xg, Yg, Vgt, [0.], linewidths=4, alpha=0.7, colors='k')
 
                 # ## Plot the Linear Ground-Truth (ideal warm-start) Zero-Level Contour
 
@@ -1246,7 +1366,7 @@ class DeepReachHopf(Experiment):
                     # ax_val.grid(False)
                     ax.view_init(elev=15, azim=-60)
                     ax.set_facecolor((1, 1, 1, 1))
-                    surf = ax.plot_surface(Xg, Yg, Vgt, cmap=RdWhBl_vscaled, alpha=0.8) #cmap='bwr_r')
+                    surf = ax.plot_surface(Xg, Yg, Vgt, cmap=RdWhBl_vscaled, alpha=0.8, vmax=max_v_3d) #cmap='bwr_r')
                     # surf = ax.plot_surface(self.dataset.X1g, self.dataset.X2g, Vgt, cmap=RdWhBl_vscaled, alpha=0.8) #cmap='bwr_r')
                     
                     # divider = make_axes_locatable(ax_set)
@@ -1256,10 +1376,14 @@ class DeepReachHopf(Experiment):
 
                     # cbar.ax.yaxis.set_ticks_position('left')
                     # cbar.ax.yaxis.set_label_position('left')
+                    
+                    cbar.set_ticks([0, max_v_3d])  # FIXME fixed max
+                    cbar.set_ticklabels([f'0', f'{max_v_3d:1d}'])  # Define custom tick labels
 
                     # ax.set_zlim(-max(ax.get_zlim()[1]/5, 0.5))
                     # ax.set_zlim(-max(Vgt.max().item()/5, 0.5), max(Vgt.max().item(), 2.5))
-                    ax.set_zlim(Vgt.min().item() - (Vgt.max().item() - Vgt.min().item())/5)
+                    # ax.set_zlim(Vgt.min().item() - (Vgt.max().item() - Vgt.min().item())/5)
+                    ax.set_zlim(Vgt.min().item() - (Vgt.max().item() - Vgt.min().item())/5, max_v_3d)
                     # ax.contour(Xg, Yg, Vgt, zdir='z', offset=ax.get_zlim()[0], cmap=RdWh, levels=[0.]) #cmap='bwr_r')
 
                     ax.contour(Xg, Yg, Vgt, zdir='z', offset=ax.get_zlim()[0], colors='k', levels=[0.]) #cmap='bwr_r')
@@ -1267,6 +1391,8 @@ class DeepReachHopf(Experiment):
 
                     ax.set_facecolor((1, 1, 1, 1))
                     # ax_val.grid(False)
+
+        fig.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
 
         fig.savefig(save_path)
         plt.close()

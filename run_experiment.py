@@ -63,8 +63,8 @@ if __name__ == '__main__':
     p.add_argument('--refine_bank', action='store_true', default=False, required=False, help='Will iteratively throw out non-spatially unique points when hopf solving (slow)')
     p.add_argument('--hopf_warm_start', action='store_true', default=False, required=False, help='Passes estimated gradients from DeepReach to the Hopf solvers to warm-start them')
     p.add_argument('--load_hopf_model', action='store_true', default=False, required=False, help='Model to load for the supervision')
-    p.add_argument('--load_hopf_model_name', type=str, default='capacity_linear', help='Supervision model name')
-    p.add_argument('--load_model_type', type=str, default='learned', choices=['learned', 'DP'], help='Type of loaded model')
+    p.add_argument('--load_hopf_model_name', type=str, default='./runs/capacity_linear', help='Supervision model name')
+    p.add_argument('--load_model_type', type=str, default='learned', choices=['learned', 'DP'], help='Type of loaded model') # FIXME someday actually use DP option
 
     use_wandb = p.parse_known_args()[0].use_wandb
     if use_wandb:
@@ -111,7 +111,7 @@ if __name__ == '__main__':
         p.add_argument('--epochs_til_ckpt', type=int, default=1000, help='Time interval in seconds until checkpoint is saved.')
         p.add_argument('--steps_til_summary', type=int, default=100, help='Time interval in seconds until tensorboard summary is saved.')
         p.add_argument('--batch_size', type=int, default=1, help='Batch size used during training (irrelevant, since len(dataset) == 1).')
-        p.add_argument('--lr', type=float, default=1e-5, help='learning rate. default=2e-6')
+        p.add_argument('--lr_std', type=float, default=1e-5, help='learning rate. default=2e-6')
         p.add_argument('--lr_decay_w', default=1., required=False, type=float, help='LR Exponential Decay Rate') # 1 or 0.9999
         p.add_argument('--num_epochs', type=int, default=30000, help='Number of epochs to train for.')
         p.add_argument('--clip_grad', default=0.0, type=float, help='Clip gradient.')
@@ -209,8 +209,10 @@ if __name__ == '__main__':
             else:
                 if opt.use_bank and opt.bank_name == 'none': print("   - made by interpolation of 2D DP, and stored in a static bank.")
                 else: print(f"   - loaded from a static bank file, {opt.bank_name}.")
+        elif opt.load_hopf_model:
+            print(f"   - sampled each iteration from a learned linear model")
         else:
-            print(f"   - sampled each iteration from a {opt.load_model_type} linear model")
+            print(f"   - sampled each iteration from a DP linear model")
         if opt.solve_grad:
             print( "  - linear gradients will be solved")
         if opt.hopf_loss_decay:
@@ -236,7 +238,8 @@ if __name__ == '__main__':
 
     experiment_dir = os.path.join(opt.experiments_dir, opt.experiment_name)
     if opt.load_hopf_model:
-        load_dir = os.path.join(opt.experiments_dir, opt.load_hopf_model_name)
+        # load_dir = os.path.join(opt.experiments_dir, opt.load_hopf_model_name)
+        load_dir = opt.load_hopf_model_name
 
     if (mode == 'all') or (mode == 'train'):
         # create experiment dir
@@ -289,12 +292,17 @@ if __name__ == '__main__':
         with open(os.path.join(load_dir, 'orig_opt.pickle'), 'rb') as opt_file:
             loaded_opt = pickle.load(opt_file)
 
-        loaded_model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=loaded_opt.model, mode=loaded_opt.model_mode,
-                                    final_layer_factor=1., hidden_features=loaded_opt.num_nl, num_hidden_layers=loaded_opt.num_hl)
+        if not orig_opt.dynamics_class.endswith("lambda"):
+            loaded_model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=loaded_opt.model, mode=loaded_opt.model_mode,
+                                        final_layer_factor=1., hidden_features=loaded_opt.num_nl, num_hidden_layers=loaded_opt.num_hl)
+        else:
+            loaded_model = modules.SingleBVPNet(in_features=dynamics.input_dim-1, out_features=1, type=loaded_opt.model, mode=loaded_opt.model_mode,
+                                        final_layer_factor=1., hidden_features=loaded_opt.num_nl, num_hidden_layers=loaded_opt.num_hl)
         loaded_model.cuda()
         
         model_path = os.path.join(load_dir, 'training', 'checkpoints', 'model_final.pth')
         loaded_model.load_state_dict(torch.load(model_path)['model']) # FIXME, key only needed for chkpts
+        loaded_model.eval()
         
     else:
         loaded_model = None
@@ -324,16 +332,18 @@ if __name__ == '__main__':
     if (mode == 'all') or (mode == 'train'):
         if dynamics.loss_type == 'brt_hjivi':
             loss_fn = losses.init_brt_hjivi_loss(dynamics, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
+            loss_fn_baseline = losses.init_brt_hjivi_loss(dynamics, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
         elif dynamics.loss_type == 'brat_hjivi':
             loss_fn = losses.init_brat_hjivi_loss(dynamics, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
         elif dynamics.loss_type == 'brt_hjivi_hopf':
             loss_fn = losses.init_brt_hjivi_hopf_loss(experiment, orig_opt.minWith, orig_opt.dirichlet_loss_divisor, orig_opt.hopf_loss_divisor, orig_opt.hopf_grad_loss_divisor, orig_opt.hopf_loss, orig_opt.temporal_weighting)
+            loss_fn_baseline = losses.init_brt_hjivi_loss(dynamics, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
         else:
             raise NotImplementedError
         experiment.train(
-            batch_size=orig_opt.batch_size, epochs=orig_opt.num_epochs, lr=orig_opt.lr, 
+            batch_size=orig_opt.batch_size, epochs=orig_opt.num_epochs, lr=orig_opt.lr_std, 
             steps_til_summary=orig_opt.steps_til_summary, epochs_til_checkpoint=orig_opt.epochs_til_ckpt, 
-            loss_fn=loss_fn, clip_grad=orig_opt.clip_grad, use_lbfgs=orig_opt.use_lbfgs, adjust_relative_grads=orig_opt.adj_rel_grads,
+            loss_fn=loss_fn, loss_fn_baseline=loss_fn_baseline, clip_grad=orig_opt.clip_grad, use_lbfgs=orig_opt.use_lbfgs, adjust_relative_grads=orig_opt.adj_rel_grads,
             val_x_resolution=orig_opt.val_x_resolution, val_y_resolution=orig_opt.val_y_resolution, val_z_resolution=orig_opt.val_z_resolution, val_time_resolution=orig_opt.val_time_resolution,
             use_CSL=orig_opt.use_CSL, CSL_lr=orig_opt.CSL_lr, CSL_dt=orig_opt.CSL_dt, epochs_til_CSL=orig_opt.epochs_til_CSL, num_CSL_samples=orig_opt.num_CSL_samples, CSL_loss_frac_cutoff=orig_opt.CSL_loss_frac_cutoff, max_CSL_epochs=orig_opt.max_CSL_epochs, CSL_loss_weight=orig_opt.CSL_loss_weight, CSL_batch_size=orig_opt.CSL_batch_size,
             dual_lr=orig_opt.dual_lr, lr_decay_w=orig_opt.lr_decay_w, lr_hopf=orig_opt.lr_hopf, lr_hopf_decay_w=orig_opt.lr_hopf_decay_w, 

@@ -20,7 +20,8 @@ class ReachabilityDataset(Dataset):
                 #  hopf_bank_params = {"n_total":int(1e5), "n_starter":int(1e5), "n_deposit":int(1e5)}, # dynamic refresh
                  hopf_bank_params = {"n_total":int(4e6), "n_starter":int(4e6), "n_deposit":int(2e6)}, # to make static bank
                  just_make_hopf_bank=False, refine_bank=False,
-                 loaded_model=None, lambda_var=False
+                 loaded_model=None, lambda_var=False,
+                 memory_tracking=False
                  ):
 
         self.dynamics = dynamics
@@ -38,7 +39,7 @@ class ReachabilityDataset(Dataset):
         self.use_hopf = use_hopf # FIXME: old name, means use linear data (not necessarily solve hopf formula)
         self.solve_grad = solve_grad
         self.hopf_pretrain = use_hopf and hopf_pretrain
-        self.hopf_pretrained = use_hopf and hopf_pretrain
+        self.hopf_pretrained = False
         self.hopf_pretrain_counter = 0
         self.hopf_pretrain_iters = hopf_pretrain_iters
         self.record_gt_metrics = record_gt_metrics
@@ -46,6 +47,7 @@ class ReachabilityDataset(Dataset):
         self.N = dynamics.N
         self.capacity_test = capacity_test
         self.llnd_path = "value_fns/LessLinear/"
+        self.memory_tracking = memory_tracking
 
         self.solve_hopf = solve_hopf # triggers online hopf formula solving via HopfReachability.jl
         self.num_hopf_workers = num_hopf_workers
@@ -137,8 +139,20 @@ class ReachabilityDataset(Dataset):
 
     def __getitem__(self, idx):
         
-        ## Sample Points and Evaluate 
-        model_states = torch.zeros(self.numpoints, self.dynamics.state_dim).uniform_(-1, 1)
+        if self.memory_tracking:
+            print(f"getitem-start, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+            print(f"getitem-start, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+            print()
+    
+        ## Sample Points and Evaluate
+        if self.hopf_pretrain and self.lambda_var:
+            model_states_nolam = torch.zeros(self.numpoints, self.dynamics.state_dim-1).uniform_(-1, 1)
+            model_states = torch.cat((model_states_nolam, torch.zeros(self.numpoints, 1)), dim=1) # force lambda=0 for linear pretraining
+            # TODO could also skip this and train the linear solution everywhere (after fixing loaded lam)
+        else:
+            model_states = torch.zeros(self.numpoints, self.dynamics.state_dim).uniform_(-1, 1)
+        # TODO could also gradually add lambda scale (nonlinear curr)
+
         if self.num_target_samples > 0:
             target_state_samples = self.dynamics.sample_target_state(self.num_target_samples)
             model_states[-self.num_target_samples:] = self.dynamics.coord_to_input(torch.cat((torch.zeros(self.num_target_samples, 1), target_state_samples), dim=-1))[:, 1:self.dynamics.state_dim+1]
@@ -149,7 +163,6 @@ class ReachabilityDataset(Dataset):
         else:
             if self.hopf_pretrain or self.hopf_pretrained or self.no_curriculum:
                 times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin)) # during hopf pt, sample across all time?
-
             else:
                 times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * (self.counter/self.counter_end))
 
@@ -158,6 +171,11 @@ class ReachabilityDataset(Dataset):
         model_coords = torch.cat((times, model_states), dim=1)        
         if self.dynamics.input_dim > self.dynamics.state_dim + 1: # temporary workaround for having to deal with dynamics classes for parametrized models with extra inputs
             model_coords = torch.cat((model_coords, torch.zeros(self.numpoints, self.dynamics.input_dim - self.dynamics.state_dim - 1)), dim=1)
+
+        if self.memory_tracking:
+            print(f"getitem-0, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+            print(f"getitem-0, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+            print() 
 
         ## Get Hopf value
         if self.use_hopf:   
@@ -227,11 +245,20 @@ class ReachabilityDataset(Dataset):
         elif self.counter < self.counter_end:
             self.counter += 1
 
+        if self.memory_tracking:
+            print(f"getitem-1, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+            print(f"getitem-1, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+            print()    
+
         if self.pretrain and self.pretrain_counter == self.pretrain_iters:
             self.pretrain = False
+            print("\n\n ----------------  FINISHED BC PRETRAINING  ------------------- \n")
 
         if self.hopf_pretrain and self.hopf_pretrain_counter == self.hopf_pretrain_iters:
             self.hopf_pretrain = False
+            self.hopf_pretrained = True
+            print("\n\n ---------------- FINISHED HOPF PRETRAINING ------------------- \n")
+
 
         if self.dynamics.loss_type == 'brt_hjivi':
             return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks}
@@ -411,16 +438,16 @@ class ReachabilityDataset(Dataset):
 
             times = torch.full((self.n_grid_pts, 1), self.tMin) # TODO: remove first time-point if model='exact'
             self.model_coords_grid_allt = torch.cat((times, self.model_states_grid), dim=1) 
-            self.model_coords_grid_allt_hi = torch.cat((times, self.model_states_grid), dim=1) 
+            # self.model_coords_grid_allt_hi = torch.cat((times, self.model_states_grid), dim=1) 
 
             for i in range(self.n_grid_t_pts-1):
                 times = torch.full((self.n_grid_pts, 1), (i+1)*(self.tMax - self.tMin)/(self.n_grid_t_pts-1))
                 new_coords = torch.cat((times, self.model_states_grid), dim=1) 
                 self.model_coords_grid_allt = torch.cat((self.model_coords_grid_allt, new_coords), dim=0) 
-            for i in range(self.n_grid_t_pts_hi-1):
-                times = torch.full((self.n_grid_pts, 1), (i+1)*(self.tMax - self.tMin)/(self.n_grid_t_pts_hi-1))
-                new_coords = torch.cat((times, self.model_states_grid), dim=1) 
-                self.model_coords_grid_allt_hi = torch.cat((self.model_coords_grid_allt_hi, new_coords), dim=0) 
+            # for i in range(self.n_grid_t_pts_hi-1):
+            #     times = torch.full((self.n_grid_pts, 1), (i+1)*(self.tMax - self.tMin)/(self.n_grid_t_pts_hi-1))
+            #     new_coords = torch.cat((times, self.model_states_grid), dim=1) 
+            #     self.model_coords_grid_allt_hi = torch.cat((self.model_coords_grid_allt_hi, new_coords), dim=0) 
         
         ## In N dimension, using same 2D grid on 3 slices of total space
         elif self.N > 2:
@@ -472,16 +499,16 @@ class ReachabilityDataset(Dataset):
 
             times = torch.full((self.n_grid_pts, 1), self.tMin) # TODO: remove first time-point if model='exact'
             self.model_coords_grid_allt = torch.cat((times, self.model_states_grid), dim=1) 
-            self.model_coords_grid_allt_hi = torch.cat((times, self.model_states_grid), dim=1) 
+            # self.model_coords_grid_allt_hi = torch.cat((times, self.model_states_grid), dim=1) 
 
             for i in range(self.n_grid_t_pts-1):
                 times = torch.full((self.n_grid_pts, 1), (i+1)*(self.tMax - self.tMin)/(self.n_grid_t_pts-1))
                 new_coords = torch.cat((times, self.model_states_grid), dim=1) 
                 self.model_coords_grid_allt = torch.cat((self.model_coords_grid_allt, new_coords), dim=0) 
-            for i in range(self.n_grid_t_pts_hi-1):
-                times = torch.full((self.n_grid_pts, 1), (i+1)*(self.tMax - self.tMin)/(self.n_grid_t_pts_hi-1))
-                new_coords = torch.cat((times, self.model_states_grid), dim=1) 
-                self.model_coords_grid_allt_hi = torch.cat((self.model_coords_grid_allt_hi, new_coords), dim=0) 
+            # for i in range(self.n_grid_t_pts_hi-1):
+            #     times = torch.full((self.n_grid_pts, 1), (i+1)*(self.tMax - self.tMin)/(self.n_grid_t_pts_hi-1))
+            #     new_coords = torch.cat((times, self.model_states_grid), dim=1) 
+            #     self.model_coords_grid_allt_hi = torch.cat((self.model_coords_grid_allt_hi, new_coords), dim=0) 
 
         ## Precompute value & safe-set on grid for ground truth
 
@@ -498,11 +525,11 @@ class ReachabilityDataset(Dataset):
             self.values_DP_grid_inlam1 = self.V_DP_inlam1(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
             self.values_DP_grid_inlam2 = self.V_DP_inlam2(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
         
-        self.values_DP_grid_hi = self.V_DP(self.dynamics.input_to_coord(self.model_coords_grid_allt_hi).t()).cuda()
-        self.values_DP_grid_sub0_ixs_hi = torch.argwhere(self.values_DP_grid_hi <= 0).flatten().cuda()
+        # self.values_DP_grid_hi = self.V_DP(self.dynamics.input_to_coord(self.model_coords_grid_allt_hi).t()).cuda()
+        # self.values_DP_grid_sub0_ixs_hi = torch.argwhere(self.values_DP_grid_hi <= 0).flatten().cuda()
 
         self.model_coords_grid_allt = self.model_coords_grid_allt.cuda()
-        self.model_coords_grid_allt_hi = self.model_coords_grid_allt_hi.cuda()
+        # self.model_coords_grid_allt_hi = self.model_coords_grid_allt_hi.cuda()
         self.model_states_grid = self.model_states_grid.cuda()
     
     def make_DP_bank(self):
