@@ -20,11 +20,13 @@ class ReachabilityDataset(Dataset):
                 #  hopf_bank_params = {"n_total":int(1e5), "n_starter":int(1e5), "n_deposit":int(1e5)}, # dynamic refresh
                  hopf_bank_params = {"n_total":int(4e6), "n_starter":int(4e6), "n_deposit":int(2e6)}, # to make static bank
                  just_make_hopf_bank=False, refine_bank=False,
-                 loaded_model=None, lambda_var=False,
-                 memory_tracking=False
+                 loaded_model=None, loaded_dynamics=None,
+                 lambda_var=False, zerolambda_LS=False, LS_w_time_curr=False,
+                 memory_tracking=False,
                  ):
 
         self.dynamics = dynamics
+        self.loaded_dynamics = loaded_dynamics
         self.numpoints = numpoints
         self.pretrain = pretrain
         self.pretrain_counter = 0
@@ -93,6 +95,8 @@ class ReachabilityDataset(Dataset):
         self.lambda_int_1 = 0.1
         self.lambda_int_2 = 0.2
         self.lambda_int_3 = 0.5
+        self.zerolambda_LS = lambda_var and zerolambda_LS
+        self.LS_w_time_curr = LS_w_time_curr and use_hopf
         
         ## Compute Linear Value from Model (if hopf loss)
         if use_hopf and not(self.dp_manual_load):
@@ -145,7 +149,7 @@ class ReachabilityDataset(Dataset):
             print()
     
         ## Sample Points and Evaluate
-        if self.hopf_pretrain and self.lambda_var:
+        if False: #self.hopf_pretrain and self.lambda_var: #skipping for now
             model_states_nolam = torch.zeros(self.numpoints, self.dynamics.state_dim-1).uniform_(-1, 1)
             model_states = torch.cat((model_states_nolam, torch.zeros(self.numpoints, 1)), dim=1) # force lambda=0 for linear pretraining
             # TODO could also skip this and train the linear solution everywhere (after fixing loaded lam)
@@ -161,11 +165,10 @@ class ReachabilityDataset(Dataset):
             times = torch.full((self.numpoints, 1), self.tMin)
 
         else:
-            if self.hopf_pretrain or self.hopf_pretrained or self.no_curriculum:
+            if self.hopf_pretrain or self.no_curriculum or (self.hopf_pretrained and not self.LS_w_time_curr):
                 times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin)) # during hopf pt, sample across all time?
             else:
                 times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * (self.counter/self.counter_end))
-
             times[-self.num_src_samples:, 0] = self.tMin # force include initial time samples
 
         model_coords = torch.cat((times, model_states), dim=1)        
@@ -184,6 +187,11 @@ class ReachabilityDataset(Dataset):
                 hopf_values = torch.zeros(self.numpoints)
                 if self.solve_grad:
                     hopf_grads = torch.zeros(self.numpoints, self.dynamics.state_dim)
+
+                if self.zerolambda_LS and not self.pretrain and not self.hopf_pretrain: # only when model loading and out of pretraining
+                    model_states_nolam = torch.zeros(self.numpoints, self.dynamics.state_dim-1).uniform_(-1, 1)
+                    model_states_lam0 = torch.cat((model_states_nolam, torch.zeros(self.numpoints, 1)), dim=1) # force lambda=0 for linear pretraining
+                    model_coords_hopf = torch.cat((times, model_states_lam0), dim=1)
 
             ## Sample Bank of Hopf-Evaluated Points
             elif self.use_bank:
@@ -266,7 +274,7 @@ class ReachabilityDataset(Dataset):
             ## UGLY
             if (not(self.use_bank) or self.hopf_pretrain_counter == 0) and not self.solve_grad:
                 return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks, 'hopf_values': hopf_values}
-            elif not(self.use_bank) or self.hopf_pretrain_counter == 0:
+            elif (not self.use_bank or self.hopf_pretrain_counter == 0) and (not self.zerolambda_LS or self.pretrain or self.hopf_pretrain or self.hopf_pretrain_counter == self.hopf_pretrain_iters):
                 return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks, 'hopf_values': hopf_values, 'hopf_grads': hopf_grads}
             elif not self.solve_grad:
                 return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks, 'hopf_values': hopf_values, 'model_coords_hopf': model_coords_hopf}

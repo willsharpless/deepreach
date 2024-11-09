@@ -49,6 +49,8 @@ if __name__ == '__main__':
     p.add_argument('--temporal_weighting', action='store_true', default=False, required=False, help='Inversely weights the samples in the loss w.r.t. time')
     p.add_argument('--reset_loss_w', action='store_true', default=False, required=False, help='Resets the loss weights to their values at the beginning of training (pre-decay)')
     p.add_argument('--reset_loss_period', type=int, default=500, required=False, help='The loss weight reset period')
+    p.add_argument('--zerolambda_LS', action='store_true', default=False, required=False, help='Will limit linear supervision to loss on lambda = 0 data (for lambda-variation models only AND loaded models)')
+    p.add_argument('--LS_w_time_curr', action='store_true', default=False, required=False, help='Do linear supervision with a temporal curriculum')
 
     p.add_argument('--gt_metrics', action='store_true', default=True, required=False, help='Compute and score the learned value and set (needs ground truth)')
     p.add_argument('--temporal_loss', action='store_true', default=False, required=False, help='Compute the loss over time chunks (slower)')
@@ -281,34 +283,40 @@ if __name__ == '__main__':
     np.random.seed(orig_opt.seed)
 
     dynamics_class = getattr(dynamics, orig_opt.dynamics_class)
-    dynamics = dynamics_class(**{argname: getattr(orig_opt, argname) for argname in inspect.signature(dynamics_class).parameters.keys() if argname != 'self'})
-    dynamics.deepreach_model=orig_opt.deepreach_model
+    dynamics_inst = dynamics_class(**{argname: getattr(orig_opt, argname) for argname in inspect.signature(dynamics_class).parameters.keys() if argname != 'self'})
+    dynamics_inst.deepreach_model=orig_opt.deepreach_model
 
     if orig_opt.hopf_loss != 'none':
-        dynamics.loss_type = 'brt_hjivi_hopf' ## TODO: why is loss type in dynamics?
+        dynamics_inst.loss_type = 'brt_hjivi_hopf' ## TODO: why is loss type in dynamics?
 
-
-    if opt.load_hopf_model:
+    if orig_opt.load_hopf_model:
         with open(os.path.join(load_dir, 'orig_opt.pickle'), 'rb') as opt_file:
             loaded_opt = pickle.load(opt_file)
 
         if not orig_opt.dynamics_class.endswith("lambda"):
-            loaded_model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=loaded_opt.model, mode=loaded_opt.model_mode,
+            loaded_model = modules.SingleBVPNet(in_features=dynamics_inst.input_dim, out_features=1, type=loaded_opt.model, mode=loaded_opt.model_mode,
                                         final_layer_factor=1., hidden_features=loaded_opt.num_nl, num_hidden_layers=loaded_opt.num_hl)
         else:
-            loaded_model = modules.SingleBVPNet(in_features=dynamics.input_dim-1, out_features=1, type=loaded_opt.model, mode=loaded_opt.model_mode,
+            loaded_model = modules.SingleBVPNet(in_features=dynamics_inst.input_dim-1, out_features=1, type=loaded_opt.model, mode=loaded_opt.model_mode,
                                         final_layer_factor=1., hidden_features=loaded_opt.num_nl, num_hidden_layers=loaded_opt.num_hl)
         loaded_model.cuda()
         
         model_path = os.path.join(load_dir, 'training', 'checkpoints', 'model_final.pth')
         loaded_model.load_state_dict(torch.load(model_path)['model']) # FIXME, key only needed for chkpts
         loaded_model.eval()
+
+        if opt.hopf_loss == "lin_val_grad_diff" and orig_opt.dynamics_class.endswith("lambda"):
+            loaded_dynamics_class = getattr(dynamics, orig_opt.dynamics_class.split("lambda")[0]) # non-lambda version of dynamics
+            loaded_dynamics_inst = loaded_dynamics_class(**{argname: getattr(orig_opt, argname) for argname in inspect.signature(loaded_dynamics_class).parameters.keys() if argname != 'self'})
+            loaded_dynamics_inst.deepreach_model=orig_opt.deepreach_model
+            loaded_dynamics_inst.loss_type = 'brt_hjivi_hopf'
         
     else:
         loaded_model = None
+        loaded_dynamics_inst = None
 
     dataset = dataio.ReachabilityDataset(
-        dynamics=dynamics, numpoints=orig_opt.numpoints, 
+        dynamics=dynamics_inst, numpoints=orig_opt.numpoints, 
         pretrain=orig_opt.pretrain, pretrain_iters=orig_opt.pretrain_iters, 
         tMin=orig_opt.tMin, tMax=orig_opt.tMax, 
         counter_start=orig_opt.counter_start, counter_end=orig_opt.counter_end, 
@@ -319,9 +327,10 @@ if __name__ == '__main__':
         use_bank=orig_opt.use_bank, bank_name=orig_opt.bank_name, capacity_test=orig_opt.capacity_test,
         solve_hopf=orig_opt.solve_hopf, solve_grad=orig_opt.solve_grad, hopf_warm_start=orig_opt.hopf_warm_start,
         just_make_hopf_bank=orig_opt.just_make_hopf_bank, refine_bank=orig_opt.refine_bank,
-        loaded_model=loaded_model, lambda_var=orig_opt.dynamics_class.endswith("lambda"))
+        loaded_model=loaded_model, lambda_var=orig_opt.dynamics_class.endswith("lambda"), zerolambda_LS=orig_opt.zerolambda_LS,
+        LS_w_time_curr=orig_opt.LS_w_time_curr, loaded_dynamics=loaded_dynamics_inst)
 
-    model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
+    model = modules.SingleBVPNet(in_features=dynamics_inst.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
                                 final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl)
     model.cuda()
 
@@ -330,14 +339,14 @@ if __name__ == '__main__':
     experiment.init_special(**{argname: getattr(orig_opt, argname) for argname in inspect.signature(experiment_class.init_special).parameters.keys() if argname != 'self'})
 
     if (mode == 'all') or (mode == 'train'):
-        if dynamics.loss_type == 'brt_hjivi':
-            loss_fn = losses.init_brt_hjivi_loss(dynamics, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
-            loss_fn_baseline = losses.init_brt_hjivi_loss(dynamics, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
-        elif dynamics.loss_type == 'brat_hjivi':
-            loss_fn = losses.init_brat_hjivi_loss(dynamics, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
-        elif dynamics.loss_type == 'brt_hjivi_hopf':
+        if dynamics_inst.loss_type == 'brt_hjivi':
+            loss_fn = losses.init_brt_hjivi_loss(dynamics_inst, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
+            loss_fn_baseline = losses.init_brt_hjivi_loss(dynamics_inst, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
+        elif dynamics_inst.loss_type == 'brat_hjivi':
+            loss_fn = losses.init_brat_hjivi_loss(dynamics_inst, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
+        elif dynamics_inst.loss_type == 'brt_hjivi_hopf':
             loss_fn = losses.init_brt_hjivi_hopf_loss(experiment, orig_opt.minWith, orig_opt.dirichlet_loss_divisor, orig_opt.hopf_loss_divisor, orig_opt.hopf_grad_loss_divisor, orig_opt.hopf_loss, orig_opt.temporal_weighting)
-            loss_fn_baseline = losses.init_brt_hjivi_loss(dynamics, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
+            loss_fn_baseline = losses.init_brt_hjivi_loss(dynamics_inst, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
         else:
             raise NotImplementedError
         experiment.train(

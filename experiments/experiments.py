@@ -265,39 +265,52 @@ class Experiment(ABC):
                                     loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords']})
                                     hopf_values = self.dataset.dynamics.io_to_value(loaded_model_results['model_in'], loaded_model_results['model_out'].squeeze(dim=-1)).detach()
                                 else:
-                                    loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords'][..., :-1]}) # remove lambda
-                                    # FIXME I'm not sure if the following properly associates the gradients wrt the lambda value. If it doesn't then it will be wrt the random uniform value, right?
-                                    # model_results_in_w_lambda = torch.cat((loaded_model_results['model_in'].detach(), torch.ones(model_input['model_coords'][..., -1].shape).unsqueeze(-1).cuda()), dim=2)
-                                    # hopf_values = self.dataset.dynamics.io_to_value(model_results_in_w_lambda, loaded_model_results['model_out'].squeeze(dim=-1)) 
-                                    hopf_values = self.dataset.dynamics.io_to_value(model_input['model_coords'], loaded_model_results['model_out'].squeeze(dim=-1)).detach() 
-                                    # TODO could replace with the og uniform random instead of zeros, to teach across lambdas
+                                    if not self.dataset.zerolambda_LS or self.dataset.pretrain or self.dataset.hopf_pretrain or self.dataset.hopf_pretrain_counter == self.dataset.hopf_pretrain_iters:
+                                        loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords'][..., :-1]}) # remove lambda
+                                        hopf_values = self.dataset.dynamics.io_to_value(model_input['model_coords'], loaded_model_results['model_out'].squeeze(dim=-1)).detach() 
+                                    else: # use model coords with lambda=0 only for linear value
+                                        loaded_model_results = self.dataset.loaded_model({'coords': gt['model_coords_hopf'][..., :-1]}) # remove lambda
+                                        hopf_values = self.dataset.dynamics.io_to_value(gt['model_coords_hopf'], loaded_model_results['model_out'].squeeze(dim=-1)).detach() 
 
                         if self.dataset.load_hopf_model and hopf_loss == 'lin_val_grad_diff':
                             if not self.dataset.lambda_var:
                                 loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords']})
                                 hopf_grads = self.dataset.dynamics.io_to_dv(loaded_model_results['model_in'], loaded_model_results['model_out'].squeeze(dim=-1))[..., 1:].detach()
+                            
+                            # If we want grads from a loaded linear model that does not have same dim as current model (eg lambda variation), need to use loaded model dynamics class
                             else:
-                                loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords'][..., :-1]}) # remove lambda
-                                hopf_grads = self.dataset.dynamics.io_to_dv(model_input['model_coords'], loaded_model_results['model_out'].squeeze(dim=-1))[..., 1:].detach()
+                                if not self.dataset.zerolambda_LS or self.dataset.pretrain or self.dataset.hopf_pretrain or self.dataset.hopf_pretrain_counter == self.dataset.hopf_pretrain_iters:
+                                    loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords'][..., :-1]}) # remove lambda
+                                    # loaded_results_w_lambda = torch.cat((loaded_model_results['model_in'], torch.zeros(1, self.dataset.numpoints, 1).cuda()), dim=2) # put lambda back just for next line (removed b4 loss)
+                                    # hopf_grads = self.dataset.dynamics.io_to_dv(loaded_model_results['model_in'], loaded_model_results['model_out'].squeeze(dim=-1)).detach()
+                                    hopf_grads = self.dataset.loaded_dynamics.io_to_dv(loaded_model_results['model_in'], loaded_model_results['model_out'].squeeze(dim=-1))[..., 1:].detach()
+                                else:
+                                    loaded_model_results = self.dataset.loaded_model({'coords': gt['model_coords_hopf'][..., :-1]}) # remove lambda
+                                    hopf_grads = self.dataset.loaded_dynamics.io_to_dv(loaded_model_results['model_in'], loaded_model_results['model_out'].squeeze(dim=-1))[..., 1:].detach()    
                             
                         if self.dataset.memory_tracking:
                             print(f"Epoch {epoch}-2, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
                             print(f"Epoch {epoch}-2, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
                             print()
 
-                        ## Seperate Hopf Coords (for the hopf loss to allow unrestricted sampling for PDE loss)
-                        if not(self.dataset.use_bank) or self.dataset.hopf_pretrain_counter == 0:
+                        ## Seperate Hopf Coords (for the hopf loss to allow unrestricted sampling for PDE loss OR supervision on lambda=0 data only)
+                        if (not self.dataset.use_bank or self.dataset.hopf_pretrain_counter == 0) and (not self.dataset.zerolambda_LS or (self.dataset.pretrain or self.dataset.hopf_pretrain or self.dataset.hopf_pretrain_counter == self.dataset.hopf_pretrain_iters)):
                             
                             learned_hopf_values = values
                             if hopf_loss == 'lin_val_grad_diff':
-                                learned_hopf_grads = dvs[..., 1:]
-                                
+                                if not self.dataset.lambda_var:
+                                    learned_hopf_grads = dvs[..., 1:]
+                                else:
+                                    learned_hopf_grads = dvs[..., 1:-1] # remove lambda grad
                         else:
                             model_results_hopf = self.model({'coords': gt['model_coords_hopf']})
-                            learned_hopf_values = self.dataset.dynamics.io_to_value(model_results_hopf['model_in'].detach(), model_results_hopf['model_out'].squeeze(dim=-1))   
+                            learned_hopf_values = self.dataset.dynamics.io_to_value(model_results_hopf['model_in'].detach(), model_results_hopf['model_out'].squeeze(dim=-1))
                             
                             if hopf_loss == 'lin_val_grad_diff':
-                                learned_hopf_grads = self.dataset.dynamics.io_to_dv(model_results_hopf['model_in'], model_results_hopf['model_out'].squeeze(dim=-1))[..., 1:]   
+                                if not self.dataset.lambda_var:
+                                    learned_hopf_grads = self.dataset.dynamics.io_to_dv(model_results_hopf['model_in'], model_results_hopf['model_out'].squeeze(dim=-1))[..., 1:]
+                                else:
+                                    learned_hopf_grads = self.dataset.dynamics.io_to_dv(model_results_hopf['model_in'], model_results_hopf['model_out'].squeeze(dim=-1))[..., 1:-1] # remove lambda grad
                         
                         if self.dataset.memory_tracking:
                             print(f"Epoch {epoch}-3, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
@@ -1328,23 +1341,23 @@ class DeepReachHopf(Experiment):
                 max_v = 1.5
 
                 ## Log Colorbar
-                # offset = 1e-1
-                # log_norm = matplotlib.colors.LogNorm(vmin=offset, vmax=max_v)
-                # s = ax.imshow(torch.abs(Vgt - Vgt_linear).T + torch.tensor([offset]), cmap=matplotlib.colormaps["viridis"], origin='lower', extent=(-1., 1., -1., 1.), norm=log_norm) # viridis, terrain, nipy_spectral, rainbow
-                # # s = ax.contourf(Xg, Yg, Vgt, cmap=RdWhBl_vscaled, levels=256)
-                # divider = make_axes_locatable(ax)
-                # cax = divider.append_axes("right", size="5%", pad=0.05)
-                # cbar = fig.colorbar(s, cax=cax)
-                # cbar.set_ticks([offset, max_v])  # FIXME fixed max
-
-                ## Linear Colorbar
-                offset = 0
-                s = ax.imshow(torch.abs(Vgt - Vgt_linear).T + torch.tensor([offset]), cmap=matplotlib.colormaps["viridis"], origin='lower', extent=(-1., 1., -1., 1.), vmin=offset, vmax=max_v) # viridis, terrain, nipy_spectral, rainbow
+                offset = 1e-5
+                log_norm = matplotlib.colors.LogNorm(vmin=offset, vmax=max_v)
+                s = ax.imshow(torch.abs(Vgt - Vgt_linear).T + torch.tensor([offset]), cmap=matplotlib.colormaps["viridis_r"], origin='lower', extent=(-1., 1., -1., 1.), norm=log_norm) # viridis, terrain, nipy_spectral, rainbow
                 # s = ax.contourf(Xg, Yg, Vgt, cmap=RdWhBl_vscaled, levels=256)
                 divider = make_axes_locatable(ax)
                 cax = divider.append_axes("right", size="5%", pad=0.05)
                 cbar = fig.colorbar(s, cax=cax)
                 cbar.set_ticks([offset, max_v])  # FIXME fixed max
+
+                ## Linear Colorbar
+                # offset = 0
+                # s = ax.imshow(torch.abs(Vgt - Vgt_linear).T + torch.tensor([offset]), cmap=matplotlib.colormaps["viridis_r"], origin='lower', extent=(-1., 1., -1., 1.), vmin=offset, vmax=max_v) # viridis, terrain, nipy_spectral, rainbow
+                # # s = ax.contourf(Xg, Yg, Vgt, cmap=RdWhBl_vscaled, levels=256)
+                # divider = make_axes_locatable(ax)
+                # cax = divider.append_axes("right", size="5%", pad=0.05)
+                # cbar = fig.colorbar(s, cax=cax)
+                # cbar.set_ticks([offset, max_v])  # FIXME fixed max
 
                 # cbar.set_ticks([0., torch.abs(Vgt_full - Vgt_linear).max()])  # Define custom tick locations
                 # cbar.set_ticks([0., torch.abs(Vgt - Vgt_linear).max()])  # FIXME fixed max
