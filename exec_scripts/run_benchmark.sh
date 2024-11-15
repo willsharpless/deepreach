@@ -3,16 +3,16 @@
 ## Init
 
 readonly wandb_project="deepreach_hopf_benchmarks"
-readonly experiment_name="bench_holder" ## must overwrite to save data, will save model_final?
+# readonly experiment_name="bench_holder" ## must overwrite to save data, will save model_final?
 
-readonly output_dir_name="./runs_benchmark/baseline_50D_200k"
-
+readonly summary_dir_name="./summaries/baseline_50D_300k"
+readonly experiments_dir="./runs"
 readonly dim="50"
 readonly goalR="0.25"
-readonly num_epochs="200000"
+readonly num_epochs="300000"
 readonly bs="65000"
 
-readonly base_args="run_experiment.py --experiment_name $experiment_name --use_wandb --wandb_project $wandb_project --wandb_name baseline_run --dynamics_class LessLinearND --N $dim --goalR $goalR --num_epochs $num_epochs --numpoints $bs"
+readonly base_args="run_experiment.py --use_wandb --experiments_dir $experiments_dir --wandb_project $wandb_project --dynamics_class LessLinearND --N $dim --goalR $goalR --num_epochs $num_epochs --numpoints $bs --lr_std 5e-6"
 
 readonly bench_mag="20"
 readonly bench1="--gamma $bench_mag --mu 0 --alpha 0"
@@ -22,7 +22,7 @@ readonly bench4="--gamma $bench_mag --mu -$bench_mag --alpha 1"
 
 ## Method
 
-readonly supervisor="LL50D_DR_linear"
+readonly supervisor="./runs/LL50D_DR_linear"
 
 readonly method_args="--baseline" ## Baseline
 # readonly method_args="--hopf_loss_decay --hopf_loss_decay_type linear --hopf_loss_decay_w 0.8 --diff_con_loss_incr --load_hopf_model --load_hopf_model_name $supervisor" ## Decayed LSS
@@ -31,32 +31,43 @@ readonly method_args="--baseline" ## Baseline
 
 ## Execute
 
-mkdir -p $output_dir_name
+mkdir -p $summary_dir_name
 
-python $base_args $bench1 $method_args
+name="baseline_50D_300k_b1"
+experiment_name="--experiment_name $name"
+wandb_name="--wandb_name baseline_run_1"
+python $base_args $bench1 $method_args $experiment_name $wandb_name
 
-cp wandb/latest-run/files/wandb-summary.json $output_dir_name/wandb-summary_b1.json
-cp runs/$experiment_name/training/checkpoints/model_final.pth $output_dir_name/model_final_b1.pth
-cp runs/$experiment_name/training/checkpoints/BRS_validation_plot.png $output_dir_name/BRS_validation_plot_b1.png
+cp wandb/latest-run/files/wandb-summary.json $summary_dir_name/wandb-summary_b1.json
+cp $experiments_dir/$name/training/checkpoints/model_final.pth $summary_dir_name/model_final_b1.pth
+cp $experiments_dir/$name/training/checkpoints/BRS_validation_plot.png $summary_dir_name/BRS_validation_plot_b1.png
 
-python $base_args $bench2 $method_args
+name="baseline_50D_300k_b2"
+experiment_name="--experiment_name $name"
+wandb_name="--wandb_name baseline_run_2"
+python $base_args $bench2 $method_args $experiment_name $wandb_name
 
-cp wandb/latest-run/files/wandb-summary.json $output_dir_name/wandb-summary_b2.json
-cp runs/$experiment_name/training/checkpoints/model_final.pth $output_dir_name/model_final_b2.pth
-cp runs/$experiment_name/training/checkpoints/BRS_validation_plot.png $output_dir_name/BRS_validation_plot_b2.png
+cp wandb/latest-run/files/wandb-summary.json $summary_dir_name/wandb-summary_b2.json
+cp $experiments_dir/$name/training/checkpoints/model_final.pth $summary_dir_name/model_final_b2.pth
+cp $experiments_dir/$name/training/checkpoints/BRS_validation_plot.png $summary_dir_name/BRS_validation_plot_b2.png
 
-python $base_args $bench3 $method_args
+name="baseline_50D_300k_b3"
+experiment_name="--experiment_name $name"
+wandb_name="--wandb_name baseline_run_3"
+python $base_args $bench3 $method_args $experiment_name $wandb_name
 
-cp wandb/latest-run/files/wandb-summary.json $output_dir_name/wandb-summary_b3.json
-cp runs/$experiment_name/training/checkpoints/model_final.pth $output_dir_name/model_final_b3.pth
-cp runs/$experiment_name/training/checkpoints/BRS_validation_plot.png $output_dir_name/BRS_validation_plot_b3.png
+cp wandb/latest-run/files/wandb-summary.json $summary_dir_name/wandb-summary_b3.json
+cp $experiments_dir/$name/training/checkpoints/model_final.pth $summary_dir_name/model_final_b3.pth
+cp $experiments_dir/$name/training/checkpoints/BRS_validation_plot.png $summary_dir_name/BRS_validation_plot_b3.png
 
-python $base_args $bench4 $method_args
+name="baseline_50D_300k_b4"
+experiment_name="--experiment_name $name"
+wandb_name="--wandb_name baseline_run_4"
+python $base_args $bench4 $method_args $experiment_name $wandb_name
 
-cp wandb/latest-run/files/wandb-summary.json $output_dir_name/wandb-summary_b4.json
-cp runs/$experiment_name/training/checkpoints/model_final.pth $output_dir_name/model_final_b4.pth
-cp runs/$experiment_name/training/checkpoints/BRS_validation_plot.png $output_dir_name/BRS_validation_plot_b4.png
+cp wandb/latest-run/files/wandb-summary.json $summary_dir_name/wandb-summary_b4.json
+cp $experiments_dir/$name/training/checkpoints/model_final.pth $summary_dir_name/model_final_b4.pth
+cp $experiments_dir/$name/training/checkpoints/BRS_validation_plot.png $summary_dir_name/BRS_validation_plot_b4.png
 
-cd $output_dir_name
+cd $summary_dir_name
 jq -s '.' wandb-summary_b1.json wandb-summary_b2.json wandb-summary_b3.json wandb-summary_b4.json > benchmark_tally.json
-cd ..
