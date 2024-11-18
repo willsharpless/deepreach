@@ -70,7 +70,7 @@ class ReachabilityDataset(Dataset):
         else:
             self.numblocks = 40 # batch-sizes per bank, #FIXME: should be automatic
             self.bank_total = numpoints * self.numblocks
-        if not self.dynamics.name  in ['QuadrotorLinear','Quadrotor','Quadrotor10D']:
+        if not self.dynamics.name  in ['QuadrotorLinear','Quadrotor','Quadrotor10D', 'Quadrotor10DLambda']:
             if bank_name is None or bank_name == 'none': 
                 bank_name = self.make_bank_name()
         self.bank_name = bank_name
@@ -150,6 +150,13 @@ class ReachabilityDataset(Dataset):
         else:
             if self.hopf_pretrain or self.hopf_pretrained or self.no_curriculum:
                 times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin)) # during hopf pt, sample across all time?
+                if self.dynamics.name == 'Quadrotor10DLambda':
+                    if self.dynamics.mode == "lambda":
+                        model_states[...,-1] = torch.zeros(self.numpoints).uniform_(-1, -1+ min(2* self.counter/self.counter_end,  2) ) # lambda curriculum
+                    if self.dynamics.mode == "lambda_time" and not self.hopf_pretrain:
+                        times = self.tMin + torch.zeros(self.numpoints, 1).uniform_((self.tMax-self.tMin) /self.counter_end,
+                                                                                    (self.tMax-self.tMin) * min(1.0,(self.counter+1)/self.counter_end)) # time curriculum
+                    
 
             else:
                 times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * (self.counter/self.counter_end))
@@ -160,6 +167,9 @@ class ReachabilityDataset(Dataset):
         model_coords = torch.cat((times, model_states), dim=1)        
         if self.dynamics.input_dim > self.dynamics.state_dim + 1: # temporary workaround for having to deal with dynamics classes for parametrized models with extra inputs
             model_coords = torch.cat((model_coords, torch.zeros(self.numpoints, self.dynamics.input_dim - self.dynamics.state_dim - 1)), dim=1)
+        if self.dynamics.name == 'Quadrotor10DLambda' and self.dynamics.mode == "linear":
+            model_coords[...,-1] = -1.0 # make lambda = 0
+
 
         ## Get Hopf value
         if self.use_hopf:   

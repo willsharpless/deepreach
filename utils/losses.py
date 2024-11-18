@@ -126,7 +126,7 @@ def init_brt_hjivi_hopf_loss(experiment, minWith, dirichlet_loss_divisor, hopf_l
     
     elif hopf_loss == 'lin_val_grad_diff':
 
-        def brt_hjivi_loss_hopf(state, value, dvdt, dvds, boundary_value, dirichlet_mask, output, hopf_value, learned_hopf_value, hopf_grad, learned_hopf_grad, epoch, state_time):
+        def brt_hjivi_loss_hopf(state, value, dvdt, dvds, boundary_value, dirichlet_mask, output, hopf_value, learned_hopf_value, hopf_grad, learned_hopf_grad, epoch, state_time, lambda_pretrain = False):
 
             dirichlet = value[dirichlet_mask] - boundary_value[dirichlet_mask]
             if experiment.dataset.dynamics.deepreach_model == 'exact':
@@ -143,7 +143,7 @@ def init_brt_hjivi_hopf_loss(experiment, minWith, dirichlet_loss_divisor, hopf_l
                 hopf_loss_grad = torch.Tensor([0])
 
             # hopf pretraining
-            elif experiment.dataset.hopf_pretrain: 
+            elif experiment.dataset.hopf_pretrain and (not lambda_pretrain): 
                 diff_constraint_hom = torch.Tensor([0])
 
             else:

@@ -93,9 +93,12 @@ class SliceSampleGenerator(SampleGenerator):
                 samples[:, dim] = samples[:, dim]
             else:
                 samples[:, dim] = self.slices[dim]
+        if self.dynamics.name == 'Quadrotor10DLambda':
+            if self.dynamics.mode=='linear':
+                samples[:, -1] = 0.0
+            if self.dynamics.mode=='lambda':
+                samples[:, -1] = 1.0
         return samples
-
-
 
 
 
@@ -344,6 +347,11 @@ def target_fraction(model, dynamics, t, sample_validator, target_validator, num_
                 batch_states[:, dim].uniform_(
                     *dynamics.state_test_range()[dim])
                 batch_states[:, dim] = batch_states[:, dim]
+            if dynamics.name == 'Quadrotor10DLambda':
+                if dynamics.mode=='linear':
+                    batch_states[:, -1] = 0.0
+                if dynamics.mode=='lambda':
+                    batch_states[:, -1] = 1.0
             batch_states = dynamics.equivalent_wrapped_state(batch_states)
             batch_coords = torch.cat((batch_times, batch_states), dim=-1)
 

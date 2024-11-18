@@ -111,6 +111,8 @@ class Experiment(ABC):
 
         train_dataloader = DataLoader(self.dataset, shuffle=True, batch_size=batch_size, pin_memory=True, num_workers=0)
 
+        rel_weight_hopf=1.0
+        rel_weight_grad=1.0
         ## Define Optimizers and Schedulers ## TODO, would SGD be better than Adam?
         if dual_lr and self.dataset.hopf_pretrain:
             optim_hopf = torch.optim.Adam(lr=lr_hopf, params=self.model.parameters())
@@ -249,19 +251,33 @@ class Experiment(ABC):
                             hopf_grads = gt['hopf_grads']
 
                         if self.dataset.load_hopf_model:
-                            loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords']})
+                            hopf_coord=model_input['model_coords']
+                            if self.dataset.dynamics.name == 'Quadrotor10DLambda':
+                                hopf_coord[..., -1] = -1.0
+
+                            loaded_model_results = self.dataset.loaded_model({'coords': hopf_coord})
                             hopf_values = self.dataset.dynamics.io_to_value(loaded_model_results['model_in'].detach(), loaded_model_results['model_out'].squeeze(dim=-1))
                             if self.dataset.solve_grad:
                                 hopf_grads = self.dataset.dynamics.io_to_dv(loaded_model_results['model_in'], loaded_model_results['model_out'].squeeze(dim=-1))[..., 1:]
                         
                         # the following allows separate coordinates for the hopf loss (to allow unrestricted sampling for PDE loss)
                         if not(self.dataset.use_bank) or self.dataset.hopf_pretrain_counter == 0:
-                            
-                            learned_hopf_values = values
-                            if hopf_loss == 'lin_val_grad_diff':
-                                learned_hopf_grads = dvs[..., 1:]
+                            if self.dataset.dynamics.name == 'Quadrotor10DLambda' and self.dataset.dynamics.mode in ["lambda", "lambda_time"]:
+                                
+                                model_results_hopf = self.model({'coords': hopf_coord})
+                                learned_hopf_values = self.dataset.dynamics.io_to_value(model_results_hopf['model_in'].detach(), 
+                                                                                        model_results_hopf['model_out'].squeeze(dim=-1))
+
+                                if hopf_loss == 'lin_val_grad_diff':
+                                    learned_hopf_grads = self.dataset.dynamics.io_to_dv(model_results_hopf['model_in'], 
+                                                                                        model_results_hopf['model_out'].squeeze(dim=-1))[..., 1:]
+                            else:
+                                learned_hopf_values = values
+                                if hopf_loss == 'lin_val_grad_diff':
+                                    learned_hopf_grads = dvs[..., 1:]
                                 
                         else:
+                            
                             model_results_hopf = self.model({'coords': gt['model_coords_hopf']})
                             learned_hopf_values = self.dataset.dynamics.io_to_value(model_results_hopf['model_in'].detach(), model_results_hopf['model_out'].squeeze(dim=-1))   
                             
@@ -269,7 +285,11 @@ class Experiment(ABC):
                                 learned_hopf_grads = self.dataset.dynamics.io_to_dv(model_results_hopf['model_in'], model_results_hopf['model_out'].squeeze(dim=-1))[..., 1:]   
                         
                         if hopf_loss == 'lin_val_grad_diff':
-                            losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, learned_hopf_values, hopf_grads, learned_hopf_grads, epoch, state_times)
+                            if self.dataset.dynamics.name == 'Quadrotor10DLambda' and self.dataset.dynamics.mode in ["lambda", "lambda_time"]:
+                                lambda_pretrain=True
+                            else:
+                                lambda_pretrain=False
+                            losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, learned_hopf_values, hopf_grads, learned_hopf_grads, epoch, state_times, lambda_pretrain)
                         else:
                             losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, learned_hopf_values, epoch, state_times)
 
@@ -301,25 +321,74 @@ class Experiment(ABC):
                     if self.timing: print("Loss Scheduler took:", time.time() - start_time_2)
                     
                     ## Decay Hopf Loss(es)
-                    if hopf_loss_decay and hopf_loss != 'none': #                         
-                        if epoch >= total_pretrain_iters or hopf_loss_decay_early:
-                            if hopf_loss_decay_type == 'exponential' and epoch > total_pretrain_iters or hopf_loss_decay_early:
-                                loss_weights['hopf'] = hopf_loss_decay_w * loss_weights['hopf']
-                            elif hopf_loss_decay_type == 'linear':
-                                loss_weights['hopf'] = 1 - hopf_loss_decay_w * (epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters)
-                            elif hopf_loss_decay_type == 'negative_exponential' and epoch > total_pretrain_iters:
-                                loss_weights['hopf'] = 1 - ((1 - loss_weights['hopf']) / hopf_loss_decay_w)
-                            elif hopf_loss_decay_type not in ['exponential', 'linear', 'negative_exponential']:
-                                raise NotImplementedError
-                        loss_weights['hopf'] = min(max(loss_weights['hopf'], 0.), 1.)
-                        
-                        if hopf_loss == 'lin_val_grad_diff':
-                            loss_weights['hopf_grad'] = loss_weights['hopf'] 
+                    if hopf_loss_decay and hopf_loss != 'none': #   
+                        if adjust_relative_grads:
+                            if epoch >= total_pretrain_iters or hopf_loss_decay_early or (self.dataset.dynamics.name == 'Quadrotor10DLambda' and epoch >= self.dataset.pretrain_iters):
+                                loss_weights['diff_constraint_hom']=1.0
+                                params = OrderedDict(self.model.named_parameters())
+                                # Gradients with respect to the PDE loss
+                                optim.zero_grad()
+                                losses['diff_constraint_hom'].backward(
+                                    retain_graph=True)
+                                grads_PDE = []
+                                for key, param in params.items():
+                                    grads_PDE.append(param.grad.view(-1))
+                                grads_PDE = torch.cat(grads_PDE)
 
-                        ## Incrementally Introduce Differential Constraint Loss (After All Pretraining)
-                        if diff_con_loss_incr and epoch >= total_pretrain_iters:
-                            loss_weights['diff_constraint_hom'] = 1 - loss_weights['hopf']
-                        
+                                # Gradients with respect to the hopf loss
+                                optim.zero_grad()
+                                losses['hopf'].backward(retain_graph=True)
+                                grads_hopf = []
+                                for key, param in params.items():
+                                    grads_hopf.append(param.grad.view(-1))
+                                grads_hopf = torch.cat(grads_hopf)
+                                # Set the new weight according to the paper
+                                # num = torch.max(torch.abs(grads_PDE))
+                                num = torch.mean(torch.abs(grads_hopf))
+                                den = torch.mean(torch.abs(grads_PDE))
+                                if self.dataset.dynamics.name == 'Quadrotor10DLambda' and self.dataset.dynamics.mode in ["lambda", "lambda_time"]:
+                                    hopf_importance_coef = 3.0
+                                else:
+                                    if hopf_loss_decay_type == 'linear': # from 10 to 1-hopf_loss_decay_w
+                                        # hopf_importance_coef = 10 - (hopf_loss_decay_w+9) * (epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters)
+                                        hopf_importance_coef = hopf_loss_decay_w * math.e**(math.log(10/hopf_loss_decay_w)*(1-(epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters))) # from 10 to decay_w
+                                    else: 
+                                        raise NotImplementedError
+                                rel_weight_hopf = 0.9*rel_weight_hopf + 0.1*hopf_importance_coef*num/den
+                                loss_weights['hopf'] = rel_weight_hopf 
+                                
+                                # Gradients with respect to the hopf loss
+                                optim.zero_grad()
+                                losses['hopf_grad'].backward(retain_graph=True)
+                                grads_hopf_grad = []
+                                for key, param in params.items():
+                                    grads_hopf_grad.append(param.grad.view(-1))
+                                grads_hopf_grad = torch.cat(grads_hopf_grad)     
+                                num = torch.mean(torch.abs(grads_hopf_grad))
+                                rel_weight_grad = 0.9*rel_weight_grad + 0.1*hopf_importance_coef*num/den
+                                loss_weights['hopf_grad'] = rel_weight_grad 
+                                print(hopf_importance_coef,rel_weight_hopf,rel_weight_grad)
+                                
+                        else:
+                            if epoch >= total_pretrain_iters or hopf_loss_decay_early:
+                                if hopf_loss_decay_type == 'exponential' and epoch > total_pretrain_iters or hopf_loss_decay_early:
+                                    loss_weights['hopf'] = hopf_loss_decay_w * loss_weights['hopf']
+                                elif hopf_loss_decay_type == 'linear':
+                                    loss_weights['hopf'] = 1 - hopf_loss_decay_w * (epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters)
+                                elif hopf_loss_decay_type == 'negative_exponential' and epoch > total_pretrain_iters:
+                                    loss_weights['hopf'] = 1 - ((1 - loss_weights['hopf']) / hopf_loss_decay_w)
+                                elif hopf_loss_decay_type not in ['exponential', 'linear', 'negative_exponential']:
+                                    raise NotImplementedError
+                            loss_weights['hopf'] = min(max(loss_weights['hopf'], 0.), 1.)
+                            
+                            if hopf_loss == 'lin_val_grad_diff':
+                                loss_weights['hopf_grad'] = loss_weights['hopf'] 
+
+                            ## Incrementally Introduce Differential Constraint Loss (After All Pretraining)
+                            if diff_con_loss_incr and epoch >= total_pretrain_iters:
+                                loss_weights['diff_constraint_hom'] = 1 - loss_weights['hopf']
+                    
+                    
                     ## Combine Losses
                     if self.timing: start_time_2 = time.time()
                     train_loss = 0.
@@ -397,6 +466,9 @@ class Experiment(ABC):
                             if hopf_loss_decay and epoch >= total_pretrain_iters:
                                 log_dict['hopf_weight'] = loss_weights['hopf']
                                 log_dict['pde_weight'] = loss_weights['diff_constraint_hom']
+                                if hopf_loss == 'lin_val_grad_diff':
+                                    log_dict['hopf_grad_weight'] = loss_weights['hopf_grad']
+                            
 
                             if self.dataset.solve_hopf and self.dataset.record_gt_metrics:
                                 log_dict['Hopf Value MSE'] = self.dataset.hjpool.alg_iter_MSE
@@ -431,6 +503,10 @@ class Experiment(ABC):
                         epoch=epoch+1, save_path=os.path.join(checkpoints_dir, 'BRS_validation_plot_epoch_%04d.png' % (epoch+1)),
                         x_resolution = val_x_resolution, y_resolution = val_y_resolution, z_resolution=val_z_resolution, time_resolution=val_time_resolution)
                 if self.timing: print("Checkpointing took:", time.time() - start_time_2)
+        checkpoint = { 
+            'epoch': -1,
+            'model': self.model.state_dict(),
+            'optimizer': optim.state_dict()}
         torch.save(checkpoint,
             os.path.join(checkpoints_dir, 'model_final.pth'))
         if was_eval:
