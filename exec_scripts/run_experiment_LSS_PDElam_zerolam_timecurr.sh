@@ -49,7 +49,7 @@ bs="60000"
 # method_args_8="--numpoints $bs --hopf_loss_divisor 200 --hopf_grad_loss_divisor 500 --experiment_name $output_dir_name/hld200_hgld500_bs60k_e200k --wandb_name hld200_hgld500_bs60k_e200k --num_epochs 200000"
 
 # more less hopf w/ bigger batch and long time
-# method_args_9=" --lr_std 5e-6 --numpoints $bs --hopf_loss_divisor 200 --hopf_grad_loss_divisor 1000 --experiment_name $output_dir_name/hld200_hgld1000_bs60k_e300k --wandb_name hld200_hgld1000_bs60k_e300k --num_epochs 300000"
+method_args_9=" --lr_std 5e-6 --numpoints $bs --hopf_loss_divisor 200 --hopf_grad_loss_divisor 1000 --experiment_name $output_dir_name/hld200_hgld1000_bs60k_e300k --wandb_name hld200_hgld1000_bs60k_e300k --num_epochs 300000"
 # method_args_10=" --lr_std 5e-6 --numpoints $bs --hopf_loss_divisor 100 --hopf_grad_loss_divisor 1000 --experiment_name $output_dir_name/hld100_hgld1000_bs60k_e300k --wandb_name hld100_hgld1000_bs60k_e300k --num_epochs 300000"
 # method_args_11=" --lr_std 5e-6 --numpoints $bs --hopf_loss_divisor 50 --hopf_grad_loss_divisor 250 --experiment_name $output_dir_name/hld50_hgld250_bs60k_e300k --wandb_name hld50_hgld250_bs60k_e300k --num_epochs 300000"
 # method_args_12=" --lr_std 5e-6 --numpoints $bs --hopf_loss_divisor 25 --hopf_grad_loss_divisor 250 --experiment_name $output_dir_name/hld25_hgld250_bs60k_e300k --wandb_name hld25_hgld250_bs60k_e300k --num_epochs 300000"
