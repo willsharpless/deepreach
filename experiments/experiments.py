@@ -250,7 +250,7 @@ class Experiment(ABC):
                         if hopf_loss == 'lin_val_grad_diff':
                             hopf_grads = gt['hopf_grads']
 
-                        if self.dataset.load_hopf_model:
+                        if self.dataset.load_hopf_model and self.dataset.dynamics.deepreach_model != "exact_lambda":
                             hopf_coord=model_input['model_coords']
                             if self.dataset.dynamics.name == 'Quadrotor10DLambda':
                                 hopf_coord[..., -1] = -1.0
@@ -259,7 +259,7 @@ class Experiment(ABC):
                             hopf_values = self.dataset.dynamics.io_to_value(loaded_model_results['model_in'].detach(), loaded_model_results['model_out'].squeeze(dim=-1))
                             if self.dataset.solve_grad:
                                 hopf_grads = self.dataset.dynamics.io_to_dv(loaded_model_results['model_in'], loaded_model_results['model_out'].squeeze(dim=-1))[..., 1:]
-                        
+
                         # the following allows separate coordinates for the hopf loss (to allow unrestricted sampling for PDE loss)
                         if not(self.dataset.use_bank) or self.dataset.hopf_pretrain_counter == 0:
                             if self.dataset.dynamics.name == 'Quadrotor10DLambda' and self.dataset.dynamics.mode in ["lambda", "lambda_time"]:

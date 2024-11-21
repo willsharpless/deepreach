@@ -68,7 +68,9 @@ def plot_recovery_fig(dynamics_, model, delta_level, tMax, z_res, use_prestored_
     y_min, y_max = dynamics_.state_test_range()[
         plot_config['y_axis_idx']]
 
-    resolution = 512
+    fig2 = plt.figure()
+
+    resolution = 32
     xs = np.linspace(*dynamics_.state_test_range()
                         [plot_config['x_axis_idx']], resolution)
     ys = np.linspace(*dynamics_.state_test_range()
@@ -82,7 +84,7 @@ def plot_recovery_fig(dynamics_, model, delta_level, tMax, z_res, use_prestored_
                         [plot_config['x_axis_idx']], 9)
     ys2 = np.linspace(*dynamics_.state_test_range()
                         [plot_config['y_axis_idx']], 9)/5.0
-    xys2 = torch.cartesian_prod(torch.tensor(xs2), torch.tensor(ys2))
+
 
     value_grids = np.zeros((len(zs), len(xs), len(ys)))
 
@@ -150,7 +152,7 @@ def plot_recovery_fig(dynamics_, model, delta_level, tMax, z_res, use_prestored_
         
         # print(batch_scenario_states,state_trajs.shape)
         for j in range(state_trajs.shape[0]):
-            plt.plot(state_trajs[j,:,plot_config['x_axis_idx']],state_trajs[j,:,plot_config['y_axis_idx']],color='blue',linestyle='--', linewidth = 0.1)
+            ax.plot(state_trajs[j,:,plot_config['x_axis_idx']],state_trajs[j,:,plot_config['y_axis_idx']],color='blue',linestyle='--', linewidth = 0.1)
 
         circle = plt.Circle((0, 0), 0.5,color='darkblue', 
                          lw=0.5, 
@@ -167,7 +169,14 @@ def plot_recovery_fig(dynamics_, model, delta_level, tMax, z_res, use_prestored_
         if i != 0:
             ax.set_yticks([])
         all_state_trajs.append(state_trajs)
-    return fig, all_state_trajs, value_grids[0]
+
+        ax2= fig2.add_subplot(1, len(zs), (i+1), projection='3d')
+        for j in range(state_trajs.shape[0]):
+            ax2.plot(state_trajs[j,:,plot_config['x_axis_idx']],state_trajs[j,:,plot_config['y_axis_idx']],zs=state_trajs[j,:,2], 
+                     color='blue',linestyle='--', linewidth = 0.1)
+
+        
+    return fig, fig2, all_state_trajs, value_grids[0]
 
 def plot_result(experiment_dir, dynamics_, model, tMax, use_prestored_init_states):
     with open(os.path.join(experiment_dir, 'basic_logs.pickle'), 'rb') as f:
@@ -187,15 +196,18 @@ def plot_result(experiment_dir, dynamics_, model, tMax, use_prestored_init_state
     print('recovered violation rate', str(
         logs['recovered_violation_rate']))
     z_res =5
-    fig, all_state_trajs, values = plot_recovery_fig(
+    fig, fig2, all_state_trajs, values = plot_recovery_fig(
         dynamics_, model, delta_level, tMax, z_res, use_prestored_init_states)
 
     plt.tight_layout()
     fig.savefig(os.path.join(
         experiment_dir, f'traj_plots.png'), dpi=800)
+    fig2.savefig(os.path.join(
+        experiment_dir, f'traj_plots3D.png'), dpi=800)
     for z in range(z_res):
         np.save(os.path.join(experiment_dir, f'state_traj%d'%z),
                             all_state_trajs[z].detach().cpu().numpy())
+    
     return values, delta_level
 
 def rollout_trajs(tMax, dt, batch_scenario_states, dynamics_, model):
@@ -209,7 +221,11 @@ def rollout_trajs(tMax, dt, batch_scenario_states, dynamics_, model):
         tMax/dt), dynamics_.disturbance_dim)
     ham_trajs = torch.zeros(scenario_batch_size, int(tMax/dt))
 
-    state_trajs[:, 0, :] = batch_scenario_states
+    if dynamics_.name == 'Quadrotor10DLambda':
+        state_trajs[:, 0, :-1] = batch_scenario_states
+        state_trajs[:, 0, -1] = 1.0
+    else:
+        state_trajs[:, 0, :] = batch_scenario_states
     for k in tqdm(range(int(tMax/dt)), desc='Trajectory Propagation', position=1, leave=False):
 
         traj_time = tMax - k*dt
@@ -295,9 +311,9 @@ def generate_overlay_plot(all_values, titles, levels, fname):
 if __name__ == "__main__":
     p = configargparse.ArgumentParser()
     experiments_dir = './runs'
-    exp_names = ['quadrotor10D_baseline_nrange', 'quadrotor10D_lindecay_nrange', 'lin_{0.6}_{10.0}_{5.0}_nrange']
-    titles = ['Baseline', 'Adaptive', 'LinDecayParamSearch']
-    colors=["#243B6A","#92AFD7","#CF8E80"]
+    exp_names = ['quadrotor10D_baseline_nrange', 'quadrotor10D_lindecay_nrange', 'lin_{0.6}_{10.0}_{5.0}_nrange','quadrotor10D_lambda_exact']
+    titles = ['Baseline', 'Adaptive', 'LinDecayParamSearch','Lambda_exact']
+    colors=["#243B6A","#92AFD7","#CF8E80","#550C18"]
     p.add_argument('--tMax', type=float, required=True, help='Time horizon.')
     p.add_argument('--use_prestored_init_states', default=False, action='store_true', help='use prestored initial states for plotting')
     opt = p.parse_args()

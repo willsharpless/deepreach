@@ -63,7 +63,7 @@ if __name__ == '__main__':
     p.add_argument('--refine_bank', action='store_true', default=False, required=False, help='Will iteratively throw out non-spatially unique points when hopf solving (slow)')
     p.add_argument('--hopf_warm_start', action='store_true', default=False, required=False, help='Passes estimated gradients from DeepReach to the Hopf solvers to warm-start them')
     p.add_argument('--load_hopf_model', action='store_true', default=False, required=False, help='Model to load for the supervision')
-    p.add_argument('--load_hopf_model_name', type=str, default='capacity_linear', help='Supervision model name')
+    p.add_argument('--load_hopf_model_name', type=str, default='none', help='Supervision model name')
     p.add_argument('--load_model_type', type=str, default='learned', choices=['learned', 'DP'], help='Type of loaded model')
 
     use_wandb = p.parse_known_args()[0].use_wandb
@@ -105,13 +105,13 @@ if __name__ == '__main__':
         p.add_argument('--model_mode', type=str, default='mlp', required=False, choices=['mlp', 'rbf', 'pinn'], help='Whether to use uniform velocity parameter')
         p.add_argument('--num_hl', type=int, default=3, required=False, help='The number of hidden layers')
         p.add_argument('--num_nl', type=int, default=512, required=False, help='Number of neurons per hidden layer.')
-        p.add_argument('--deepreach_model', type=str, default='exact', required=False, choices=['exact', 'diff', 'vanilla'], help='deepreach model')
+        p.add_argument('--deepreach_model', type=str, default='exact', required=False, choices=['exact', 'diff', 'vanilla','exact_lambda'], help='deepreach model')
 
         # training options
         p.add_argument('--epochs_til_ckpt', type=int, default=1000, help='Time interval in seconds until checkpoint is saved.')
         p.add_argument('--steps_til_summary', type=int, default=100, help='Time interval in seconds until tensorboard summary is saved.')
         p.add_argument('--batch_size', type=int, default=1, help='Batch size used during training (irrelevant, since len(dataset) == 1).')
-        p.add_argument('--lr', type=float, default=2e-5, help='learning rate. default=2e-5')
+        p.add_argument('--lr_deepreach', type=float, default=2e-5, help='learning rate. default=2e-5')
         p.add_argument('--lr_decay_w', default=1., required=False, type=float, help='LR Exponential Decay Rate') # 1 or 0.9999
         p.add_argument('--num_epochs', type=int, default=30000, help='Number of epochs to train for.')
         p.add_argument('--clip_grad', default=0.0, type=float, help='Clip gradient.')
@@ -297,6 +297,10 @@ if __name__ == '__main__':
         
         model_path = os.path.join(load_dir, 'training', 'checkpoints', 'model_final.pth')
         loaded_model.load_state_dict(torch.load(model_path)['model']) # FIXME, key only needed for chkpts
+        # make sure this NN is not trainable
+        loaded_model.eval()
+        for param in loaded_model.parameters():
+            param.requires_grad = False
         
     else:
         loaded_model = None
@@ -333,7 +337,7 @@ if __name__ == '__main__':
         else:
             raise NotImplementedError
         experiment.train(
-            batch_size=orig_opt.batch_size, epochs=orig_opt.num_epochs, lr=orig_opt.lr, 
+            batch_size=orig_opt.batch_size, epochs=orig_opt.num_epochs, lr=orig_opt.lr_deepreach, 
             steps_til_summary=orig_opt.steps_til_summary, epochs_til_checkpoint=orig_opt.epochs_til_ckpt, 
             loss_fn=loss_fn, clip_grad=orig_opt.clip_grad, use_lbfgs=orig_opt.use_lbfgs, adjust_relative_grads=orig_opt.adj_rel_grads,
             val_x_resolution=orig_opt.val_x_resolution, val_y_resolution=orig_opt.val_y_resolution, val_z_resolution=orig_opt.val_z_resolution, val_time_resolution=orig_opt.val_time_resolution,

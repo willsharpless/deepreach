@@ -136,6 +136,12 @@ class SingleBVPNet(nn.Module):
 
         output = self.net(coords)
         return {'model_in': coords_org, 'model_out': output}
+    
+    def inplace_forward(self, model_input, params=None):
+        if params is None:
+            params = OrderedDict(self.named_parameters())
+        output = self.net(model_input['coords'])
+        return {'model_in': model_input['coords'], 'model_out': output}
 
 
 ########################

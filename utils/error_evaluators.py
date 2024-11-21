@@ -96,7 +96,7 @@ class SliceSampleGenerator(SampleGenerator):
         if self.dynamics.name == 'Quadrotor10DLambda':
             if self.dynamics.mode=='linear':
                 samples[:, -1] = 0.0
-            if self.dynamics.mode=='lambda':
+            if self.dynamics.mode in ['lambda', 'lambda_time'] :
                 samples[:, -1] = 1.0
         return samples
 
@@ -226,10 +226,15 @@ def scenario_optimization(model,  dynamics, tMin, tMax, dt, set_type, control_ty
                 (traj_times.unsqueeze(-1), state_trajs[:, k]), dim=-1)
             traj_policy_results = policy(
                 {'coords': dynamics.coord_to_input(traj_coords.cuda())})
+            # call io_to_value if deepreach model is exact_lambda
+            if dynamics.deepreach_model == "exact_lambda":
+                # TODO: fix the hopf_NN
+                dynamics.io_to_value(
+                    traj_policy_results['model_in'].detach(), traj_policy_results['model_out'].squeeze(dim=-1))
             traj_dvs = dynamics.io_to_dv(
                 traj_policy_results['model_in'], traj_policy_results['model_out'].squeeze(dim=-1)).detach()
 
-            # TODO: I do not think there is actually any reason to store these trajs? Could save space by removing these.
+
 
             ctrl_trajs[:, k] = dynamics.optimal_control(
                 traj_coords[:, 1:].cuda(), traj_dvs[..., 1:].cuda())

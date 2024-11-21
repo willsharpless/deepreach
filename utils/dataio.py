@@ -84,7 +84,10 @@ class ReachabilityDataset(Dataset):
 
         # Load a pretrained model for hopf supervision
         self.loaded_model = loaded_model
-        if loaded_model: self.loaded_model = loaded_model.cuda()
+        if loaded_model: 
+            self.loaded_model = loaded_model.cuda()
+        if self.dynamics.deepreach_model == "exact_lambda":
+            self.dynamics.hopf_model = loaded_model.cuda()
         self.load_hopf_model = loaded_model is not None
         
         ## Compute Linear Value from Model (if hopf loss)
@@ -159,7 +162,7 @@ class ReachabilityDataset(Dataset):
                     
 
             else:
-                times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * (self.counter/self.counter_end))
+                times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * min(1.0,self.counter/self.counter_end))
 
             times[-self.num_src_samples:, 0] = self.tMin # force include initial time samples
         if self.dynamics.name in ['QuadrotorLinear','Quadrotor']:
