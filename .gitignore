@@ -134,7 +134,8 @@ wandb
 # experiment data
 runs*
 plots
-value_fns
+value_fns/LessLinear/banks/*
+value_fns/LessLinear/interps/old/*
 
 # hopf banked data
 Bank*

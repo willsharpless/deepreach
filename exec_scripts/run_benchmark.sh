@@ -1,6 +1,7 @@
 
 
 ## Init
+# export CUDA_VISIBLE_DEVICES=1
 
 readonly wandb_project="deepreach_hopf_benchmarks"
 # readonly experiment_name="bench_holder" ## must overwrite to save data, will save model_final?
@@ -61,11 +62,11 @@ readonly method_args_3="--dynamics_class LessLinearNDlambda --hopf_loss lin_val_
 # cp $experiments_dir/$name/training/checkpoints/model_final.pth $summary_dir_name/model_final_b2.pth
 # cp $experiments_dir/$name/training/checkpoints/BRS_validation_plot.png $summary_dir_name/BRS_validation_plot_b2.png
 
-# name="ZLLS_hld100_hgld250_50D_300k_b3"
-# experiment_name="--experiment_name $name"
-# wandb_name="--wandb_name ZLLS_hld100_hgld250_b3"
-# python $base_args $bench3 $method_args $experiment_name $wandb_name
-# # echo $base_args $bench3 $method_args $experiment_name $wandb_name
+name="ZLLS_hld500_hgld4k_50D_300k_b3"
+experiment_name="--experiment_name $name"
+wandb_name="--wandb_name ZLLS_hld400_hgld4k_b3"
+python $base_args $bench3 $method_args_3 $experiment_name $wandb_name
+# echo $base_args $bench3 $method_args $experiment_name $wandb_name
 
 # cp wandb/latest-run/files/wandb-summary.json $summary_dir_name/wandb-summary_b3.json
 # cp $experiments_dir/$name/training/checkpoints/model_final.pth $summary_dir_name/model_final_b3.pth
