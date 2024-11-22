@@ -440,30 +440,47 @@ class ReachabilityDataset(Dataset):
                     self.V_DP_itp_b2 = LessLinear2D_interpolations["g-20_m0_a0"]
                     self.V_DP_itp_b3 = LessLinear2D_interpolations["g-20_m-20_a1"]
                     self.V_DP_itp_b4 = LessLinear2D_interpolations["g20_m-20_a1"]
-                    def V_N_DP_b1_itp_combo(tXg):
+
+                    def V_N_DP_b1_itp_grad_combo(tXg):
                         V = 0 * tXg[0,:]
+                        DV = 0 * tXg[1:,:].t()
                         for i in range(self.N-1):
-                            V += torch.from_numpy(self.fast_interp(self.V_DP_itp_b1, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
-                        return V
-                    def V_N_DP_b2_itp_combo(tXg):
+                            Vi, DVi = self.fast_interp(self.V_DP_itp_b1, tXg[[0, 1, 2+i], :].numpy(), compute_grad=True)
+                            V += torch.from_numpy(Vi.to_numpy())
+                            DV[:, [0, 1+i]] += torch.from_numpy(DVi.to_numpy()) # assumes xN first
+                        return V, DV
+                    
+                    def V_N_DP_b2_itp_grad_combo(tXg):
                         V = 0 * tXg[0,:]
+                        DV = 0 * tXg[1:,:].t()
                         for i in range(self.N-1):
-                            V += torch.from_numpy(self.fast_interp(self.V_DP_itp_b2, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
-                        return V
-                    def V_N_DP_b3_itp_combo(tXg):
+                            Vi, DVi = self.fast_interp(self.V_DP_itp_b2, tXg[[0, 1, 2+i], :].numpy(), compute_grad=True)
+                            V += torch.from_numpy(Vi.to_numpy())
+                            DV[:, [0, 1+i]] += torch.from_numpy(DVi.to_numpy()) # assumes xN first
+                        return V, DV
+                    
+                    def V_N_DP_b3_itp_grad_combo(tXg):
                         V = 0 * tXg[0,:]
+                        DV = 0 * tXg[1:,:].t()
                         for i in range(self.N-1):
-                            V += torch.from_numpy(self.fast_interp(self.V_DP_itp_b3, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
-                        return V
-                    def V_N_DP_b4_itp_combo(tXg):
+                            Vi, DVi = self.fast_interp(self.V_DP_itp_b3, tXg[[0, 1, 2+i], :].numpy(), compute_grad=True)
+                            V += torch.from_numpy(Vi.to_numpy())
+                            DV[:, [0, 1+i]] += torch.from_numpy(DVi.to_numpy()) # assumes xN first
+                        return V, DV
+                    
+                    def V_N_DP_b4_itp_grad_combo(tXg):
                         V = 0 * tXg[0,:]
+                        DV = 0 * tXg[1:,:].t()
                         for i in range(self.N-1):
-                            V += torch.from_numpy(self.fast_interp(self.V_DP_itp_b4, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
-                        return V                    
-                    self.V_DP_b1 = V_N_DP_b1_itp_combo
-                    self.V_DP_b2 = V_N_DP_b2_itp_combo
-                    self.V_DP_b3 = V_N_DP_b3_itp_combo
-                    self.V_DP_b4 = V_N_DP_b4_itp_combo
+                            Vi, DVi = self.fast_interp(self.V_DP_itp_b4, tXg[[0, 1, 2+i], :].numpy(), compute_grad=True)
+                            V += torch.from_numpy(Vi.to_numpy())
+                            DV[:, [0, 1+i]] += torch.from_numpy(DVi.to_numpy()) # assumes xN first
+                        return V, DV      
+                                 
+                    self.V_DP_grad_b1 = V_N_DP_b1_itp_grad_combo
+                    self.V_DP_grad_b2 = V_N_DP_b2_itp_grad_combo
+                    self.V_DP_grad_b3 = V_N_DP_b3_itp_grad_combo
+                    self.V_DP_grad_b4 = V_N_DP_b4_itp_grad_combo
 
         ## Define a fixed spatiotemporal grid to score Jaccard
 

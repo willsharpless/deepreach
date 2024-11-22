@@ -206,17 +206,17 @@ if __name__ == '__main__':
         "./runs/baseline_50D_300k_b3",
         "./runs/baseline_50D_300k_b4",
 
-        # LSS NL-Aug
-        "./runs/ZLLS_hld100_hgld250_50D_300k_b1",
-        "./runs/ZLLS_hld1k_hgld4k_50D_300k_b2",
-        "./runs/ZLLS_hld500_hgld4k_50D_300k_b3",
-        "./runs/ZLLS_hld100_hgld250_50D_300k_b4",
-
         # LSS Decays
         "./runs/LSD_50D_10k_dwp4_hld10_b1", 
         "./runs/LSD_50D_10k_dwp2_hld5_lr1e-6_b2", 
         "./runs/LSS_50D_10k_hld5_hgld50_b3", 
         "./runs/LSD_50D_10k_dwp4_hld50_lr5e-6_b4", 
+
+        # LSS NL-Aug
+        "./runs/ZLLS_hld100_hgld250_50D_300k_b1",
+        "./runs/ZLLS_hld500_hgld1000_50D_300k_b2",
+        "./runs/ZLLS_hld500_hgld4k_50D_300k_b3",
+        "./runs/ZLLS_hld100_hgld250_50D_300k_b4",
 
     ]
         
@@ -287,5 +287,6 @@ if __name__ == '__main__':
     experiment = experiment_class(model=model, dataset=dataset, experiment_dir=experiment_dir, use_wandb=use_wandb)
     experiment.init_special(**{argname: getattr(orig_opt, argname) for argname in inspect.signature(experiment_class.init_special).parameters.keys() if argname != 'self'})
 
-    save_path = os.path.join('./plots/Final_Comparison_Plot_50D.png')
+    # save_path = os.path.join('./plots/Final_Comparison_Plot_50D.png')
+    save_path = 'Final_Comparison_Plot_50D.png'
     experiment.plot_final_comparison(save_path, loaded_models_dict, orig_opt.val_x_resolution, orig_opt.val_y_resolution, time_resolution=orig_opt.val_time_resolution, plot_value=True)

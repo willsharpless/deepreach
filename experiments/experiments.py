@@ -1433,8 +1433,14 @@ class DeepReachHopf(Experiment):
             Xg, Yg = torch.meshgrid(xs, ys)
             
             ## Plot Set and Value Fn
+
+            models_JIp = [] 
+            models_FIp = [] 
+            models_FEp = []  
+            models_Vmse = [] 
+            models_DVXmse = []  
             
-            fig = plt.figure(figsize=(5*len(methods), 2*5*1), facecolor='white')
+            fig = plt.figure(figsize=(5*len(methods), 2*5*1), facecolor='white', dpi=300)
             # fig = plt.figure(figsize=(5*len(methods), 2*5*1), facecolor='white')
             
             plt.rcParams['text.usetex'] = False
@@ -1444,35 +1450,20 @@ class DeepReachHopf(Experiment):
 
                 print(model_name)
 
-                ax = fig.add_subplot(4, len(methods), 1+i)
+                ax = fig.add_subplot(len(methods), 4, 1+i)
 
-                # if i > len(methods):
-                #     if i % len(methods) == 4:
-                #         ax.set_title(r"$|V_\ell - V_\lambda|$, $\lambda = 1$", fontsize=14)
-                #     elif i % len(methods) == 1:
-                #         ax.set_title(r"$|V_\ell - V_\lambda|$, $\lambda = 1/10$", fontsize=16)
-                #     elif i % len(methods) == 2:
-                #         ax.set_title(r"$|V_\ell - V_\lambda|$, $\lambda = 1/5$", fontsize=16)
-                #     elif i % len(methods) == 3:
-                #         ax.set_title(r"$|V_\ell - V_\lambda|$, $\lambda = 1/2$", fontsize=16)
-                #     # else:
-                #     #     ax.set_title(r"$|V_\ell - V_\lambda|$, $\lambda = $ " + f"{lambda_val:1.1f}", fontsize=14)
-                # elif i == len(methods):
-                #     continue
-                # else:
-                #     ax = fig.add_subplot(2, len(methods), 1+i, projection='3d')
-                #     if i == 0:
-                #         ax.set_title(r"$V_\ell = V_\lambda$, $\lambda = 0$", fontsize=16)
-                #     elif i == 1:
-                #         ax.set_title(r"$V_\lambda$, $\lambda = 1/10$", fontsize=16)
-                #     elif i == 2:
-                #         ax.set_title(r"$V_\lambda$, $\lambda = 1/5$", fontsize=16)
-                #     elif i == 3:
-                #         ax.set_title(r"$V_\lambda$, $\lambda = 1/2$", fontsize=16)
-                #     elif i == 4:
-                #         ax.set_title(r"$V_\lambda$, $\lambda = 1$", fontsize=16)
-                    # else:
-                    #     ax.set_title(r"$V_\lambda$, $\lambda =$ " + f"{lambda_val:1.1f}", fontsize=16)
+                pad_label = 0
+                ax.set_xlabel(r"$x_0$", fontsize=12, labelpad=pad_label); ax.set_ylabel(r"$x_i = x_j$", fontsize=12, labelpad=pad_label)
+                ax.set_xticks([-1, 1])
+                ax.set_xticklabels([r'$-1$', r'$1$'])
+                ax.set_yticks([-1, 1])
+                ax.set_yticklabels([r'$-1$', r'$1$'])
+                ax.yaxis.set_label_coords(-0.02, 0.5)  # (x, y) for the y-label
+                ax.xaxis.set_label_coords(0.5, -0.02)  # (x, y) for the x-label
+
+                ax_pad = 0
+                ax.xaxis.set_tick_params(pad=ax_pad)
+                ax.yaxis.set_tick_params(pad=ax_pad)
 
                 ## Define Grid Slice to Plot
                 
@@ -1500,73 +1491,15 @@ class DeepReachHopf(Experiment):
                     coords[:, 1 + plot_config['x_axis_idx']] = xys[:, 0]
                     coords[:, 2:] = (xys[:, 1] * torch.ones(self.N-1, xys.size()[0])).t()
 
-                # if i >= len(methods):
-                #     pad_label = 0
-                #     ax.set_xlabel(r"$x_N$", fontsize=12, labelpad=pad_label); ax.set_ylabel(r"$x_i = x_j$", fontsize=12, labelpad=pad_label)
-                #     ax.set_xticks([-1, 1])
-                #     ax.set_xticklabels([r'$-1$', r'$1$'])
-                #     ax.set_yticks([-1, 1])
-                #     ax.set_yticklabels([r'$-1$', r'$1$'])
-
-                #     ax_pad = 0
-                #     ax.xaxis.set_tick_params(pad=ax_pad)
-                #     ax.yaxis.set_tick_params(pad=ax_pad)
-
-                # else:
-                #     pad_label = 6
-                #     ax.set_xlabel(r"$x_N$", fontsize=12, labelpad=pad_label); 
-                #     ax.set_ylabel(r"$x_i = x_j$", fontsize=12, labelpad=pad_label); 
-                #     # ax.set_zlabel(r"$V$", fontsize=12, labelpad=10) #, labelpad=pad_label)
-                #     ax.set_xticks([-1, 0, 1])
-                #     ax.set_xticklabels([r'$-1$', r'$0$', r'$1$'])
-                #     ax.set_yticks([-1, 0, 1])
-                #     ax.set_yticklabels([r'$-1$', r'$0$', r'$1$'])
-                #     ax.set_zticks([])
-                #     ax.zaxis.label.set_position((-0.1, 0.5))
-                    
-                #     ax.xaxis.pane.fill = False
-                #     ax.yaxis.pane.fill = False
-                #     ax.zaxis.pane.fill = False
-                    
-                #     ax_pad = 0
-                #     ax.xaxis.set_tick_params(pad=ax_pad)
-                #     ax.yaxis.set_tick_params(pad=ax_pad)
-                #     ax.zaxis.set_tick_params(pad=ax_pad)
-
-
-                # n_grid_plane_pts = int(self.dataset.n_grid_pts/3)
-                # n_grid_len = int(n_grid_plane_pts ** 0.5)
-                # # pix_start = (i // len(times)) * n_grid_plane_pts
-                # # tix_start = (i % len(times)) * self.dataset.n_grid_pts
-                # tix_start = 4 * self.dataset.n_grid_pts
-                # # ix = pix_start + tix_start # plane and grid no longer synced
-                # ix = tix_start
-
-                # Vgt_linear = self.dataset.values_DP_linear_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len).cpu()
-                # Vgt_linear = self.dataset.V_DP_linear(self.dataset.dynamics.input_to_coord(coords).t()).reshape(x_resolution, y_resolution).cpu()
-                # Vgt_full = self.dataset.V_DP(self.dataset.dynamics.input_to_coord(coords).t()).reshape(x_resolution, y_resolution).cpu()
-                # if i % len(methods) == 0:
-                #     # Vgt = self.dataset.values_DP_grid_inlam1[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len).cpu()
-                #     Vgt = self.dataset.V_DP_linear(self.dataset.dynamics.input_to_coord(coords).t()).reshape(x_resolution, y_resolution).cpu()
-                # elif i % len(methods) == 1:
-                #     # Vgt = self.dataset.values_DP_grid_inlam1[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len).cpu()
-                #     Vgt = self.dataset.V_DP_inlam1(self.dataset.dynamics.input_to_coord(coords).t()).reshape(x_resolution, y_resolution).cpu()
-                # elif i % len(methods) == 2:
-                #     # Vgt = self.dataset.values_DP_grid_inlam2[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len).cpu()
-                #     Vgt = self.dataset.V_DP_inlam2(self.dataset.dynamics.input_to_coord(coords).t()).reshape(x_resolution, y_resolution).cpu()
-                # elif i % len(methods) == 3:
-                #     # Vgt = self.dataset.V_DP_inlam3(self.dynamics.input_to_coord(coords).t()).reshape(n_grid_len, n_grid_len).cpu() # need to make inlam3
-                #     Vgt = self.dataset.V_DP_inlam3(self.dataset.dynamics.input_to_coord(coords).t()).reshape(x_resolution, y_resolution).cpu()
-                # else:
-                #     Vgt = self.dataset.V_DP(self.dataset.dynamics.input_to_coord(coords).t()).reshape(x_resolution, y_resolution).cpu()
-
-                with torch.no_grad():
-                    if "ZLLS" not in model_name:
-                        model_results = loaded_models_dict[model_name]({'coords': self.dataset.dynamics.coord_to_input(coords.cuda())})
-                        values = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach())
-                    else:
-                        model_results = loaded_models_dict[model_name]({'coords': self.dataset.loaded_dynamics.coord_to_input(coords.cuda())})
-                        values = self.dataset.loaded_dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach())
+                if "ZLLS" not in model_name:
+                    model_results = loaded_models_dict[model_name]({'coords': self.dataset.dynamics.coord_to_input(coords.cuda())})
+                    values = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach()).cpu()
+                    learned_grads = self.dataset.dynamics.io_to_dv(model_results['model_in'], model_results['model_out'].squeeze(dim=-1))[..., 1:].detach().cpu()
+                else:
+                    model_results = loaded_models_dict[model_name]({'coords': self.dataset.loaded_dynamics.coord_to_input(coords.cuda())})
+                    values = self.dataset.loaded_dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach()).cpu()
+                    learned_grads = self.dataset.loaded_dynamics.io_to_dv(model_results['model_in'], model_results['model_out'].squeeze(dim=-1))[..., 1:-1].detach().cpu()
+                    # print("learned_grads.shape", learned_grads.shape)
             
                 learned_value = values.detach().cpu().numpy().reshape(x_resolution, y_resolution)
                 
@@ -1579,71 +1512,55 @@ class DeepReachHopf(Experiment):
                 else:
                     tix_start = 4 * self.dataset.n_grid_pts
 
-                # ix = pix_start + tix_start # plane and grid no longer synced
                 ix = tix_start
 
                 if "ZLLS" not in model_name:
                     if i % 4 == 0:
-                        Vgt = self.dataset.V_DP_b1(self.dataset.dynamics.input_to_coord(coords).t()).reshape(x_resolution, y_resolution).cpu()
+                        Vgt_flat, Vgt_grad = self.dataset.V_DP_grad_b1(self.dataset.dynamics.input_to_coord(coords).t())
                     elif i % 4 == 1:
-                        Vgt = self.dataset.V_DP_b2(self.dataset.dynamics.input_to_coord(coords).t()).reshape(x_resolution, y_resolution).cpu()
+                        Vgt_flat, Vgt_grad = self.dataset.V_DP_grad_b2(self.dataset.dynamics.input_to_coord(coords).t())
                     elif i % 4 == 2:
-                        Vgt = self.dataset.V_DP_b3(self.dataset.dynamics.input_to_coord(coords).t()).reshape(x_resolution, y_resolution).cpu()
+                        Vgt_flat, Vgt_grad = self.dataset.V_DP_grad_b3(self.dataset.dynamics.input_to_coord(coords).t())
                     else:
-                        Vgt = self.dataset.V_DP_b4(self.dataset.dynamics.input_to_coord(coords).t()).reshape(x_resolution, y_resolution).cpu()
+                        Vgt_flat, Vgt_grad = self.dataset.V_DP_grad_b4(self.dataset.dynamics.input_to_coord(coords).t())
                 else:
                     if i % 4 == 0:
-                        Vgt = self.dataset.V_DP_b1(self.dataset.loaded_dynamics.input_to_coord(coords).t()).reshape(x_resolution, y_resolution).cpu()
+                        Vgt_flat, Vgt_grad = self.dataset.V_DP_grad_b1(self.dataset.loaded_dynamics.input_to_coord(coords).t())
                     elif i % 4 == 1:
-                        Vgt = self.dataset.V_DP_b2(self.dataset.loaded_dynamics.input_to_coord(coords).t()).reshape(x_resolution, y_resolution).cpu()
+                        Vgt_flat, Vgt_grad = self.dataset.V_DP_grad_b2(self.dataset.loaded_dynamics.input_to_coord(coords).t())
                     elif i % 4 == 2:
-                        Vgt = self.dataset.V_DP_b3(self.dataset.loaded_dynamics.input_to_coord(coords).t()).reshape(x_resolution, y_resolution).cpu()
+                        Vgt_flat, Vgt_grad = self.dataset.V_DP_grad_b3(self.dataset.loaded_dynamics.input_to_coord(coords).t())
                     else:
-                        Vgt = self.dataset.V_DP_b4(self.dataset.loaded_dynamics.input_to_coord(coords).t()).reshape(x_resolution, y_resolution).cpu()
-
-                # Vgt = self.dataset.values_DP_linear_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len).cpu()
+                        Vgt_flat, Vgt_grad = self.dataset.V_DP_grad_b4(self.dataset.loaded_dynamics.input_to_coord(coords).t())
+                Vgt = Vgt_flat.reshape(x_resolution, y_resolution).cpu()
 
                 ## Make Value-Based Colormap
                 # cmap_name = "coolwarm"
                 cmap_name = "RdBu"
+                num_bins = 1024
 
                 if learned_value.min() > 0:
                     # RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', [(1,1,1), (0.5,0.5,1), (0,0,1), (0,0,1)])
-                    scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0.6, 1., 256))))
+                    scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0.6, 1., num_bins))))
                     RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
 
                 elif learned_value.max() < 0:
                     # RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', [(1,0,0), (1,0,0), (1,0.5,0.5), (1,1,1)])
-                    scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0., 0.4, 256))))
+                    scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0., 0.4, num_bins))))
                     RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
 
                 else:
                     # n_bins_high = int(256 * (learned_value.max()/(learned_value.max() - learned_value.min())) // 1)
-                    n_bins_high = round(256 * learned_value.max()/(learned_value.max() - learned_value.min()))
-
-                    # RdWh = matplotlib.colors.LinearSegmentedColormap.from_list('RdWh', [(1,0,0), (1,0,0), (1,0.5,0.5), (1,1,1)])
-                    # WhBl = matplotlib.colors.LinearSegmentedColormap.from_list('WhBl', [(1,1,1), (0.5,0.5,1), (0,0,1), (0,0,1)])
-                    # RdWh = matplotlib.colors.LinearSegmentedColormap.from_list('RdWh', [(1,0,0), (1,0,0), (0.5, 0.,0.), (0,0,0)])
-                    # WhBl = matplotlib.colors.LinearSegmentedColormap.from_list('WhBl', [(0,0,0), (0.,0.,0.5), (0,0,1), (0,0,1)])
-                    # RdWh = matplotlib.colors.LinearSegmentedColormap.from_list('RdWh', [(153/255, 21/255, 39/255), (153/255, 21/255, 39/255), (153/255, 21/255, 39/255), (10/255,10/255,15/255)])
-                    # WhBl = matplotlib.colors.LinearSegmentedColormap.from_list('WhBl', [(10/255,10/255,15/255), (38/255, 69/255, 168/255), (38/255, 69/255, 168/255), (38/255, 69/255, 168/255)])
-                                                                                        
-                    # colors = np.vstack((RdWh(np.linspace(0., 1, 256-n_bins_high)), WhBl(np.linspace(0., 1, n_bins_high))))
-                    # RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', colors)
-
-                    # gray_band_width = 4
-                    # Gray = matplotlib.colors.LinearSegmentedColormap.from_list('Gray', [(10/255,10/255,15/255),(10/255,10/255,15/255)])
-                    # colors = np.vstack((matplotlib.colormaps["RdBu"](np.linspace(0., 0.5, 256-n_bins_high)), Gray(np.linspace(0., 1., int(gray_band_width))), matplotlib.colormaps["RdBu"](np.linspace(0.5, 1., n_bins_high-gray_band_width))))
-                    # RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', colors)
+                    n_bins_high = round(num_bins * learned_value.max()/(learned_value.max() - learned_value.min()))
 
                     offset = 0
-                    scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0., 0.4, 256-n_bins_high+offset)), matplotlib.colormaps[cmap_name](np.linspace(0.6, 1., n_bins_high-offset))))
+                    scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0., 0.4, num_bins-n_bins_high+offset)), matplotlib.colormaps[cmap_name](np.linspace(0.6, 1., n_bins_high-offset))))
                     RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
 
                 ## Plot Learned Value
-                # s = ax.imshow(1*(learned_value.T <= 0), cmap='bwr', origin='lower', extent=(-1., 1., -1., 1.))
-                s = ax.imshow(learned_value.T, cmap=RdWhBl_vscaled, origin='lower', extent=(-1., 1., -1., 1.))
-                # s = ax.contourf(Xg, Yg, learned_value, cmap=RdWhBl_vscaled, levels=256)
+                s = ax.imshow(learned_value.T, cmap=RdWhBl_vscaled, origin='lower', extent=(-1., 1., -1., 1.), interpolation='bilinear')
+                # levels = np.linspace(learned_value.min(), learned_value.max(), num_bins)
+                # s = ax.contourf(learned_value.T, cmap=RdWhBl_vscaled, levels=levels, origin='lower', extent=(-1., 1., -1., 1.))
                 divider = make_axes_locatable(ax)
                 cax = divider.append_axes("right", size="5%", pad=0.05)
                 cbar = fig.colorbar(s, cax=cax)
@@ -1652,55 +1569,125 @@ class DeepReachHopf(Experiment):
 
                 ## Plot Ground-Truth Zero-Level Contour
 
-                ax.contour(self.dataset.X1g, self.dataset.X2g, Vgt, [0.], linewidths=4, alpha=0.7, colors='k')
+                ax.contour(Xg, Yg, Vgt, [0.], linewidths=4, alpha=0.7, colors='k')
 
-                # cbar.set_ticks([0., torch.abs(Vgt_full - Vgt_linear).max()])  # Define custom tick locations
-                # cbar.set_ticks([0., torch.abs(Vgt - Vgt_linear).max()])  # FIXME fixed max
-                # cbar.set_ticklabels([f'0', f'{torch.abs(Vgt_full - Vgt_linear).max():1.1f}'])  # Define custom tick labels
-                # cbar.set_ticklabels([f'0', f'{max_v:1d}'])  # Define custom tick labels
-                # cbar.set_ticklabels([f'0', f'{max_v:1.1f}'])  # Define custom tick labels
 
-                # ## Plot Ground-Truth Zero-Level Contour
+                if i < 4:
+                    titles = [r'$ \alpha = 20, \beta = 0$', r'$ \alpha = -20,, \beta = 0$', r'$ \alpha = -20, \beta = 20$', r'$ \alpha = 10, \beta = -10$']
+                    ax.set_title(titles[i], fontsize=10)
 
-                # ax.contour(Xg, Yg, Vgt, [0.], linewidths=4, alpha=0.7, colors='k')
+                if i % 4 == 0:
+                    labels = [r"BASELINE", r"LSS DECAY", r"$ V_\lambda $ LSS"]
+                    ax.text(
+                        x=-1.5,  # Position to the left of the y-axis
+                        y=0.,   # Vertical position in data coordinates
+                        s=labels[int(i/4)],  # Annotation text
+                        rotation=90,              # Rotate text to vertical
+                        va='center',              # Vertical alignment
+                        ha='right',               # Horizontal alignment
+                        fontsize=20,              # Font size
+                        color='black'              # Text color
+                    )
 
-                # ## Plot the Linear Ground-Truth (ideal warm-start) Zero-Level Contour
+                ## Compute GT Metrics
+                
+                JIp, FIp, FEp, Vmse, DVXmse = 0, 0, 0, 0, 0
 
-                # ax.contour(self.dataset.X1g, self.dataset.X2g, Vgt_linear, [0.], linewidths=4, alpha=0.7, colors='k', linestyles='dashed')
-
-                # ## Plot 3D Value Fn
-
-                # if plot_value:
-                #     # ax_val.grid(False)
-                #     ax.view_init(elev=15, azim=-60)
-                #     ax.set_facecolor((1, 1, 1, 1))
-                #     surf = ax.plot_surface(Xg, Yg, Vgt, cmap=RdWhBl_vscaled, alpha=0.8, vmax=max_v_3d) #cmap='bwr_r')
-                #     # surf = ax.plot_surface(self.dataset.X1g, self.dataset.X2g, Vgt, cmap=RdWhBl_vscaled, alpha=0.8) #cmap='bwr_r')
+                ## Compute Value Gradient MSE on Grid
+                with torch.no_grad():
                     
-                #     # divider = make_axes_locatable(ax_set)
-                #     # cax = divider.append_axes("right", size="5%", pad=0.05)
-                #     # fig_set.colorbar(s, cax=cax)
-                #     cbar = fig.colorbar(surf, ax=ax, fraction=0.02, pad=0.0)
+                    if "ZLLS" not in model_name:
+                        DVXmse = (Vgt_grad - learned_grads).square().mean()
+                    else:
+                        DVXmse = (Vgt_grad[:,:-1] - learned_grads).square().mean() ## FIXME: Why would Vgt grad be of dim n+1? should those coords be one less dim? why no error then. maybe time?
 
-                #     # cbar.ax.yaxis.set_ticks_position('left')
-                #     # cbar.ax.yaxis.set_label_position('left')
+                    values_grid_sub0_ixs = torch.argwhere(values <= 0).flatten()
+                    values_DP_grid_sub0_ixs = torch.argwhere(Vgt_flat <= 0).flatten()
+
+                    ## Compute MSE on Grid
+                    Vmse = (Vgt_flat - values).square().mean()
+
+                    ## Compute Set Metrics over Time
+                    n_intersect = values_grid_sub0_ixs[(values_grid_sub0_ixs.view(1, -1) == values_DP_grid_sub0_ixs.view(-1, 1)).any(dim=0)].size()[0] # ty Amin_Jun
+                    n_overlap = values_grid_sub0_ixs.size()[0] + values_DP_grid_sub0_ixs.size()[0] - n_intersect
                     
-                #     cbar.set_ticks([0, max_v_3d])  # FIXME fixed max
-                #     cbar.set_ticklabels([f'0', f'{max_v_3d:1d}'])  # Define custom tick labels
+                    if values_grid_sub0_ixs.size()[0] > 0:
+                        FIp = (values_grid_sub0_ixs.size()[0] - n_intersect) / values_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
+                    else:
+                        FIp = 1.
+                    FEp = (values_DP_grid_sub0_ixs.size()[0] - n_intersect) / values_DP_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
+                    JIp = n_intersect / n_overlap
 
-                #     # ax.set_zlim(-max(ax.get_zlim()[1]/5, 0.5))
-                #     # ax.set_zlim(-max(Vgt.max().item()/5, 0.5), max(Vgt.max().item(), 2.5))
-                #     # ax.set_zlim(Vgt.min().item() - (Vgt.max().item() - Vgt.min().item())/5)
-                #     ax.set_zlim(Vgt.min().item() - (Vgt.max().item() - Vgt.min().item())/5, max_v_3d)
-                #     # ax.contour(Xg, Yg, Vgt, zdir='z', offset=ax.get_zlim()[0], cmap=RdWh, levels=[0.]) #cmap='bwr_r')
+                models_JIp.append(JIp) 
+                models_FIp.append(FIp) 
+                models_FEp.append(FEp) 
+                models_Vmse.append(Vmse)
+                models_DVXmse.append(DVXmse) 
 
-                #     ax.contour(Xg, Yg, Vgt, zdir='z', offset=ax.get_zlim()[0], colors='k', levels=[0.]) #cmap='bwr_r')
-                #     # ax.contour(self.dataset.X1g, self.dataset.X2g, Vgt, zdir='z', offset=ax.get_zlim()[0], colors='k', levels=[0.]) #cmap='bwr_r')
-
-                #     ax.set_facecolor((1, 1, 1, 1))
-                #     # ax_val.grid(False)
-
-            fig.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
+            fig.subplots_adjust(left=0.075, right=0.95, top=0.95, bottom=0.05, wspace=0.25, hspace=0.3)
 
             fig.savefig(save_path)
             plt.close()
+
+            fig_bar = plt.figure(figsize=(10, 10), facecolor='white', dpi=300)
+            categories = [r'$(20, 0)$', r'$(-20, 0)$', r'$(-20, 20)$', r'$(10, -10)$']
+
+            # colors = plt.cm.viridis(np.linspace(0, 1, 3))
+            # colors = plt.cm.Pastel2(np.linspace(0, 1, 3))
+            colors = plt.cm.Set1.colors[:3]
+
+            model_times = [7.00, 6.85, 7.01, 6.98, 0.33, 0.45, 0.31, 0.38, 7.96, 7.85, 7.58, 7.91]
+            # data_list = [models_JIp, models_FIp, models_FEp, models_Vmse, models_DVXmse, model_times]
+            datas = {r"IOU":models_JIp, r"Run Time (Hours)":model_times, r"Mean Square Error of Value":models_Vmse, r"Mean Square Error of Gradient":models_DVXmse}
+
+            for (i, data_name) in enumerate(datas.keys()):
+
+                ax = fig_bar.add_subplot(2, 2, 1+i)
+
+                data = datas[data_name]
+
+                group1 = data[0:4]
+                group2 = data[4:8]
+                group3 = data[8:]
+
+                x = np.arange(4)  # x locations for the groups
+                width = 0.2  # Width of each bar
+
+                # Create the plot 
+                labels = [r"BASELINE", r"LSS DECAY", r"$ V_\lambda $ LSS"]
+                ax.bar(x - width, group1, width, label=labels[0], edgecolor='black', color=colors[0])
+                ax.bar(x, group2, width, label=labels[1], edgecolor='black', color=colors[1])
+                ax.bar(x + width, group3, width, label=labels[2], edgecolor='black', color=colors[2])
+
+                ax.grid(True, axis='y', alpha=0.7, zorder=0)
+                ax.set_axisbelow(True)
+
+                if i == 2:
+                    ax.set_yscale('log')
+
+                ax.set_title(data_name, fontsize=15)
+                ax.set_xticks(x, categories)  # Replace x-ticks with category names
+                if i == 2:
+                    ax.legend(loc='upper left')
+            
+            fig_bar.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05, wspace=0.2, hspace=0.2)
+            fig_bar.savefig("bar_" + save_path)
+            plt.close()
+
+            from PIL import Image
+
+            # Open the saved images
+            img1 = Image.open(save_path)
+            img2 = Image.open("bar_" + save_path)
+
+            # Combine the images side by side
+            combined_width = img1.width + img2.width
+            combined_height = max(img1.height, img2.height)
+            combined_img = Image.new("RGB", (combined_width, combined_height))
+
+            # Paste the two images
+            combined_img.paste(img1, (0, 0))
+            combined_img.paste(img2, (img1.width, 0))
+
+            # Save the combined image
+            combined_img.save("Final_Comparison_Plot_combined.png", dpi=(300, 300))
