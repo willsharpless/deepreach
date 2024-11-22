@@ -23,8 +23,8 @@ if __name__ == '__main__':
     p.add_argument('--mode', type=str, default="train", choices=['all', 'train', 'test'], help="Experiment mode to run (new experiments must choose 'all' or 'train').") #FIXME: required=True instead of default
 
     # save/load directory options
-    p.add_argument('--experiments_dir', type=str, default='./runs', help='Where to save the experiment subdirectory.')
-    p.add_argument('--experiment_name', type=str, default='test_run', help='Name of the experient subdirectory.') #FIXME: required=True instead of default
+    p.add_argument('--experiments_dir', type=str, default='./plots', help='Where to save the experiment subdirectory.')
+    p.add_argument('--experiment_name', type=str, default='lambda_var', help='Name of the experient subdirectory.') #FIXME: required=True instead of default
     p.add_argument('--use_wandb', default=False, action='store_true', help='use wandb for logging')
 
     ## Hopf options
@@ -49,14 +49,13 @@ if __name__ == '__main__':
     p.add_argument('--temporal_weighting', action='store_true', default=False, required=False, help='Inversely weights the samples in the loss w.r.t. time')
     p.add_argument('--reset_loss_w', action='store_true', default=False, required=False, help='Resets the loss weights to their values at the beginning of training (pre-decay)')
     p.add_argument('--reset_loss_period', type=int, default=500, required=False, help='The loss weight reset period')
-    p.add_argument('--zerolambda_LS', action='store_true', default=False, required=False, help='Will limit linear supervision to loss on lambda = 0 data (for lambda-variation models only AND loaded models)')
-    p.add_argument('--LS_w_time_curr', action='store_true', default=False, required=False, help='Do linear supervision with a temporal curriculum')
 
     p.add_argument('--gt_metrics', action='store_true', default=True, required=False, help='Compute and score the learned value and set (needs ground truth)')
     p.add_argument('--temporal_loss', action='store_true', default=False, required=False, help='Compute the loss over time chunks (slower)')
     p.add_argument('--capacity_test', action='store_true', default=False, required=False, help='Will use supervised-learning to train with the true solution (needs ground truth)')
     p.add_argument('--debug_params', action='store_true', default=False, required=False, help='Quick params for debugging')
     p.add_argument('--timing', action='store_true', default=False, required=False, help='Gives detailed breakdown of computation times per iteration')
+    p.add_argument('--plot_comp_final', action='store_true', default=False, required=False, help='Computes ground-truths for all LLND benchamrks')
     
     p.add_argument('--solve_hopf', action='store_true', default=False, required=False, help='Dynamically makes a state & value bank by iteratively solving the Hopf formula')
     p.add_argument('--use_bank', action='store_true', default=False, required=False, help='Makes/loads a state & value bank to reduce compute')
@@ -65,8 +64,8 @@ if __name__ == '__main__':
     p.add_argument('--refine_bank', action='store_true', default=False, required=False, help='Will iteratively throw out non-spatially unique points when hopf solving (slow)')
     p.add_argument('--hopf_warm_start', action='store_true', default=False, required=False, help='Passes estimated gradients from DeepReach to the Hopf solvers to warm-start them')
     p.add_argument('--load_hopf_model', action='store_true', default=False, required=False, help='Model to load for the supervision')
-    p.add_argument('--load_hopf_model_name', type=str, default='./runs/capacity_linear', help='Supervision model name')
-    p.add_argument('--load_model_type', type=str, default='learned', choices=['learned', 'DP'], help='Type of loaded model') # FIXME someday actually use DP option
+    p.add_argument('--load_hopf_model_name', type=str, default='capacity_linear', help='Supervision model name')
+    p.add_argument('--load_model_type', type=str, default='learned', choices=['learned', 'DP'], help='Type of loaded model')
 
     use_wandb = p.parse_known_args()[0].use_wandb
     if use_wandb:
@@ -113,7 +112,7 @@ if __name__ == '__main__':
         p.add_argument('--epochs_til_ckpt', type=int, default=1000, help='Time interval in seconds until checkpoint is saved.')
         p.add_argument('--steps_til_summary', type=int, default=100, help='Time interval in seconds until tensorboard summary is saved.')
         p.add_argument('--batch_size', type=int, default=1, help='Batch size used during training (irrelevant, since len(dataset) == 1).')
-        p.add_argument('--lr_std', type=float, default=1e-5, help='learning rate. default=2e-6')
+        p.add_argument('--lr', type=float, default=1e-5, help='learning rate. default=2e-6')
         p.add_argument('--lr_decay_w', default=1., required=False, type=float, help='LR Exponential Decay Rate') # 1 or 0.9999
         p.add_argument('--num_epochs', type=int, default=30000, help='Number of epochs to train for.')
         p.add_argument('--clip_grad', default=0.0, type=float, help='Clip gradient.')
@@ -197,85 +196,33 @@ if __name__ == '__main__':
         opt.temporal_loss = False ## bug
         # opt.numpoints, opt.lr, opt.lr_decay_w = 60000, 1e-5, 1.
 
-    ## Clarity prints
-    print("\n\nTraining DeepReach,\n")
-    if opt.capacity_test: print(" - using supervised learning of ground truth (capacity test)")
-    elif opt.hopf_loss != 'none': 
-        print(f" - with hopf loss {opt.hopf_loss}")
-        print("  - linear data will be,")
-        if opt.use_bank:
-            if opt.solve_hopf:
-                print("   - made by a pool of hopf-julia workers, and stored in a dynamic, shared bank.")
-                if opt.hopf_warm_start:
-                    print("      (and DeepReach gradients will be passed to the hopf solvers to warm-start them.)")
-            else:
-                if opt.use_bank and opt.bank_name == 'none': print("   - made by interpolation of 2D DP, and stored in a static bank.")
-                else: print(f"   - loaded from a static bank file, {opt.bank_name}.")
-        elif opt.load_hopf_model:
-            print(f"   - sampled each iteration from a learned linear model")
-        else:
-            print(f"   - sampled each iteration from a DP linear model")
-        if opt.solve_grad:
-            print( "  - linear gradients will be solved")
-        if opt.hopf_loss_decay:
-            if opt.diff_con_loss_incr:
-                print(f"  - decayed in a(n) {opt.hopf_loss_decay_type} fashion, and similarly PDE introduction")
-            else:
-                print(f"  - decayed in a(n) {opt.hopf_loss_decay_type} fashion")
-        if opt.nl_scale:
-            print(f"  - nonlinearly transitioned by {100 * (opt.nl_scale_epoch_step/(opt.num_epochs-(opt.pretrain_iters+opt.hopf_pretrain_iters+opt.nl_scale_epoch_post))):2.1f} % per {opt.nl_scale_epoch_step} epochs")
-    else: 
-        print(" - via the original method (baseline).")
-    print("")
+    print("\n\nGenerating a Comparison Plot for the N-Dimensional Test Model\n\n")
+
+    comp_model_paths = [
+
+        # Baselines
+        "./runs/baseline_50D_300k_b1",
+        "./runs/baseline_50D_300k_b2",
+        "./runs/baseline_50D_300k_b3",
+        "./runs/baseline_50D_300k_b4",
+
+        # LSS NL-Aug
+        "./runs/ZLLS_hld100_hgld250_50D_300k_b1",
+        "./runs/ZLLS_hld1k_hgld4k_50D_300k_b2",
+        "./runs/ZLLS_hld500_hgld4k_50D_300k_b3",
+        "./runs/ZLLS_hld100_hgld250_50D_300k_b4",
+
+        # LSS Decays
+        "./runs/LSD_50D_10k_dwp4_hld10_b1", 
+        "./runs/LSD_50D_10k_dwp2_hld5_lr1e-6_b2", 
+        "./runs/LSS_50D_10k_hld5_hgld50_b3", 
+        "./runs/LSD_50D_10k_dwp4_hld50_lr5e-6_b4", 
+
+    ]
         
-    # start wandb
-    if use_wandb:
-        wandb.init(
-            project = opt.wandb_project,
-            entity = opt.wandb_entity,
-            group = opt.wandb_group,
-            name = opt.wandb_name,
-        )
-        wandb.config.update(opt)
-
     experiment_dir = os.path.join(opt.experiments_dir, opt.experiment_name)
-    if opt.load_hopf_model:
-        # load_dir = os.path.join(opt.experiments_dir, opt.load_hopf_model_name)
-        load_dir = opt.load_hopf_model_name
 
-    if (mode == 'all') or (mode == 'train'):
-        # create experiment dir
-        if os.path.exists(experiment_dir): 
-        # FIXME: Uncomment to prevent overwriting
-        #     overwrite = input("The experiment directory %s already exists. Overwrite? (y/n)"%experiment_dir)
-        #     if not (overwrite == 'y'):
-        #         print('Exiting.')
-        #         quit()
-            shutil.rmtree(experiment_dir)     
-        os.makedirs(experiment_dir)
-    elif mode == 'test':
-        # confirm that experiment dir already exists
-        if not os.path.exists(experiment_dir):
-            raise RuntimeError('Cannot run test mode: experiment directory not found!')
-
-    current_time = datetime.now()
-    # log current config
-    with open(os.path.join(experiment_dir, 'config_%s.txt' % current_time.strftime('%m_%d_%Y_%H_%M')), 'w') as f:
-        for arg, val in vars(opt).items():
-            f.write(arg + ' = ' + str(val) + '\n')
-
-    if (mode == 'all') or (mode == 'train'):
-        # set counter_end appropriately if needed
-        if opt.counter_end == -1:
-            opt.counter_end = opt.num_epochs
-
-        # log original options
-        with open(os.path.join(experiment_dir, 'orig_opt.pickle'), 'wb') as opt_file:
-            pickle.dump(opt, opt_file)
-
-    # load original experiment settings
-    with open(os.path.join(experiment_dir, 'orig_opt.pickle'), 'rb') as opt_file:
-        orig_opt = pickle.load(opt_file)
+    orig_opt = opt
 
     # set the experiment seed
     torch.manual_seed(orig_opt.seed)
@@ -285,37 +232,37 @@ if __name__ == '__main__':
     dynamics_class = getattr(dynamics, orig_opt.dynamics_class)
     dynamics_inst = dynamics_class(**{argname: getattr(orig_opt, argname) for argname in inspect.signature(dynamics_class).parameters.keys() if argname != 'self'})
     dynamics_inst.deepreach_model=orig_opt.deepreach_model
-
     if orig_opt.hopf_loss != 'none':
         dynamics_inst.loss_type = 'brt_hjivi_hopf' ## TODO: why is loss type in dynamics?
 
-    if orig_opt.load_hopf_model:
+    lamb_dynamics_class = getattr(dynamics, orig_opt.dynamics_class + "lambda") # non-lambda version of dynamics
+    lamb_dynamics_inst = lamb_dynamics_class(**{argname: getattr(orig_opt, argname) for argname in inspect.signature(lamb_dynamics_class).parameters.keys() if argname != 'self'})
+    lamb_dynamics_inst.deepreach_model=orig_opt.deepreach_model
+    lamb_dynamics_inst.loss_type = 'brt_hjivi_hopf'
+
+    loaded_models_dict = {}
+    for load_model_path in comp_model_paths:
+
+        load_dir = load_model_path
+        model_name = load_model_path.split('/')[-1]
+
+        if "ZLLS" in model_name:
+            load_dim = dynamics_inst.input_dim + 1
+        else:
+            load_dim = dynamics_inst.input_dim
+
         with open(os.path.join(load_dir, 'orig_opt.pickle'), 'rb') as opt_file:
             loaded_opt = pickle.load(opt_file)
 
-        if not orig_opt.dynamics_class.endswith("lambda"):
-            loaded_model = modules.SingleBVPNet(in_features=dynamics_inst.input_dim, out_features=1, type=loaded_opt.model, mode=loaded_opt.model_mode,
-                                        final_layer_factor=1., hidden_features=loaded_opt.num_nl, num_hidden_layers=loaded_opt.num_hl)
-        else:
-            loaded_model = modules.SingleBVPNet(in_features=dynamics_inst.input_dim-1, out_features=1, type=loaded_opt.model, mode=loaded_opt.model_mode,
-                                        final_layer_factor=1., hidden_features=loaded_opt.num_nl, num_hidden_layers=loaded_opt.num_hl)
+        loaded_model = modules.SingleBVPNet(in_features=load_dim, out_features=1, type=loaded_opt.model, mode=loaded_opt.model_mode,
+                                    final_layer_factor=1., hidden_features=loaded_opt.num_nl, num_hidden_layers=loaded_opt.num_hl)
         loaded_model.cuda()
+
+        loaded_models_dict[model_name] = loaded_model
         
         model_path = os.path.join(load_dir, 'training', 'checkpoints', 'model_final.pth')
         loaded_model.load_state_dict(torch.load(model_path)['model']) # FIXME, key only needed for chkpts
-        loaded_model.eval()
-
-        if opt.hopf_loss == "lin_val_grad_diff" and orig_opt.dynamics_class.endswith("lambda"):
-            loaded_dynamics_class = getattr(dynamics, orig_opt.dynamics_class.split("lambda")[0]) # non-lambda version of dynamics
-            loaded_dynamics_inst = loaded_dynamics_class(**{argname: getattr(orig_opt, argname) for argname in inspect.signature(loaded_dynamics_class).parameters.keys() if argname != 'self'})
-            loaded_dynamics_inst.deepreach_model=orig_opt.deepreach_model
-            loaded_dynamics_inst.loss_type = 'brt_hjivi_hopf'
-        else:
-            loaded_dynamics_inst = None
-        
-    else:
-        loaded_model = None
-        loaded_dynamics_inst = None
+    loaded_model=None
 
     dataset = dataio.ReachabilityDataset(
         dynamics=dynamics_inst, numpoints=orig_opt.numpoints, 
@@ -329,50 +276,16 @@ if __name__ == '__main__':
         use_bank=orig_opt.use_bank, bank_name=orig_opt.bank_name, capacity_test=orig_opt.capacity_test,
         solve_hopf=orig_opt.solve_hopf, solve_grad=orig_opt.solve_grad, hopf_warm_start=orig_opt.hopf_warm_start,
         just_make_hopf_bank=orig_opt.just_make_hopf_bank, refine_bank=orig_opt.refine_bank,
-        loaded_model=loaded_model, lambda_var=orig_opt.dynamics_class.endswith("lambda"), zerolambda_LS=orig_opt.zerolambda_LS,
-        LS_w_time_curr=orig_opt.LS_w_time_curr, loaded_dynamics=loaded_dynamics_inst)
+        loaded_model=loaded_model, lambda_var=orig_opt.dynamics_class.endswith("lambda"),
+        make_benchmark_gts=orig_opt.plot_comp_final, loaded_dynamics=lamb_dynamics_inst)
 
     model = modules.SingleBVPNet(in_features=dynamics_inst.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
                                 final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl)
-    model.cuda()
+    # model.cuda()
 
     experiment_class = getattr(experiments, orig_opt.experiment_class)
     experiment = experiment_class(model=model, dataset=dataset, experiment_dir=experiment_dir, use_wandb=use_wandb)
     experiment.init_special(**{argname: getattr(orig_opt, argname) for argname in inspect.signature(experiment_class.init_special).parameters.keys() if argname != 'self'})
 
-    if (mode == 'all') or (mode == 'train'):
-        if dynamics_inst.loss_type == 'brt_hjivi':
-            loss_fn = losses.init_brt_hjivi_loss(dynamics_inst, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
-            loss_fn_baseline = losses.init_brt_hjivi_loss(dynamics_inst, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
-        elif dynamics_inst.loss_type == 'brat_hjivi':
-            loss_fn = losses.init_brat_hjivi_loss(dynamics_inst, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
-        elif dynamics_inst.loss_type == 'brt_hjivi_hopf':
-            loss_fn = losses.init_brt_hjivi_hopf_loss(experiment, orig_opt.minWith, orig_opt.dirichlet_loss_divisor, orig_opt.hopf_loss_divisor, orig_opt.hopf_grad_loss_divisor, orig_opt.hopf_loss, orig_opt.temporal_weighting)
-            loss_fn_baseline = losses.init_brt_hjivi_loss(dynamics_inst, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
-        else:
-            raise NotImplementedError
-        experiment.train(
-            batch_size=orig_opt.batch_size, epochs=orig_opt.num_epochs, lr=orig_opt.lr_std, 
-            steps_til_summary=orig_opt.steps_til_summary, epochs_til_checkpoint=orig_opt.epochs_til_ckpt, 
-            loss_fn=loss_fn, loss_fn_baseline=loss_fn_baseline, clip_grad=orig_opt.clip_grad, use_lbfgs=orig_opt.use_lbfgs, adjust_relative_grads=orig_opt.adj_rel_grads,
-            val_x_resolution=orig_opt.val_x_resolution, val_y_resolution=orig_opt.val_y_resolution, val_z_resolution=orig_opt.val_z_resolution, val_time_resolution=orig_opt.val_time_resolution,
-            use_CSL=orig_opt.use_CSL, CSL_lr=orig_opt.CSL_lr, CSL_dt=orig_opt.CSL_dt, epochs_til_CSL=orig_opt.epochs_til_CSL, num_CSL_samples=orig_opt.num_CSL_samples, CSL_loss_frac_cutoff=orig_opt.CSL_loss_frac_cutoff, max_CSL_epochs=orig_opt.max_CSL_epochs, CSL_loss_weight=orig_opt.CSL_loss_weight, CSL_batch_size=orig_opt.CSL_batch_size,
-            dual_lr=orig_opt.dual_lr, lr_decay_w=orig_opt.lr_decay_w, lr_hopf=orig_opt.lr_hopf, lr_hopf_decay_w=orig_opt.lr_hopf_decay_w, 
-            hopf_loss=orig_opt.hopf_loss, hopf_loss_decay=orig_opt.hopf_loss_decay, hopf_loss_decay_early=orig_opt.hopf_loss_decay_early, diff_con_loss_incr=orig_opt.diff_con_loss_incr, 
-            hopf_loss_decay_type=orig_opt.hopf_loss_decay_type, hopf_loss_decay_w=orig_opt.hopf_loss_decay_w, 
-            reset_loss_w=orig_opt.reset_loss_w, reset_loss_period=orig_opt.reset_loss_period,
-            nonlin_scale=orig_opt.nl_scale, nl_scale_epoch_step=orig_opt.nl_scale_epoch_step, nl_scale_epoch_post=orig_opt.nl_scale_epoch_post,
-            record_temporal_loss=orig_opt.temporal_loss)
-
-    if (mode == 'all') or (mode == 'test'):
-        experiment.test(
-            current_time=current_time, 
-            last_checkpoint=orig_opt.num_epochs, checkpoint_dt=orig_opt.epochs_til_ckpt, 
-            checkpoint_toload=opt.checkpoint_toload, dt=opt.dt,
-            num_scenarios=opt.num_scenarios, num_violations=opt.num_violations, 
-            set_type='BRT' if orig_opt.minWith in ['zero', 'target'] else 'BRS', control_type=opt.control_type, data_step=opt.data_step)
-        
-    if orig_opt.solve_hopf and dataset.hjpool:
-        print("Retiring hopf-julia workers and shared memory.")
-        dataset.hjpool.dispose()
-        print("He hecho.")
+    save_path = os.path.join('./plots/Final_Comparison_Plot_50D.png')
+    experiment.plot_final_comparison(save_path, loaded_models_dict, orig_opt.val_x_resolution, orig_opt.val_y_resolution, time_resolution=orig_opt.val_time_resolution, plot_value=True)

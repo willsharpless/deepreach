@@ -22,7 +22,7 @@ class ReachabilityDataset(Dataset):
                  just_make_hopf_bank=False, refine_bank=False,
                  loaded_model=None, loaded_dynamics=None,
                  lambda_var=False, zerolambda_LS=False, LS_w_time_curr=False,
-                 memory_tracking=False,
+                 memory_tracking=False, make_benchmark_gts=False,
                  ):
 
         self.dynamics = dynamics
@@ -97,6 +97,9 @@ class ReachabilityDataset(Dataset):
         self.lambda_int_3 = 0.5
         self.zerolambda_LS = lambda_var and zerolambda_LS
         self.LS_w_time_curr = LS_w_time_curr and use_hopf
+
+        # Benchmark test only
+        self.make_benchmark_gts = make_benchmark_gts
         
         ## Compute Linear Value from Model (if hopf loss)
         if use_hopf and not(self.dp_manual_load):
@@ -121,7 +124,7 @@ class ReachabilityDataset(Dataset):
                 
         ## Get Ground Truth for Special N-Dimensional Decomposable LessLinear System
         if record_gt_metrics:
-            self.init_groundtruth_tests(load_lambda_var=self.lambda_var)
+            self.init_groundtruth_tests(load_lambda_var=self.lambda_var, make_benchmark_gts=self.make_benchmark_gts)
 
         ## Make a bank of evaluated points, instead of evaluating online
         if self.make_bank:
@@ -347,7 +350,7 @@ class ReachabilityDataset(Dataset):
                     return V, DV
                 self.V_hopf_grad = V_N_hopf_grad_itp
     
-    def init_groundtruth_tests(self, load_lambda_var=False):
+    def init_groundtruth_tests(self, load_lambda_var=False, make_benchmark_gts=False):
         
         if not(self.dp_manual_load):
 
@@ -431,7 +434,36 @@ class ReachabilityDataset(Dataset):
                     self.V_DP_inlam1 = V_N_DP_inlam1_itp_combo # for plotting the BRT of Linear Solution
                     self.V_DP_inlam2 = V_N_DP_inlam2_itp_combo # for plotting the BRT of Linear Solution
                     self.V_DP_inlam3 = V_N_DP_inlam3_itp_combo # for plotting the BRT of Linear Solution
-
+                
+                if make_benchmark_gts:
+                    self.V_DP_itp_b1 = LessLinear2D_interpolations["g20_m0_a0"]
+                    self.V_DP_itp_b2 = LessLinear2D_interpolations["g-20_m0_a0"]
+                    self.V_DP_itp_b3 = LessLinear2D_interpolations["g-20_m-20_a1"]
+                    self.V_DP_itp_b4 = LessLinear2D_interpolations["g20_m-20_a1"]
+                    def V_N_DP_b1_itp_combo(tXg):
+                        V = 0 * tXg[0,:]
+                        for i in range(self.N-1):
+                            V += torch.from_numpy(self.fast_interp(self.V_DP_itp_b1, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
+                        return V
+                    def V_N_DP_b2_itp_combo(tXg):
+                        V = 0 * tXg[0,:]
+                        for i in range(self.N-1):
+                            V += torch.from_numpy(self.fast_interp(self.V_DP_itp_b2, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
+                        return V
+                    def V_N_DP_b3_itp_combo(tXg):
+                        V = 0 * tXg[0,:]
+                        for i in range(self.N-1):
+                            V += torch.from_numpy(self.fast_interp(self.V_DP_itp_b3, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
+                        return V
+                    def V_N_DP_b4_itp_combo(tXg):
+                        V = 0 * tXg[0,:]
+                        for i in range(self.N-1):
+                            V += torch.from_numpy(self.fast_interp(self.V_DP_itp_b4, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
+                        return V                    
+                    self.V_DP_b1 = V_N_DP_b1_itp_combo
+                    self.V_DP_b2 = V_N_DP_b2_itp_combo
+                    self.V_DP_b3 = V_N_DP_b3_itp_combo
+                    self.V_DP_b4 = V_N_DP_b4_itp_combo
 
         ## Define a fixed spatiotemporal grid to score Jaccard
 
