@@ -9,10 +9,11 @@ import pickle
 import numpy as np
 import matplotlib
 from tqdm import tqdm
+import math
 import matplotlib.patches as mpatches
-matplotlib.use("Agg")
+# matplotlib.use("Agg")
 
-
+torch.manual_seed(1)
 def load_experiment_setting(experiment_dir_specific, deepreach_model):
     # load original experiment settings
     with open(os.path.join(experiment_dir_specific, 'orig_opt.pickle'), 'rb') as opt_file:
@@ -21,6 +22,7 @@ def load_experiment_setting(experiment_dir_specific, deepreach_model):
     dynamics_ = dynamics_class(**{argname: getattr(orig_opt, argname)
                               for argname in inspect.signature(dynamics_class).parameters.keys() if argname != 'self'})
     dynamics_.deepreach_model=deepreach_model
+
 
     model = modules.SingleBVPNet(in_features=dynamics_.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
                                      final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl)
@@ -61,16 +63,15 @@ def plot_recovery_fig(dynamics_, model, delta_level, tMax, z_res, use_prestored_
     z_res = z_res
     plot_config = dynamics_.plot_config()
     
-    fig = plt.figure()
+    fig = plt.figure(figsize=(12,5))
     fig.suptitle(plot_config['state_slices'], fontsize=8)
     x_min, x_max = dynamics_.state_test_range()[
         plot_config['x_axis_idx']]
     y_min, y_max = dynamics_.state_test_range()[
         plot_config['y_axis_idx']]
 
-    fig2 = plt.figure()
 
-    resolution = 32
+    resolution = 512
     xs = np.linspace(*dynamics_.state_test_range()
                         [plot_config['x_axis_idx']], resolution)
     ys = np.linspace(*dynamics_.state_test_range()
@@ -143,7 +144,7 @@ def plot_recovery_fig(dynamics_, model, delta_level, tMax, z_res, use_prestored_
         if use_prestored_init_states:
             batch_scenario_states=torch.from_numpy(np.load("./runs/prestored_trajs/state_traj%d.npy"%i))[:,0,:]
         else:
-            batch_scenario_states=coords[torch.logical_and(torch.abs(values_)<0.01, dynamics_.boundary_fn(coords[...,1:])>0.2),1:]
+            batch_scenario_states=coords[torch.logical_and(torch.logical_and(values_>0.06, values_<0.07), dynamics_.boundary_fn(coords[...,1:])>0.2),1:]
             if batch_scenario_states.shape[0]>20:
                 idx = torch.randperm(batch_scenario_states.size(0))[:20]
                 batch_scenario_states=batch_scenario_states[idx]
@@ -152,7 +153,19 @@ def plot_recovery_fig(dynamics_, model, delta_level, tMax, z_res, use_prestored_
         
         # print(batch_scenario_states,state_trajs.shape)
         for j in range(state_trajs.shape[0]):
-            ax.plot(state_trajs[j,:,plot_config['x_axis_idx']],state_trajs[j,:,plot_config['y_axis_idx']],color='blue',linestyle='--', linewidth = 0.1)
+            if batch_scenario_costs[j]<0:
+                color="red"
+            else:
+                color='blue'
+            ax.plot(state_trajs[j,:,plot_config['x_axis_idx']],state_trajs[j,:,plot_config['y_axis_idx']] ,linestyle='--', linewidth = 0.5, color = color)
+        # for j in [6,16]:
+        #     if batch_scenario_costs[j]<0:
+        #         color="red"
+        #     else:
+        #         color='blue'
+        #     ax.plot(state_trajs[j,:,plot_config['x_axis_idx']],state_trajs[j,:,plot_config['y_axis_idx']], linestyle='--', linewidth = 1, label= "%d"%j, color = color)
+        # for j in range(state_trajs.shape[0]):
+        #     ax.plot(state_trajs[j,:,plot_config['x_axis_idx']],state_trajs[j,:,plot_config['y_axis_idx']],linestyle='--', linewidth = 1, label= "%d"%j)
 
         circle = plt.Circle((0, 0), 0.5,color='darkblue', 
                          lw=0.5, 
@@ -166,17 +179,68 @@ def plot_recovery_fig(dynamics_, model, delta_level, tMax, z_res, use_prestored_
         ax.set_xticks([x_min, x_max])
         ax.set_yticks([y_min, y_max])
         ax.tick_params(labelsize=6)
+        # ax.legend()
         if i != 0:
             ax.set_yticks([])
         all_state_trajs.append(state_trajs)
 
-        ax2= fig2.add_subplot(1, len(zs), (i+1), projection='3d')
-        for j in range(state_trajs.shape[0]):
-            ax2.plot(state_trajs[j,:,plot_config['x_axis_idx']],state_trajs[j,:,plot_config['y_axis_idx']],zs=state_trajs[j,:,2], 
-                     color='blue',linestyle='--', linewidth = 0.1)
+    return fig, all_state_trajs, value_grids[0]
 
-        
-    return fig, fig2, all_state_trajs, value_grids[0]
+
+def data_for_cylinder_along_z(center_x, center_y, radius, height_z):
+        z = np.linspace(-height_z/2, height_z/2, 50)
+        theta = np.linspace(0, 2*np.pi, 50)
+        theta_grid, z_grid = np.meshgrid(theta, z)
+        x_grid = radius*np.cos(theta_grid) + center_x
+        y_grid = radius*np.sin(theta_grid) + center_y
+        return x_grid, y_grid, z_grid
+
+def plot_trajs3D(axes, all_trajs, plot_config, titles, colors):
+    axes.plot([0, 0], [0, 0], [0, 0], 'k+')
+    Xc, Yc, Zc = data_for_cylinder_along_z(0, 0, 0.5, 2)
+    axes.plot_surface(Xc, Yc, Zc, alpha=0.8, color="gray")
+    axes.set_xlim(-2,2)
+    axes.set_ylim(-2,2)
+    axes.set_zlim(-1,1)
+    # axes.legend()
+    # Hide grid lines
+    axes.grid(False)
+
+    # Hide axes ticks
+    axes.set_xticks([])
+    axes.set_yticks([])
+    axes.set_zticks([])
+    axes.set_box_aspect([1,1,0.5])
+    axes.view_init(elev=24, azim=-28)
+    for method in range(len(all_trajs)):
+        state_trajs=all_trajs[method]
+        # for j in [4,19]:
+        for j in [6]:
+            # length of the arm of the quadrotor is 0.5m
+            axes.plot(state_trajs[j,:,plot_config['x_axis_idx']],state_trajs[j,:,plot_config['y_axis_idx']],zs=state_trajs[j,:,8], 
+                        color=colors[method],linestyle='-', linewidth = 2, label=titles[method])
+            for i in range(0,state_trajs.shape[1],100):
+                rotation_matrix= torch.FloatTensor([[torch.cos(state_trajs[j, i, 2]),torch.sin(state_trajs[j, i, 2])*torch.sin(state_trajs[j, i, 6]), torch.sin(state_trajs[j, i, 2])*torch.cos(state_trajs[j, i, 6])],
+                                            [0, torch.cos(state_trajs[j, i, 6]), -torch.sin(state_trajs[j, i, 6])],
+                                            [-torch.sin(state_trajs[j, i, 2]), torch.cos(state_trajs[j, i, 2])*torch.sin(state_trajs[j, i, 6]), torch.cos(state_trajs[j, i, 2])*torch.cos(state_trajs[j, i, 6])]])
+                pb = state_trajs[j, i, [0,4,8]].float()
+                if i==0:
+                    print(state_trajs[j, i, 2], state_trajs[j, i, 6])
+
+                p1 = rotation_matrix@torch.tensor([0.10/math.sqrt(2), 0.10/math.sqrt(2), 0])+pb 
+                p2 = rotation_matrix@torch.tensor([0.10/math.sqrt(2), -0.10/math.sqrt(2), 0])+pb
+                p3 = rotation_matrix@torch.tensor([-0.10/math.sqrt(2), -0.10/math.sqrt(2), 0])+pb
+                p4 = rotation_matrix@torch.tensor([-0.10/math.sqrt(2), 0.10/math.sqrt(2), 0])+pb
+                if math.sqrt(pb[0]**2+pb[1]**2) >0.5:
+                    color="black"
+                else:
+                    color="red"
+                axes.plot([p4[0], p2[0]], [p4[1], p2[1]], [
+                    p4[2], p2[2]], 'ko-', lw=1, markersize=2,color=color)
+                axes.plot([p3[0], p1[0]], [p3[1], p1[1]], [
+                    p3[2], p1[2]], 'ko-', lw=1, markersize=2,color=color)
+
+
 
 def plot_result(experiment_dir, dynamics_, model, tMax, use_prestored_init_states):
     with open(os.path.join(experiment_dir, 'basic_logs.pickle'), 'rb') as f:
@@ -195,20 +259,21 @@ def plot_result(experiment_dir, dynamics_, model, tMax, use_prestored_init_state
         logs['theoretically_recoverable_volume']))
     print('recovered violation rate', str(
         logs['recovered_violation_rate']))
-    z_res =5
-    fig, fig2, all_state_trajs, values = plot_recovery_fig(
+    z_res = 5
+    fig,  all_state_trajs, values = plot_recovery_fig(
         dynamics_, model, delta_level, tMax, z_res, use_prestored_init_states)
 
     plt.tight_layout()
     fig.savefig(os.path.join(
         experiment_dir, f'traj_plots.png'), dpi=800)
-    fig2.savefig(os.path.join(
-        experiment_dir, f'traj_plots3D.png'), dpi=800)
+    # fig2.savefig(os.path.join(
+    #     experiment_dir, f'traj_plots3D.png'), dpi=800)
+    # plt.show()
     for z in range(z_res):
         np.save(os.path.join(experiment_dir, f'state_traj%d'%z),
                             all_state_trajs[z].detach().cpu().numpy())
     
-    return values, delta_level
+    return values, delta_level, all_state_trajs[0]
 
 def rollout_trajs(tMax, dt, batch_scenario_states, dynamics_, model):
     # propagate scenarios
@@ -272,7 +337,7 @@ def generate_overlay_plot(all_values, titles, levels, fname):
 
     fig, ax = plt.subplots(1, 1, figsize=(8, 8))
     # Plot target set
-    obs=ax.plot(circle_x, circle_y, color='#006d6f', linewidth=2, label='obstacle')
+    obs=ax.plot(circle_x, circle_y, color='#006d6f', linewidth=4, label='obstacle')
     i=0
     legend_handles=[]
     
@@ -303,17 +368,18 @@ def generate_overlay_plot(all_values, titles, levels, fname):
         ax.get_yaxis().set_visible(False) 
         plt.tight_layout()
         i+=1
-    ax.set_facecolor("#DBE2E6")
-    plt.legend(handles=legend_handles)
-        
+    ax.set_facecolor("#FCF7FF")
+    # plt.legend(handles=legend_handles)
     plt.savefig(fname, bbox_inches='tight',pad_inches = 0.06)
 
 if __name__ == "__main__":
     p = configargparse.ArgumentParser()
     experiments_dir = './runs'
-    exp_names = ['quadrotor10D_baseline_nrange', 'quadrotor10D_lindecay_nrange', 'lin_{0.6}_{10.0}_{5.0}_nrange','quadrotor10D_lambda_exact']
-    titles = ['Baseline', 'Adaptive', 'LinDecayParamSearch','Lambda_exact']
-    colors=["#243B6A","#92AFD7","#CF8E80","#550C18"]
+    exp_names = ['quadrotor10D_baseline_nrange', 'quadrotor10D_lindecay_nrange', 'lin_{0.6}_{10.0}_{5.0}_nrange','quadrotor10D_lambda_lindecay_curr']
+    exp_names = ['quadrotor10D_baseline_nrange', 'quadrotor10D_lindecay_nrange', 'quadrotor10D_lambda_lindecay_curr']
+    # exp_names = ['quadrotor10D_baseline_nrange', 'quadrotor10D_lindecay_nrange']
+    titles = ['Baseline', 'Adaptive', 'LinDecayParamSearch','Lambda_augmented']
+    colors=["#243B6A","#550C18","#92AFD7","#CF8E80"]
     p.add_argument('--tMax', type=float, required=True, help='Time horizon.')
     p.add_argument('--use_prestored_init_states', default=False, action='store_true', help='use prestored initial states for plotting')
     opt = p.parse_args()
@@ -322,18 +388,27 @@ if __name__ == "__main__":
     # generate BRT+trajs plots for all experiments
     all_values=[]
     delta_levels=[]
+    all_trajs=[]
     for experiment_name in exp_names:
         experiment_dir = os.path.join(
             experiments_dir, experiment_name)
         model, dynamics_ = load_experiment_setting(
             experiment_dir, deepreach_model="exact")
     
-        values, delta_level=plot_result(experiment_dir, dynamics_, model, opt.tMax, use_prestored_init_states)
+        values, delta_level, trajs=plot_result(experiment_dir, dynamics_, model, opt.tMax, use_prestored_init_states)
+        all_trajs.append(trajs)
         all_values.append(values)
         delta_levels.append(delta_level)
-    
+    # plot 3D trajs
+    fig2= plt.figure(figsize=(10,7))
+    ax2= fig2.add_subplot(1, 1, 1, projection='3d')
+    # plot_trajs3D(ax2,all_trajs,dynamics_.plot_config(),titles,colors)
+
+    plt.show()
     # plot overlay verified BRTs and overlay learned BRTs
     generate_overlay_plot(all_values,titles,delta_levels,"runs/overlay_verified_BRTs.png")
     generate_overlay_plot(all_values,titles,[0.0 for n in range(5)],"runs/overlay_learned_BRTs.png")
+
+    
     
 

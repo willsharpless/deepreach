@@ -805,14 +805,16 @@ class Experiment(ABC):
                 outlier_states = results['states'][unsafe_cost_safe_value_indeces, ...]
                 torch.set_printoptions(
                     precision=2, threshold=10_000, sci_mode=False)
-                print(results['batch_state_trajs'].shape)
-                print(outlier_states.shape)
-                print(outlier_states[:200, ...])
+                
+                # print(results['batch_state_trajs'].shape)
+                print("False positive: ", unsafe_cost_safe_value_indeces.shape[0]/values_.shape[0], "False negative: ",
+                        np.argwhere(np.logical_and(costs_ >= 0, values_ < 0)).shape[0]/values_.shape[0])
+                # print(outlier_states[:200, ...])
 
                 (vs, bins, patches) = plt.hist(
                     positive_values_with_negative_cost, bins=200)
-                plt.title("Learned values for actually unsafe states marked as safe\n%s" %
-                          dynamics.deepReach_model)
+                # plt.title("Learned values for actually unsafe states marked as safe\n%s" %
+                #           dynamics.deepReach_model)
                 fig1.savefig(os.path.join(
                     testing_dir, f'value distribution.png'), dpi=800)
                 print("save path: ", os.path.join(
@@ -995,6 +997,7 @@ class Experiment(ABC):
                              results['values'].cpu().numpy(), bins=200)
                     fig2.savefig(os.path.join(
                         testing_dir, f'diff distribution.png'), dpi=800)
+                    
                     plt.close(fig1)
 
                 logs['algorithm_iters'] = algorithm_iters

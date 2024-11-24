@@ -1845,65 +1845,65 @@ class Quadrotor10DLambda(Dynamics):
     def optimal_disturbance(self, state, dvds):
         return torch.zeros(1)
 
-    # convert model io to real value
-    def io_to_value(self, input, output):
-        if self.deepreach_model=="diff":
-            return (output * self.value_var / self.value_normto) + self.boundary_fn(self.input_to_coord(input)[..., 1:])
-        elif self.deepreach_model=="exact":
-            return (output * input[..., 0] * self.value_var / self.value_normto) + self.boundary_fn(self.input_to_coord(input)[..., 1:])
-        elif self.deepreach_model=="exact_lambda":
-            hopf_input = input*1.0
-            hopf_input[...,-1] = -1.0 # lambda is always 0 for hopf input 
-            hopf_model_results = self.hopf_model({'coords': hopf_input})
-            self.hopf_out = hopf_model_results['model_out'].squeeze(dim=-1)
-            self.hopf_in = hopf_model_results['model_in']
-            self.hopf_values = (self.hopf_out * self.hopf_in[..., 0] * self.value_var / self.value_normto) + self.boundary_fn(self.input_to_coord(self.hopf_in)[..., 1:])
-            return self.hopf_values + input[..., 0] * self.input_to_coord(input)[..., -1] * output * self.value_var / self.value_normto
+    # # convert model io to real value
+    # def io_to_value(self, input, output):
+    #     if self.deepreach_model=="diff":
+    #         return (output * self.value_var / self.value_normto) + self.boundary_fn(self.input_to_coord(input)[..., 1:])
+    #     elif self.deepreach_model=="exact":
+    #         return (output * input[..., 0] * self.value_var / self.value_normto) + self.boundary_fn(self.input_to_coord(input)[..., 1:])
+    #     elif self.deepreach_model=="exact_lambda":
+    #         hopf_input = input*1.0
+    #         hopf_input[...,-1] = -1.0 # lambda is always 0 for hopf input 
+    #         hopf_model_results = self.hopf_model({'coords': hopf_input})
+    #         self.hopf_out = hopf_model_results['model_out'].squeeze(dim=-1)
+    #         self.hopf_in = hopf_model_results['model_in']
+    #         self.hopf_values = (self.hopf_out * self.hopf_in[..., 0] * self.value_var / self.value_normto) + self.boundary_fn(self.input_to_coord(self.hopf_in)[..., 1:])
+    #         return self.hopf_values + input[..., 0] * self.input_to_coord(input)[..., -1] * output * self.value_var / self.value_normto
            
-        else:
-            return (output * self.value_var / self.value_normto) + self.value_mean
+    #     else:
+    #         return (output * self.value_var / self.value_normto) + self.value_mean
 
-    # convert model io to real dv
-    def io_to_dv(self, input, output):
-        dodi = diff_operators.jacobian(output.unsqueeze(dim=-1), input)[0].squeeze(dim=-2)
+    # # convert model io to real dv
+    # def io_to_dv(self, input, output):
+    #     dodi = diff_operators.jacobian(output.unsqueeze(dim=-1), input)[0].squeeze(dim=-2)
 
-        if self.deepreach_model=="diff":
-            dvdt = (self.value_var / self.value_normto) * dodi[..., 0]
+    #     if self.deepreach_model=="diff":
+    #         dvdt = (self.value_var / self.value_normto) * dodi[..., 0]
 
-            dvds_term1 = (self.value_var / self.value_normto / self.state_var.to(device=dodi.device)) * dodi[..., 1:]
-            state = self.input_to_coord(input)[..., 1:]
-            dvds_term2 = diff_operators.jacobian(self.boundary_fn(state).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
-            dvds = dvds_term1 + dvds_term2
-        elif self.deepreach_model=="exact":
-            dvdt = (self.value_var / self.value_normto) * \
-                (input[..., 0]*dodi[..., 0] + output)
+    #         dvds_term1 = (self.value_var / self.value_normto / self.state_var.to(device=dodi.device)) * dodi[..., 1:]
+    #         state = self.input_to_coord(input)[..., 1:]
+    #         dvds_term2 = diff_operators.jacobian(self.boundary_fn(state).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
+    #         dvds = dvds_term1 + dvds_term2
+    #     elif self.deepreach_model=="exact":
+    #         dvdt = (self.value_var / self.value_normto) * \
+    #             (input[..., 0]*dodi[..., 0] + output)
 
-            dvds_term1 = (self.value_var / self.value_normto /
-                          self.state_var.to(device=dodi.device)) * dodi[..., 1:] * input[..., 0].unsqueeze(-1)
-            state = self.input_to_coord(input)[..., 1:]
-            dvds_term2 = diff_operators.jacobian(self.boundary_fn(
-                state).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
-            dvds = dvds_term1 + dvds_term2
-        elif self.deepreach_model=="exact_lambda":
-            state = self.input_to_coord(input)[..., 1:]
-            hopf_jacobian=diff_operators.jacobian(self.hopf_values.unsqueeze(dim=-1), self.hopf_in)[0].squeeze(dim=-2)[...,:-1]
+    #         dvds_term1 = (self.value_var / self.value_normto /
+    #                       self.state_var.to(device=dodi.device)) * dodi[..., 1:] * input[..., 0].unsqueeze(-1)
+    #         state = self.input_to_coord(input)[..., 1:]
+    #         dvds_term2 = diff_operators.jacobian(self.boundary_fn(
+    #             state).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
+    #         dvds = dvds_term1 + dvds_term2
+    #     elif self.deepreach_model=="exact_lambda":
+    #         state = self.input_to_coord(input)[..., 1:]
+    #         hopf_jacobian=diff_operators.jacobian(self.hopf_values.unsqueeze(dim=-1), self.hopf_in)[0].squeeze(dim=-2)[...,:-1]
 
-            dvdt =  hopf_jacobian[..., 0] + \
-                (self.value_var / self.value_normto) * (input[..., 0]*dodi[..., 0] + output) * state[..., -1]
+    #         dvdt =  hopf_jacobian[..., 0] + \
+    #             (self.value_var / self.value_normto) * (input[..., 0]*dodi[..., 0] + output) * state[..., -1]
             
-            dvds = (self.value_var / self.value_normto /
-                          self.state_var.to(device=dodi.device)) * dodi[..., 1:] * input[..., 0].unsqueeze(-1) * state[..., -1].unsqueeze(-1)
+    #         dvds = (self.value_var / self.value_normto /
+    #                       self.state_var.to(device=dodi.device)) * dodi[..., 1:] * input[..., 0].unsqueeze(-1) * state[..., -1].unsqueeze(-1)
             
-            dvds[...,-1] = dvds[...,-1] + (self.value_var / self.value_normto /
-                          self.state_var.to(device=dodi.device)[-1]) * output[..., -1] * input[..., 0]
+    #         dvds[...,-1] = dvds[...,-1] + (self.value_var / self.value_normto /
+    #                       self.state_var.to(device=dodi.device)[-1]) * output[..., -1] * input[..., 0]
             
-            dvds[...,:-1] = dvds[...,:-1] +  hopf_jacobian[..., 1:] / self.state_var.to(device=dodi.device)[:-1]
+    #         dvds[...,:-1] = dvds[...,:-1] +  hopf_jacobian[..., 1:] / self.state_var.to(device=dodi.device)[:-1]
 
-        else:
-            dvdt = (self.value_var / self.value_normto) * dodi[..., 0]
-            dvds = (self.value_var / self.value_normto / self.state_var.to(device=dodi.device)) * dodi[..., 1:]
+    #     else:
+    #         dvdt = (self.value_var / self.value_normto) * dodi[..., 0]
+    #         dvds = (self.value_var / self.value_normto / self.state_var.to(device=dodi.device)) * dodi[..., 1:]
         
-        return torch.cat((dvdt.unsqueeze(dim=-1), dvds), dim=-1)
+    #     return torch.cat((dvdt.unsqueeze(dim=-1), dvds), dim=-1)
 
     def plot_config(self):
         if self.mode == "linear":
@@ -1923,7 +1923,7 @@ class Quadrotor10DLambda(Dynamics):
             #     'z_axis_idx': 10,
             # }
             return {
-                'state_slices': [0, 0, 1, 5, 0, 2, 1, 2, 0, 0.4, 1.0], 
+                'state_slices': [0, 0, 1, 5, 0, 2, 1, 2, 0, 0.4, 0.0],
                 'state_labels': ['x', 'vx', 'pitch', 'wy', 'y', 'vy', 'roll', 'wx', 'z', 'vz', 'lambda'],
                 'x_axis_idx': 0,
                 'y_axis_idx': 4,

@@ -91,7 +91,7 @@ if __name__ == '__main__':
         # simulation data source options
         p.add_argument('--numpoints', type=int, default=65000, help='Number of points in simulation data source __getitem__.') # weird way to say batch size
         p.add_argument('--pretrain', action='store_true', default=True, required=False, help='Pretrain dirichlet conditions')
-        p.add_argument('--pretrain_iters', type=int, default=2000, required=False, help='Number of pretrain iterations')
+        p.add_argument('--pretrain_iters', type=int, default=1000, required=False, help='Number of pretrain iterations')
         p.add_argument('--tMin', type=float, default=0.0, required=False, help='Start time of the simulation')
         p.add_argument('--tMax', type=float, default=1.0, required=False, help='End time of the simulation')
         p.add_argument('--counter_start', type=int, default=0, required=False, help='Defines the initial time for the curriculum training')
@@ -159,7 +159,7 @@ if __name__ == '__main__':
         p.add_argument('--num_scenarios', type=int, default=100000, help='The number of scenarios sampled in scenario optimization for testing')
         p.add_argument('--num_violations', type=int, default=1000, help='The number of violations to sample for in scenario optimization for testing')
         p.add_argument('--control_type', type=str, default='value', choices=['value', 'ttr', 'init_ttr'], help='The controller to use in scenario optimization for testing')
-        p.add_argument('--data_step', type=str, default='run_basic_recovery', choices=['plot_violations', 'run_basic_recovery', 'plot_basic_recovery', 'run_robust_recovery', 'plot_robust_recovery', 'collect_samples', 'train_binner', 'run_binned_recovery', 'plot_binned_recovery', 'plot_cost_function'], help='The data processing step to run')
+        p.add_argument('--data_step', type=str, default='run_basic_recovery', choices=['plot_violations', 'plot_hists', 'run_basic_recovery', 'plot_basic_recovery', 'run_robust_recovery', 'plot_robust_recovery', 'collect_samples', 'train_binner', 'run_binned_recovery', 'plot_binned_recovery', 'plot_cost_function'], help='The data processing step to run')
 
     opt = p.parse_args()
 
