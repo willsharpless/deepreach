@@ -1539,33 +1539,42 @@ class DeepReachHopf(Experiment):
                 cmap_name = "RdBu"
                 num_bins = 1024
 
-                if learned_value.min() > 0:
+                # min_val = learned_value.min()
+                # max_val = learned_value.max()
+                
+                min_vals = [-4.5, -3.8, -5.2, -7.8]
+                max_vals = [33.1, 48.1, 70.3, 34.2]
+                
+                min_val = min_vals[i % 4]
+                max_val = max_vals[i % 4]
+
+                if min_val > 0:
                     # RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', [(1,1,1), (0.5,0.5,1), (0,0,1), (0,0,1)])
                     scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0.6, 1., num_bins))))
                     RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
 
-                elif learned_value.max() < 0:
+                elif max_val < 0:
                     # RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', [(1,0,0), (1,0,0), (1,0.5,0.5), (1,1,1)])
                     scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0., 0.4, num_bins))))
                     RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
 
                 else:
-                    # n_bins_high = int(256 * (learned_value.max()/(learned_value.max() - learned_value.min())) // 1)
-                    n_bins_high = round(num_bins * learned_value.max()/(learned_value.max() - learned_value.min()))
+                    # n_bins_high = int(256 * (max_val/(max_val - min_val)) // 1)
+                    n_bins_high = round(num_bins * max_val/(max_val - min_val))
 
                     offset = 0
                     scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0., 0.4, num_bins-n_bins_high+offset)), matplotlib.colormaps[cmap_name](np.linspace(0.6, 1., n_bins_high-offset))))
                     RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
 
                 ## Plot Learned Value
-                s = ax.imshow(learned_value.T, cmap=RdWhBl_vscaled, origin='lower', extent=(-1., 1., -1., 1.), interpolation='bilinear')
-                # levels = np.linspace(learned_value.min(), learned_value.max(), num_bins)
+                s = ax.imshow(learned_value.T, cmap=RdWhBl_vscaled, origin='lower', extent=(-1., 1., -1., 1.), interpolation='bilinear', vmax=max_val, vmin=min_val)
+                # levels = np.linspace(min_val, max_val, num_bins)
                 # s = ax.contourf(learned_value.T, cmap=RdWhBl_vscaled, levels=levels, origin='lower', extent=(-1., 1., -1., 1.))
                 divider = make_axes_locatable(ax)
                 cax = divider.append_axes("right", size="5%", pad=0.05)
                 cbar = fig.colorbar(s, cax=cax)
-                cbar.set_ticks([learned_value.min(), 0., learned_value.max()])  # Define custom tick locations
-                cbar.set_ticklabels([f'{learned_value.min():1.1f}', '0', f'{learned_value.max():1.1f}'])  # Define custom tick labels
+                cbar.set_ticks([min_val, 0., max_val])  # Define custom tick locations
+                cbar.set_ticklabels([f'{min_val:1.1f}', '0', f'{max_val:1.1f}'])  # Define custom tick labels
 
                 ## Plot Ground-Truth Zero-Level Contour
 
@@ -1655,9 +1664,32 @@ class DeepReachHopf(Experiment):
 
                 # Create the plot 
                 labels = [r"BASELINE", r"LSS DECAY", r"$ V_\lambda $ LSS"]
-                ax.bar(x - width, group1, width, label=labels[0], edgecolor='black', color=colors[0])
-                ax.bar(x, group2, width, label=labels[1], edgecolor='black', color=colors[1])
-                ax.bar(x + width, group3, width, label=labels[2], edgecolor='black', color=colors[2])
+                ax.bar(x - width, group1, width, label=labels[0] + f", mean {sum(group1)/4:1.2f}", edgecolor='black', color=colors[0])
+                ax.bar(x, group2, width, label=labels[1] + f", mean {sum(group2)/4:1.2f}", edgecolor='black', color=colors[1])
+                ax.bar(x + width, group3, width, label=labels[2] + f", mean {sum(group3)/4:1.2f}", edgecolor='black', color=colors[2])
+                ax.set_xlabel(r'$(\alpha, \beta)$')
+
+                # ax.text(
+                #     x=ax.get_xlim[1]/2,  # Position to the left of the y-axis
+                #     y=ax.get_ylim[1] - 0.1,   # Vertical position in data coordinates
+                #     s=f"{f:}",  # Annotation text
+                #     va='center',              # Vertical alignment
+                #     ha='center',               # Horizontal alignment
+                #     fontsize=8,              # Font size
+                #     color='black'              # Text color
+                # )
+
+                if i == 0:
+                    ax.set_ylim(0., 1.0)
+
+                if i == 1:
+                    ax.set_ylim(0., 10.)
+
+                if i == 2:
+                    ax.set_ylim(1.)
+
+                if i == 3:
+                    ax.set_ylim(0., 25.)
 
                 ax.grid(True, axis='y', alpha=0.7, zorder=0)
                 ax.set_axisbelow(True)
@@ -1667,8 +1699,7 @@ class DeepReachHopf(Experiment):
 
                 ax.set_title(data_name, fontsize=15)
                 ax.set_xticks(x, categories)  # Replace x-ticks with category names
-                if i == 2:
-                    ax.legend(loc='upper left')
+                ax.legend(loc='upper left')
             
             fig_bar.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05, wspace=0.2, hspace=0.2)
             fig_bar.savefig("bar_" + save_path)
