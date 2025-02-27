@@ -84,6 +84,10 @@ class HopfJuliaPool(object):
         self.pool = Pool(num_hopf_workers, initializer=self.init_worker)
         print("\nFinished initializing workers.")
 
+        ## Make Worker Directory
+        shutil.rmtree(self.log_loc, ignore_errors=True)
+        os.makedirs(self.log_loc, exist_ok=True)
+
         ## Initialize HopfReachability.jl Solver
         print("\nLoading julia software into workers...")
         with tqdm(total=num_hopf_workers) as pbar:
@@ -367,7 +371,10 @@ redirect_stderr(log_f)"""
                     bank[bix:bix+split_size, 2*cls.N+4] = SE_grad # grad error
             
             ## Store general algorithm data
-            alg_data[aix, 0] = aix
+            try:
+                alg_data[aix, 0] = aix  
+            except IndexError as e:
+                raise IndexError(f"Your worker databank ran out space, choose a bigger alg_log_max (curr: {alg_data.shape[0]}).") from e
             alg_data[aix, 1] = job_id
             alg_data[aix, 2] = total_time
             alg_data[aix, 3] = mean_solve_time_ppt
@@ -378,14 +385,15 @@ redirect_stderr(log_f)"""
 
         return cls.worker_id, job_id, total_time, mean_solve_time_ppt, MSE, MSE_grad
 
-    def solve_bank_starter(self, bank_params, n_splits=10, print_sample=False, print_sample_skip=100):
+    def solve_bank_starter(self, bank_params, n_splits=10, print_sample=False, print_sample_skip=100, alg_log_max=10000):
 
         ## Define Shared Memory
         self.n_total, self.n_starter, self.n_deposit = bank_params["n_total"], bank_params["n_starter"], bank_params["n_deposit"]
         if (self.n_total - self.n_starter) % self.n_deposit != 0: raise AssertionError(f"Your bank isn't divided well: ({(self.n_total - self.n_starter)} remainder must be divisble by {self.n_deposit} deposit). Change your parameters.\n") 
-
+        
+        if alg_log_max < int(self.n_starter / self.tp): alg_log_max = 5 * int(self.n_starter / self.tp)
         self.shm_states_shape = (self.n_total, 1 + self.N + 3 + self.N + 1) # n_total x (time, state, bc, val, mse, state_grad, mse_grad)
-        self.shm_algdat_shape = (10000, 6) # alg_log_max x (alg_iter, job_ix, total_time, mean_solve_time_ppt, avg_mse, avg_grad_mse)
+        self.shm_algdat_shape = (alg_log_max, 6) # alg_log_max x (alg_iter, job_ix, total_time, mean_solve_time_ppt, avg_mse, avg_grad_mse)
 
         self.lock = Lock()
         shm_states = SharedMemory(create=True, size=np.prod(self.shm_states_shape) * np.dtype(np.float32).itemsize)
@@ -412,7 +420,7 @@ redirect_stderr(log_f)"""
         with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
             mlog.write("\n############################# Bank Starter Log #############################")
 
-        print(f"\n\nSolving {self.n_starter} points to start the bank (in {n_splits} jobs for {self.num_hopf_workers} workers), composed of {total_spatial_pts} spatial x {self.tp} time pts ({split_size} per job).")
+        print(f"\n\nSolving {self.n_starter} points to start the bank (in {n_splits} jobs for {self.num_hopf_workers} workers): total of {total_spatial_pts} spatial x {self.tp} time pts ({split_size} space-time pts per job).")
 
         with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:
 
@@ -525,7 +533,7 @@ redirect_stderr(log_f)"""
         if self.n_deposit / self.tp     != total_spatial_pts: raise AssertionError(f"Your bank isn't divided well: {self.n_deposit} deposit pts with {self.tp} tp gives {self.n_deposit / self.tp} pts/split, not an integer. Change your parameters.\n") 
         if total_spatial_pts == 0 or split_spatial_pts == 0 or split_size == 0: raise AssertionError(f"Your bank isn't divided well, one of your splits is 0. Change your parameters.\n")
 
-        print(f"\n\nSolving {self.n_deposit} points to deposit into the bank (in {n_splits} jobs for {self.num_hopf_workers} workers), composed of {total_spatial_pts} spatial x {self.tp} time pts ({split_size} per job).")
+        print(f"\n\nSolving {self.n_deposit} points to deposit into the bank (in {n_splits} jobs for {self.num_hopf_workers} workers): total of {total_spatial_pts} spatial x {self.tp} time pts ({split_size} space-time pts per job).")
 
         if self.alg_iter == 1 or not concise:
             with open(os.path.join(self.log_loc, self.master_log), 'a') as mlog:

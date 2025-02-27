@@ -1,4 +1,3 @@
-from juliacall import Main as jl, convert as jlconvert
 import torch
 import numpy as np
 from torch.utils.data import Dataset
@@ -9,16 +8,18 @@ from tqdm.autonotebook import tqdm
 import multiprocessing as mp
 from multiprocessing.shared_memory import SharedMemory
 import julia_multiproc
+import warnings
+warnings.filterwarnings("ignore",message="torch was imported before juliacall. This may cause a segfault.*",category=UserWarning,module="juliacall")
+from juliacall import Main as jl, convert as jlconvert
 
 # uses model input and real boundary fn
 class ReachabilityDataset(Dataset):
     def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, 
                  use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0, record_gt_metrics=False, solve_grad=False,
                  dp_manual_load=False, load_packet=None, no_curriculum=False, use_bank=False, bank_name=None, capacity_test=False,
-                 solve_hopf=False, hopf_warm_start=False, hopf_time_step=5e-2, num_hopf_workers=2, hopf_starter_numsplits=100000, hopf_deposit_numsplits=100000,
+                 solve_hopf=False, hopf_warm_start=False, hopf_time_step=5e-2, num_hopf_workers=5, hopf_starter_numsplits=1000, hopf_deposit_numsplits=100,
                  hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100},
-                #  hopf_bank_params = {"n_total":int(1e5), "n_starter":int(1e5), "n_deposit":int(1e5)}, # dynamic refresh
-                 hopf_bank_params = {"n_total":int(4e6), "n_starter":int(4e6), "n_deposit":int(2e6)}, # to make static bank
+                 hopf_bank_params = {"n_total":int(2e6), "n_starter":int(2e6), "n_deposit":int(2e5)}, # dynamic refresh
                  just_make_hopf_bank=False, refine_bank=False,
                  loaded_model=None, loaded_dynamics=None,
                  lambda_var=False, zerolambda_LS=False, LS_w_time_curr=False,
@@ -79,6 +80,13 @@ class ReachabilityDataset(Dataset):
         self.bank_name = bank_name
         self.mp_bank = "mp" in bank_name
         self.just_make_hopf_bank = just_make_hopf_bank
+
+        if just_make_hopf_bank:
+            self.hopf_starter_numsplits, self.hopf_deposit_numsplits = 10000, 10000
+            if refine_bank:
+                self.hopf_bank_params = {"n_total":int(4e6), "n_starter":int(4e6), "n_deposit":int(4e6)} # to make static bank
+            else:
+                self.hopf_bank_params = {"n_total":int(4e6), "n_starter":int(4e6), "n_deposit":int(2e6)} # to make static bank
 
         # Dynamic Programming Manual Load (added this to skirt WandB sweep + PyCall imcompatibility but still not working)
         self.dp_manual_load = dp_manual_load

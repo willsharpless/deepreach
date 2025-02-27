@@ -105,7 +105,7 @@ class Experiment(ABC):
             diff_con_loss_incr=False, hopf_loss_decay_type = 'exponential',
             nonlin_scale=False, nl_scale_epoch_step=10000, nl_scale_epoch_post=10000, 
             record_temporal_loss = False, 
-            deposit_blocking = True, deposit_blocking_period = 1000 # seg faults if nonblocking rn...
+            deposit_blocking = True, deposit_blocking_period = 5000 # seg faults if nonblocking rn...
         ):
         was_eval = not self.model.training
         self.model.train()
