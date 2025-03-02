@@ -271,7 +271,7 @@ class Experiment(ABC):
                         ## Diminish Viscosity for Better Approximation
                         if (epoch + 1 - self.total_pretrain_iters) % fd_scale_epoch_step == 0 and epoch + 1 > self.total_pretrain_iters:
                             fd_scale_i += 1
-                            print(f"Finite Difference Learning, diminshing viscosity (a, dx, dt) [{fd_weight_scales["alpha"][fd_scale_i], fd_weight_scales["delta_x"][fd_scale_i], fd_weight_scales["delta_t"][fd_scale_i]}] -> [{fd_weight_scales["alpha"][fd_scale_i], fd_weight_scales["delta_x"][fd_scale_i], fd_weight_scales["delta_t"][fd_scale_i]}]")
+                            # print(f"Finite Difference Learning, diminshing viscosity (a, dx, dt) [{fd_weight_scales["alpha"][fd_scale_i]:2.2f}, {fd_weight_scales["delta_x"][fd_scale_i]:2.2f}, {fd_weight_scales["delta_t"][fd_scale_i]:2.2f}] -> [{fd_weight_scales["alpha"][fd_scale_i]:2.2f}, {fd_weight_scales["delta_x"][fd_scale_i]:2.2f}, {fd_weight_scales["delta_t"][fd_scale_i]:2.2f}]")
 
                     boundary_values = gt['boundary_values']
                     dirichlet_masks = gt['dirichlet_masks']
