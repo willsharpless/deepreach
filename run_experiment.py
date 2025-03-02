@@ -68,6 +68,12 @@ if __name__ == '__main__':
     p.add_argument('--load_hopf_model_name', type=str, default='./runs/capacity_linear', help='Supervision model name')
     p.add_argument('--load_model_type', type=str, default='learned', choices=['learned', 'DP'], help='Type of loaded model') # FIXME someday actually use DP option
 
+    ## Finite Differencing Options
+    p.add_argument('--fin_diff', action='store_true', default=False, required=False, help='Finite Difference Learning: Uses finite diffs for grads and adds dissipation')
+    p.add_argument('--fd_as', type=float, nargs='+', default=[2.5, 2., 1.5, 1.], help="Define the dissipation coeffs for fin diff iters") # TODO: cts schedule?
+    p.add_argument('--fd_dxs', type=float, nargs='+', default=[0.7, 0.5, 0.3, 0.1], help="Define the spatial step size for fin diff iters")
+    p.add_argument('--fd_dts', type=float, nargs='+', default=[0.05, 0.03, 0.02, 0.01], help="Define the time step size for fin diff iters")
+
     use_wandb = p.parse_known_args()[0].use_wandb
     if use_wandb:
         p.add_argument('--wandb_project', type=str, default='deepreach_hopf_oct20', required=False, help='wandb project')
@@ -197,7 +203,10 @@ if __name__ == '__main__':
         opt.temporal_loss = False ## bug
         # opt.numpoints, opt.lr, opt.lr_decay_w = 60000, 1e-5, 1.
 
-    ## Clarity prints
+    if opt.fin_diff:
+        opt.no_curriculum = True
+
+    ## Clarity Prints for Wills Sanity
     print("\n\nTraining DeepReach,\n")
     if opt.capacity_test: print(" - using supervised learning of ground truth (capacity test)")
     elif opt.hopf_loss != 'none': 
@@ -224,11 +233,16 @@ if __name__ == '__main__':
                 print(f"  - decayed in a(n) {opt.hopf_loss_decay_type} fashion")
         if opt.nl_scale:
             print(f"  - nonlinearly transitioned by {100 * (opt.nl_scale_epoch_step/(opt.num_epochs-(opt.pretrain_iters+opt.hopf_pretrain_iters+opt.nl_scale_epoch_post))):2.1f} % per {opt.nl_scale_epoch_step} epochs")
+    elif opt.fin_diff:
+        print(f" - with the finite difference loss (decreasing viscosity in {len(opt.fd_as)} steps)")
+        print(f"   - FD alpha's: {opt.fd_as}")
+        print(f"   - FD d_x's:   {opt.fd_dxs}")
+        print(f"   - FD d_t's:   {opt.fd_dts}")
     else: 
         print(" - via the original method (baseline).")
     print("")
         
-    # start wandb
+    ## Start WandB and Save Configuration Parameters
     if use_wandb:
         wandb.init(
             project = opt.wandb_project,
@@ -362,7 +376,9 @@ if __name__ == '__main__':
             hopf_loss_decay_type=orig_opt.hopf_loss_decay_type, hopf_loss_decay_w=orig_opt.hopf_loss_decay_w, 
             reset_loss_w=orig_opt.reset_loss_w, reset_loss_period=orig_opt.reset_loss_period,
             nonlin_scale=orig_opt.nl_scale, nl_scale_epoch_step=orig_opt.nl_scale_epoch_step, nl_scale_epoch_post=orig_opt.nl_scale_epoch_post,
-            record_temporal_loss=orig_opt.temporal_loss)
+            record_temporal_loss=orig_opt.temporal_loss,
+            fin_diff=orig_opt.fin_diff, fd_alpha_scale = orig_opt.fd_as, fd_delta_x_scale = orig_opt.fd_dxs, fd_delta_t_scale = orig_opt.fd_dts,
+            )
 
     if (mode == 'all') or (mode == 'test'):
         experiment.test(

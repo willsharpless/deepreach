@@ -105,7 +105,9 @@ class Experiment(ABC):
             diff_con_loss_incr=False, hopf_loss_decay_type = 'exponential',
             nonlin_scale=False, nl_scale_epoch_step=10000, nl_scale_epoch_post=10000, 
             record_temporal_loss = False, 
-            deposit_blocking = True, deposit_blocking_period = 5000 # seg faults if nonblocking rn...
+            deposit_blocking = True, deposit_blocking_period = 5000, # seg faults if nonblocking rn...,
+            fin_diff = False, fd_alpha_scale = [2.5, 2., 1.5, 1.], 
+            fd_delta_x_scale = [0.7, 0.5, 0.3, 0.1], fd_delta_t_scale = [0.05, 0.03, 0.02, 0.01],
         ):
         was_eval = not self.model.training
         self.model.train()
@@ -160,11 +162,14 @@ class Experiment(ABC):
         if hopf_loss == 'lin_val_grad_diff':
             loss_weights['hopf_grad'] = loss_weights['hopf']
         og_loss_weights = loss_weights.copy()
-        
+
+        ## Finite Differencing Weights
+        fd_weight_scales = {'alpha': fd_alpha_scale, 'delta_x': fd_delta_x_scale, 'delta_t': fd_delta_t_scale}
+        fd_scale_epoch_step = int((epochs - self.total_pretrain_iters) / len(fd_alpha_scale))
+        fd_scale_i = 0
+        diss = 0.
+
         ## Train
-        # with profiler.profile(activities=[profiler.ProfilerActivity.CPU, profiler.ProfilerActivity.CUDA], 
-        #               record_shapes=True, 
-        #               profile_memory=True) as prof:
         with tqdm(total=len(train_dataloader) * epochs) as pbar:
 
             train_losses = []
@@ -224,15 +229,57 @@ class Experiment(ABC):
 
                     ## Pre-Loss Computation
                     if self.timing: start_time_2 = time.time()
+
+                    ## Evaluate Model
                     results_coord = self.dataset.dynamics.input_to_coord(model_results['model_in'].detach())
                     state_times, states = results_coord[..., 0], results_coord[..., 1:]
                     values = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1))
-                    dvs = self.dataset.dynamics.io_to_dv(model_results['model_in'], model_results['model_out'].squeeze(dim=-1))
+                    
+                    ## Compute Gradients via Jacobian Backprop
+                    if not fin_diff:
+                        dvs = self.dataset.dynamics.io_to_dv(model_results['model_in'], model_results['model_out'].squeeze(dim=-1))
+                        dvdt, dvdx = dvs[..., 0], dvs[..., 1:]
+                    
+                    ## Compute Gradients via Finite Diff
+                    else:
+                        # WAS TODO: move to fn like self.datasret.dynamics.io_to_dvfd(model_input['model_coords'], fd_weight_scales["delta_x"][fd_scale_i], fd_weight_scales["delta_t"][fd_scale_i])
+                        delta_x_mat = fd_weight_scales["delta_x"][fd_scale_i] * torch.hstack((torch.zeros(self.dataset.dynamics.state_dim, 1), torch.eye(self.dataset.dynamics.state_dim))).cuda()
+                        delta_t_mat = fd_weight_scales["delta_t"][fd_scale_i] * torch.hstack((torch.ones(1), torch.zeros(self.dataset.dynamics.state_dim))).unsqueeze(0).cuda()
+
+                        coords_U = model_input['model_coords'].unsqueeze(-2) + delta_x_mat
+                        coords_L = model_input['model_coords'].unsqueeze(-2) - delta_x_mat
+                        coords_t = model_input['model_coords'] + delta_t_mat
+
+                        model_results_U = self.model({'coords': coords_U})
+                        model_results_L = self.model({'coords': coords_L})
+                        model_results_t = self.model({'coords': coords_t})
+
+                        values_U = self.dataset.dynamics.io_to_value(model_results_U['model_in'].detach(), model_results_U['model_out'].squeeze(dim=-1))
+                        values_L = self.dataset.dynamics.io_to_value(model_results_L['model_in'].detach(), model_results_L['model_out'].squeeze(dim=-1))
+                        values_t = self.dataset.dynamics.io_to_value(model_results_t['model_in'].detach(), model_results_t['model_out'].squeeze(dim=-1))
+
+                        dvdx_fd_U = (values_U - values.unsqueeze(2).expand(-1,-1,self.dataset.dynamics.state_dim)) / fd_weight_scales["delta_x"][fd_scale_i]
+                        dvdx_fd_L = (values.unsqueeze(2).expand(-1,-1,self.dataset.dynamics.state_dim) - values_L) / fd_weight_scales["delta_x"][fd_scale_i]
+                        dvdt_fd   = (values_t - values) / fd_weight_scales["delta_t"][fd_scale_i]
+
+                        dvdx_fd = 0.5 * (dvdx_fd_U + dvdx_fd_L)
+                        diss_fd = fd_weight_scales["alpha"][fd_scale_i] * 0.5 * (dvdx_fd_U - dvdx_fd_L).sum(dim=-1)
+                        # WAS TODO: what if instead of all this we just added a back-prop laplacian term?
+
+                        dvdt, dvdx, diss = dvdt_fd, dvdx_fd, diss_fd
+
+                        ## Diminish Viscosity for Better Approximation
+                        if (epoch + 1 - self.total_pretrain_iters) % fd_scale_epoch_step == 0 and epoch + 1 > self.total_pretrain_iters:
+                            fd_scale_i += 1
+                            print(f"Finite Difference Learning, diminshing viscosity (a, dx, dt) [{fd_weight_scales["alpha"][fd_scale_i], fd_weight_scales["delta_x"][fd_scale_i], fd_weight_scales["delta_t"][fd_scale_i]}] -> [{fd_weight_scales["alpha"][fd_scale_i], fd_weight_scales["delta_x"][fd_scale_i], fd_weight_scales["delta_t"][fd_scale_i]}]")
+
                     boundary_values = gt['boundary_values']
+                    dirichlet_masks = gt['dirichlet_masks']
+
                     if self.dataset.dynamics.loss_type == 'brat_hjivi':
                         reach_values = gt['reach_values']
                         avoid_values = gt['avoid_values']
-                    dirichlet_masks = gt['dirichlet_masks']
+
                     if self.timing: print("Pre-loss Computation took:", time.time() - start_time_2)
 
                     if self.dataset.memory_tracking:
@@ -245,11 +292,11 @@ class Experiment(ABC):
 
                     ## Standard BRT
                     if self.dataset.dynamics.loss_type == 'brt_hjivi':
-                        losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'])
+                        losses = loss_fn(states, values, dvdt, dvdx, boundary_values, dirichlet_masks, model_results['model_out'], diss=diss)
                     
                     ## Standard BRAT
                     elif self.dataset.dynamics.loss_type == 'brat_hjivi':
-                        losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, reach_values, avoid_values, dirichlet_masks, model_results['model_out'])
+                        losses = loss_fn(states, values, dvdt, dvdx, boundary_values, reach_values, avoid_values, dirichlet_masks, model_results['model_out'], diss=diss)
                     
                     ## Linear Supervision BRT (non-baseline)
                     elif hopf_loss != 'none':
@@ -318,12 +365,11 @@ class Experiment(ABC):
                             print()
 
                         if hopf_loss == 'lin_val_grad_diff':
-                            losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, learned_hopf_values, hopf_grads, learned_hopf_grads, epoch, state_times)
+                            losses = loss_fn(states, values, dvdt, dvdx, boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, learned_hopf_values, hopf_grads, learned_hopf_grads, epoch, state_times)
                         else:
-                            losses = loss_fn(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, learned_hopf_values, epoch, state_times)
-                            # losses = loss_fn_baseline(states, values, dvs[..., 0], dvs[..., 1:], boundary_values, dirichlet_masks, model_results['model_out'])
-                            # print("\nUsing the loaded hopf values")
-
+                            losses = loss_fn(states, values, dvdt, dvdx, boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, learned_hopf_values, epoch, state_times)
+                            # losses = loss_fn_baseline(states, values, dvdt, dvdx, boundary_values, dirichlet_masks, model_results['model_out'])
+                            # print("\nUsing the loaded hopf values")                    
                     else:
                         raise NotImplementedError
                     
