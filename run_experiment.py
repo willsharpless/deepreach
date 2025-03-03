@@ -116,14 +116,15 @@ if __name__ == '__main__':
         p.add_argument('--deepreach_model', type=str, default='exact', required=False, choices=['exact', 'diff', 'vanilla'], help='deepreach model')
 
         # training options
-        p.add_argument('--epochs_til_ckpt', type=int, default=500, help='Time interval in seconds until checkpoint is saved.')
+        p.add_argument('--epochs_til_ckpt', type=int, default=1000, help='Time interval in seconds until checkpoint is saved.')
         p.add_argument('--steps_til_summary', type=int, default=100, help='Time interval in seconds until tensorboard summary is saved.')
         p.add_argument('--batch_size', type=int, default=1, help='Batch size used during training (irrelevant, since len(dataset) == 1).')
         p.add_argument('--lr_std', type=float, default=1e-5, help='learning rate. default=2e-6')
-        p.add_argument('--lr_decay_w', default=1., required=False, type=float, help='LR Exponential Decay Rate') # 1 or 0.9999
+        p.add_argument('--lr_decay_w', default=1., type=float, help='LR Exponential Decay Rate') # 1 or 0.9999
         p.add_argument('--num_epochs', type=int, default=30000, help='Number of epochs to train for.')
         p.add_argument('--clip_grad', default=0.0, type=float, help='Clip gradient.')
         p.add_argument('--use_lbfgs', default=False, type=bool, help='use L-BFGS.')
+        p.add_argument('--use_sgd', default=False, action='store_true', required=False, help='use SGD.')
         p.add_argument('--adj_rel_grads', default=False, type=bool, help='adjust the relative magnitude of the losses') # adds 0.05s/it FYI
         p.add_argument('--dirichlet_loss_divisor', default=1.0, required=False, type=float, help='What to divide the dirichlet loss by for loss reweighting')
         p.add_argument('--no_curr', default=False, action='store_true', help='Flag to turn off curriculum sampling')
@@ -202,9 +203,6 @@ if __name__ == '__main__':
         opt.hopf_loss = 'none'
         opt.temporal_loss = False ## bug
         # opt.numpoints, opt.lr, opt.lr_decay_w = 60000, 1e-5, 1.
-
-    if opt.fin_diff:
-        opt.no_curriculum = True
 
     ## Clarity Prints for Wills Sanity
     print("\n\nTraining DeepReach,\n")
@@ -368,7 +366,7 @@ if __name__ == '__main__':
         experiment.train(
             batch_size=orig_opt.batch_size, epochs=orig_opt.num_epochs, lr=orig_opt.lr_std, 
             steps_til_summary=orig_opt.steps_til_summary, epochs_til_checkpoint=orig_opt.epochs_til_ckpt, 
-            loss_fn=loss_fn, loss_fn_baseline=loss_fn_baseline, clip_grad=orig_opt.clip_grad, use_lbfgs=orig_opt.use_lbfgs, adjust_relative_grads=orig_opt.adj_rel_grads,
+            loss_fn=loss_fn, loss_fn_baseline=loss_fn_baseline, clip_grad=orig_opt.clip_grad, use_lbfgs=orig_opt.use_lbfgs, use_sgd=orig_opt.use_sgd, adjust_relative_grads=orig_opt.adj_rel_grads,
             val_x_resolution=orig_opt.val_x_resolution, val_y_resolution=orig_opt.val_y_resolution, val_z_resolution=orig_opt.val_z_resolution, val_time_resolution=orig_opt.val_time_resolution,
             use_CSL=orig_opt.use_CSL, CSL_lr=orig_opt.CSL_lr, CSL_dt=orig_opt.CSL_dt, epochs_til_CSL=orig_opt.epochs_til_CSL, num_CSL_samples=orig_opt.num_CSL_samples, CSL_loss_frac_cutoff=orig_opt.CSL_loss_frac_cutoff, max_CSL_epochs=orig_opt.max_CSL_epochs, CSL_loss_weight=orig_opt.CSL_loss_weight, CSL_batch_size=orig_opt.CSL_batch_size,
             dual_lr=orig_opt.dual_lr, lr_decay_w=orig_opt.lr_decay_w, lr_hopf=orig_opt.lr_hopf, lr_hopf_decay_w=orig_opt.lr_hopf_decay_w, 

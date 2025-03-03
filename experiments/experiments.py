@@ -104,7 +104,7 @@ class Experiment(ABC):
             reset_loss_w=False, reset_loss_period=0, 
             diff_con_loss_incr=False, hopf_loss_decay_type = 'exponential',
             nonlin_scale=False, nl_scale_epoch_step=10000, nl_scale_epoch_post=10000, 
-            record_temporal_loss = False, 
+            record_temporal_loss = False, use_sgd=False,
             deposit_blocking = True, deposit_blocking_period = 5000, # seg faults if nonblocking rn...,
             fin_diff = False, fd_alpha_scale = [2.5, 2., 1.5, 1.], 
             fd_delta_x_scale = [0.7, 0.5, 0.3, 0.1], fd_delta_t_scale = [0.05, 0.03, 0.02, 0.01],
@@ -117,14 +117,21 @@ class Experiment(ABC):
 
         ## Define Optimizers and Schedulers ## TODO, would SGD be better than Adam?
         if dual_lr and self.dataset.hopf_pretrain:
-            optim_hopf = torch.optim.Adam(lr=lr_hopf, params=self.model.parameters())
-            optim_std = torch.optim.Adam(lr=lr, params=self.model.parameters())
+            if use_sgd:
+                optim_hopf = torch.optim.SGD(params=self.model.parameters(), lr=lr_hopf, momentum=0.2)
+                optim_std = torch.optim.SGD(params=self.model.parameters(), lr=lr, momentum=0.2)
+            else:
+                optim_hopf = torch.optim.Adam(params=self.model.parameters(), lr=lr_hopf)
+                optim_std = torch.optim.Adam(params=self.model.parameters(), lr=lr)
             lr_scheduler_hopf = torch.optim.lr_scheduler.ExponentialLR(optimizer=optim_hopf, gamma=lr_hopf_decay_w)
             lr_scheduler_std = torch.optim.lr_scheduler.ExponentialLR(optimizer=optim_std, gamma=lr_decay_w)
             optim = optim_hopf
             lr_scheduler = lr_scheduler_hopf
         else:
-            optim = torch.optim.Adam(lr=lr, params=self.model.parameters())
+            if use_sgd:
+                optim = torch.optim.SGD(params=self.model.parameters(), lr=lr, momentum=0.2)
+            else:
+                optim = torch.optim.Adam(params=self.model.parameters(), lr=lr)
             lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer=optim, gamma=lr_decay_w)
 
         # copy settings from Raissi et al. (2019) and here 
@@ -148,7 +155,7 @@ class Experiment(ABC):
         ## Params
         total_steps = 0
         JIp_s_max, JIp_s = 0., 0.
-        total_pretrain_iters = self.dataset.pretrain_iters + self.dataset.hopf_pretrain_iters
+        total_pretrain_iters = self.dataset.pretrain_iters if hopf_loss=='none' else self.dataset.pretrain_iters + self.dataset.hopf_pretrain_iters
         self.total_pretrain_iters = total_pretrain_iters
         self.epochs = epochs
         nl_perc = 0.
@@ -269,10 +276,10 @@ class Experiment(ABC):
                         dvdt, dvdx, diss = dvdt_fd, dvdx_fd, diss_fd
 
                         ## Diminish Viscosity for Better Approximation
-                        if (epoch + 1 - self.total_pretrain_iters) % fd_scale_epoch_step == 0 and epoch + 1 > self.total_pretrain_iters:
+                        if (epoch + 1 - self.total_pretrain_iters) % fd_scale_epoch_step == 0 and epoch + 1 > self.total_pretrain_iters and fd_scale_i < len(fd_weight_scales["alpha"])-1:
+                            print(f'Finite Difference Learning, diminshing viscosity (a, dx, dt)=[{fd_weight_scales["alpha"][fd_scale_i]:2.2f}, {fd_weight_scales["delta_x"][fd_scale_i]:2.2f}, {fd_weight_scales["delta_t"][fd_scale_i]:2.2f}] -> [{fd_weight_scales["alpha"][fd_scale_i+1]:2.2f}, {fd_weight_scales["delta_x"][fd_scale_i+1]:2.2f}, {fd_weight_scales["delta_t"][fd_scale_i+1]:2.2f}]')
                             fd_scale_i += 1
-                            # print(f"Finite Difference Learning, diminshing viscosity (a, dx, dt) [{fd_weight_scales["alpha"][fd_scale_i]:2.2f}, {fd_weight_scales["delta_x"][fd_scale_i]:2.2f}, {fd_weight_scales["delta_t"][fd_scale_i]:2.2f}] -> [{fd_weight_scales["alpha"][fd_scale_i]:2.2f}, {fd_weight_scales["delta_x"][fd_scale_i]:2.2f}, {fd_weight_scales["delta_t"][fd_scale_i]:2.2f}]")
-
+                            
                     boundary_values = gt['boundary_values']
                     dirichlet_masks = gt['dirichlet_masks']
 
