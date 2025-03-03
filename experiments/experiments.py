@@ -346,9 +346,9 @@ class Experiment(ABC):
                             learned_hopf_values = values
                             if hopf_loss == 'lin_val_grad_diff':
                                 if not self.dataset.lambda_var:
-                                    learned_hopf_grads = dvs[..., 1:]
+                                    learned_hopf_grads = dvdx
                                 else:
-                                    learned_hopf_grads = dvs[..., 1:-1] # remove lambda grad
+                                    learned_hopf_grads = dvdx[..., :-1] # remove lambda grad
                         else:
                             model_results_hopf = self.model({'coords': gt['model_coords_hopf']})
                             learned_hopf_values = self.dataset.dynamics.io_to_value(model_results_hopf['model_in'].detach(), model_results_hopf['model_out'].squeeze(dim=-1))
@@ -521,7 +521,7 @@ class Experiment(ABC):
                                 log_dict["Max Smooth Jaccard Index over Time"] = JIp_s_max
                                 log_dict["Falsely Included percent over Time"] = FIp
                                 log_dict["Falsely Excluded percent over Time"] = FEp
-                                log_dict["Mean Absolute Spatial Gradient"] = torch.abs(dvs[..., 1:]).sum() / (self.dataset.numpoints * self.N)
+                                log_dict["Mean Absolute Spatial Gradient"] = torch.abs(dvdx).sum() / (self.dataset.numpoints * self.N)
                                 log_dict["Mean Squared Error of Value"] = Vmse
                                 if self.dataset.solve_grad:
                                     log_dict["Mean Squared Error of Spatial Gradient"] = DVXmse

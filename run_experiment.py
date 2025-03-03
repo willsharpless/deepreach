@@ -99,7 +99,7 @@ if __name__ == '__main__':
         # simulation data source options
         p.add_argument('--numpoints', type=int, default=65000, help='Number of points in simulation data source __getitem__.') # weird way to say batch size
         p.add_argument('--pretrain', action='store_true', default=True, required=False, help='Pretrain dirichlet conditions')
-        p.add_argument('--pretrain_iters', type=int, default=2000, required=False, help='Number of pretrain iterations')
+        p.add_argument('--pretrain_iters', type=int, default=500, required=False, help='Number of pretrain iterations')
         p.add_argument('--tMin', type=float, default=0.0, required=False, help='Start time of the simulation')
         p.add_argument('--tMax', type=float, default=1.0, required=False, help='End time of the simulation')
         p.add_argument('--counter_start', type=int, default=0, required=False, help='Defines the initial time for the curriculum training')
@@ -116,7 +116,7 @@ if __name__ == '__main__':
         p.add_argument('--deepreach_model', type=str, default='exact', required=False, choices=['exact', 'diff', 'vanilla'], help='deepreach model')
 
         # training options
-        p.add_argument('--epochs_til_ckpt', type=int, default=1000, help='Time interval in seconds until checkpoint is saved.')
+        p.add_argument('--epochs_til_ckpt', type=int, default=500, help='Time interval in seconds until checkpoint is saved.')
         p.add_argument('--steps_til_summary', type=int, default=100, help='Time interval in seconds until tensorboard summary is saved.')
         p.add_argument('--batch_size', type=int, default=1, help='Batch size used during training (irrelevant, since len(dataset) == 1).')
         p.add_argument('--lr_std', type=float, default=1e-5, help='learning rate. default=2e-6')

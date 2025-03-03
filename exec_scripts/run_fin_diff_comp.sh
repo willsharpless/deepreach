@@ -26,19 +26,19 @@ fd_as="--fd_as 2.5 2. 1.5 1."
 fd_dxs="--fd_dxs 0.7 0.5 0.3 0.1"
 fd_dts="--fd_dts 0.05 0.03 0.02 0.01"
 
-for i in $(seq 1 $seeds); do
-    python run_experiment.py $base_args $lin_sys_args --fin_diff $fd_as $fd_dxs $fd_dts --num_epochs 3000 --numpoints 1000 --lr_std 1e-2 $fd_names --seed $i
+# for i in $(seq 1 $seeds); do
+#     python run_experiment.py $base_args $lin_sys_args --fin_diff $fd_as $fd_dxs $fd_dts --num_epochs 3000 --numpoints 1000 --lr_std 1e-2 $fd_names --wandb_name L${N}D_FD_v1 --seed $i
 
-    python run_experiment.py $base_args $lin_sys_args --fin_diff $fd_as $fd_dxs $fd_dts --num_epochs 3000 --numpoints 1000 --lr_std 1e-3 $fd_names --seed $i
+#     python run_experiment.py $base_args $lin_sys_args --fin_diff $fd_as $fd_dxs $fd_dts --num_epochs 3000 --numpoints 1000 --lr_std 1e-3 $fd_names --wandb_name L${N}D_FD_v2 --seed $i
 
-    python run_experiment.py $base_args $lin_sys_args --fin_diff $fd_as $fd_dxs $fd_dts --num_epochs 30000 --numpoints 1000 --lr_std 1e-5 $fd_names --seed $i
+#     python run_experiment.py $base_args $lin_sys_args --fin_diff $fd_as $fd_dxs $fd_dts --num_epochs 30000 --numpoints 1000 --lr_std 1e-5 $fd_names --wandb_name L${N}D_FD_v3 --seed $i
 
-    python run_experiment.py $base_args $lin_sys_args --fin_diff $fd_as $fd_dxs $fd_dts --num_epochs 30000 --numpoints 1000 --lr_std 1e-6 $fd_names --seed $i
+#     python run_experiment.py $base_args $lin_sys_args --fin_diff $fd_as $fd_dxs $fd_dts --num_epochs 30000 --numpoints 1000 --lr_std 1e-6 $fd_names --wandb_name L${N}D_FD_v4 --seed $i
 
-    python run_experiment.py $base_args $lin_sys_args --fin_diff $fd_as $fd_dxs $fd_dts --num_epochs 30000 --numpoints 10000 --lr_std 1e-5 $fd_names --seed $i
+#     python run_experiment.py $base_args $lin_sys_args --fin_diff $fd_as $fd_dxs $fd_dts --num_epochs 30000 --numpoints 10000 --lr_std 1e-5 $fd_names --wandb_name L${N}D_FD_v5 --seed $i
 
-    python run_experiment.py $base_args $lin_sys_args --fin_diff $fd_as $fd_dxs $fd_dts --num_epochs 30000 --numpoints 10000 --lr_std 1e-6 $fd_names --seed $i
-done
+#     python run_experiment.py $base_args $lin_sys_args --fin_diff $fd_as $fd_dxs $fd_dts --num_epochs 30000 --numpoints 10000 --lr_std 1e-6 $fd_names --wandb_name L${N}D_FD_v6 --seed $i
+# done
 
 # DeepReach/PINN baseline
 
