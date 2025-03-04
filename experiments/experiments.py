@@ -513,7 +513,8 @@ class Experiment(ABC):
                         if self.use_wandb:
                             log_dict = {
                                 'step': epoch,
-                                'train_loss': train_loss}
+                                'train_loss': train_loss,
+                                'iter_time_sec': iter_time}
                             
                             for loss_name, loss in losses.items():
                                 log_dict[loss_name + "_loss"] = loss
