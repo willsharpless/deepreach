@@ -52,7 +52,7 @@ if __name__ == '__main__':
     p.add_argument('--zerolambda_LS', action='store_true', default=False, required=False, help='Will limit linear supervision to loss on lambda = 0 data (for lambda-variation models only AND loaded models)')
     p.add_argument('--LS_w_time_curr', action='store_true', default=False, required=False, help='Do linear supervision with a temporal curriculum')
 
-    p.add_argument('--gt_metrics', action='store_true', default=True, required=False, help='Compute and score the learned value and set (needs ground truth)')
+    p.add_argument('--gt_metrics', action='store_true', default=False, required=False, help='Compute and score the learned value and set (needs ground truth)')
     p.add_argument('--temporal_loss', action='store_true', default=False, required=False, help='Compute the loss over time chunks (slower)')
     p.add_argument('--capacity_test', action='store_true', default=False, required=False, help='Will use supervised-learning to train with the true solution (needs ground truth)')
     p.add_argument('--debug_params', action='store_true', default=False, required=False, help='Quick params for debugging')
@@ -192,7 +192,7 @@ if __name__ == '__main__':
     if opt.hopf_loss == 'none':
         opt.diff_con_loss_incr = False
 
-    if opt.baseline:
+    if mode != 'test' and opt.baseline:
         opt.hopf_loss = 'none'
         opt.temporal_loss = False ## bug
         # opt.numpoints, opt.lr, opt.lr_decay_w = 60000, 1e-5, 1.
@@ -290,6 +290,8 @@ if __name__ == '__main__':
         dynamics_inst.loss_type = 'brt_hjivi_hopf' ## TODO: why is loss type in dynamics?
 
     if orig_opt.load_hopf_model:
+        if mode=="test":
+            load_dir = orig_opt.load_hopf_model_name
         with open(os.path.join(load_dir, 'orig_opt.pickle'), 'rb') as opt_file:
             loaded_opt = pickle.load(opt_file)
 
@@ -370,7 +372,7 @@ if __name__ == '__main__':
             last_checkpoint=orig_opt.num_epochs, checkpoint_dt=orig_opt.epochs_til_ckpt, 
             checkpoint_toload=opt.checkpoint_toload, dt=opt.dt,
             num_scenarios=opt.num_scenarios, num_violations=opt.num_violations, 
-            set_type='BRT' if orig_opt.minWith in ['zero', 'target'] else 'BRS', control_type=opt.control_type, data_step=opt.data_step)
+            set_type='BRT' if orig_opt.minWith in ['zero', 'target'] else 'BRS', control_type=opt.control_type, data_step=opt.data_step, lambda_var=orig_opt.dynamics_class.endswith("lambda"))
         
     if orig_opt.solve_hopf and dataset.hjpool:
         print("Retiring hopf-julia workers and shared memory.")

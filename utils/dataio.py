@@ -361,7 +361,8 @@ class ReachabilityDataset(Dataset):
     def init_groundtruth_tests(self, load_lambda_var=False, make_benchmark_gts=False):
         
         if not(self.dp_manual_load):
-
+            # jl.seval("using Pkg")
+            jl.seval('using Pkg; Pkg.add(["JLD", "JLD2", "Interpolations"])')
             jl.seval("using JLD, JLD2, Interpolations")
             fast_interp_exec = """
             function fast_interp(_V_itp, tXg; compute_grad=false)
