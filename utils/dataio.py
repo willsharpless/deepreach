@@ -3,6 +3,7 @@ import numpy as np
 from torch.utils.data import Dataset
 import time
 import os, sys
+import pickle as pkl
 import gc
 from tqdm.autonotebook import tqdm
 import multiprocessing as mp
@@ -132,7 +133,7 @@ class ReachabilityDataset(Dataset):
                 
         ## Get Ground Truth for Special N-Dimensional Decomposable LessLinear System
         if record_gt_metrics:
-            self.init_groundtruth_tests(load_lambda_var=self.lambda_var, make_benchmark_gts=self.make_benchmark_gts)
+            self.init_groundtruth_tests(load_lambda_var=self.lambda_var, make_benchmark_gts=self.make_benchmark_gts, manual_load=self.dp_manual_load)
 
         ## Make a bank of evaluated points, instead of evaluating online
         if self.make_bank:
@@ -358,10 +359,139 @@ class ReachabilityDataset(Dataset):
                     return V, DV
                 self.V_hopf_grad = V_N_hopf_grad_itp
     
-    def init_groundtruth_tests(self, load_lambda_var=False, make_benchmark_gts=False):
+    def init_groundtruth_tests(self, load_lambda_var=False, make_benchmark_gts=False, manual_load=False, python_gt=True, make_gt_solutions=False, decomposed=True):
         
-        if not(self.dp_manual_load):
+        ## Manual load (WandB sweeps need this)
+        if manual_load:
+            pass
+        
+        ## Python Ground Truth Solutions
+        elif python_gt:
 
+            ## Load HJR solutions
+            if not make_gt_solutions:
+                print("Loading ground truth solutions (hj_reachability.py)...")
+                solution_DP = pkl.load(open(f"value_fns/{self.dynamics.name}/{self.gt_key}", "rb"))
+            
+            ## Solve hj_reachability.py for DP Solutions
+            else:
+                # print("Generating ground truth solutions with dynamic programming (hj_reachability.py)...")
+                # solution_DP = solve_hjr_DP()
+                raise NotImplementedError
+
+            V_DP_sub = solution_DP["V"]
+            grid_params = solution_DP["grid_params"]
+            solution_grid = hj.Grid.from_lattice_parameters_and_boundary_conditions(hj.sets.Box(grid_params["lbs"] - grid_params["grid_pad"],
+                                                                                                grid_params["ubs"] + grid_params["grid_pad"]), 
+                                                                                                [grid_params["grid_L"] for _ in range(2)])
+
+            if decomposed:
+                
+                V_DP_sub_1 = solution_DP["V_1"]
+                V_DP_sub_2 = solution_DP["V_2"]
+
+            ## Ground Truth interpolated composition of values and gradients
+            def V_N_DP_itp_combo(tXg, V_DP_base, grid, compute_grad=False, shared_x0=True, dim_sub=1):
+                
+                V = 0 * tXg[0,:]
+                
+                for i in range(self.N-1):
+
+                    if shared_x0:
+                        # state_key = [0, 1, 2*i]
+                        state_key = [0, 1, 1 + dim_sub*i : 1 + dim_sub*(i+1)]
+                    else:
+                        # state_key = [0, dim_sub*i + 1, dim_sub*i + 2]
+                        state_key = [0, dim_sub*i : dim_sub*(i+1)]
+                    
+                    V += grid.interpolate(V_DP_base, state=tXg[state_key, :])
+                
+                if not compute_grad:
+                    return V
+                
+                # Compute Central Difference for Gradient
+                else:
+
+                    DV = 0 * tXg[1:,:].t()
+                    # DV = 0 * tXg.t() # TODO: ADD TEMPORAL GRADS!
+
+                    # for i in range(self.N-1):
+                    #     for j in range(tXg.shape[1]):
+                    #         i = np.argmin(np.abs(self.times - tXg[0, j]))
+                    #         DV_DP = grid.grad_values(V_DP_base[i,...])
+                    #         if shared_x0:
+                    #             DV[j,:] += grid.interpolate(DV_DP, state=tXg[[0, 1, 2*i], j])
+                    #             # V += grid.interpolate(DV_DP, tXg[[0, 1, 1 + dim_sub*i : 1 + dim_sub*(i+1)], :])
+                    #         else:
+                    #             # V += grid.interpolate(DV_DP, tXg[[0, dim_sub*i + 1, dim_sub*i + 2], :])
+                    #             DV[j,:] += grid.interpolate(DV_DP, tXg[[0, dim_sub*i : dim_sub*(i+1)], j])
+
+                    fd_delta_x = 0.01
+                    # fd_delta_t = 0.01 # TODO: ADD TEMPORAL GRADS!
+
+                    delta_x_mat = fd_delta_x * torch.hstack((torch.zeros(self.dynamics.state_dim, 1), torch.eye(self.dynamics.state_dim)))
+                    # delta_t_mat = fd_delta_t * torch.hstack((torch.ones(1), torch.zeros(self.dynamics.state_dim))).unsqueeze(0)  # TODO: ADD TEMPORAL GRADS!
+                    
+                    tXg_U = tXg.unsqueeze(-2) + delta_x_mat
+                    tXg_L = tXg.unsqueeze(-2) - delta_x_mat
+                    # tXg_Ut = tXg + delta_t_mat # TODO: ADD TEMPORAL GRADS!
+                    # tXg_Lt = tXg - delta_t_mat # TODO: ADD TEMPORAL GRADS!
+
+                    for i in range(self.N-1):
+
+                        if shared_x0:
+                            # state_key = [0, 1, 2*i]
+                            state_key = [0, 1, 1 + dim_sub*i : 1 + dim_sub*(i+1)]
+                        else:
+                            # state_key = [0, dim_sub*i + 1, dim_sub*i + 2]
+                            state_key = [0, dim_sub*i : dim_sub*(i+1)]
+
+                        values_U = grid.interpolate(V_DP_base, state=tXg_U[state_key, :])
+                        values_L = grid.interpolate(V_DP_base, state=tXg_L[state_key, :])
+                        # values_Ut = grid.interpolate(V_DP_base, state=tXg_Ut[state_key, :]) # TODO: ADD TEMPORAL GRADS!
+                        # values_Lt = grid.interpolate(V_DP_base, state=tXg_Lt[state_key, :]) # TODO: ADD TEMPORAL GRADS!
+
+                        DV_DP = (values_U - values_L) / (2 * fd_delta_x) 
+                        # DV_DP = (values_Ut - values_Lt) / (2 * fd_delta_t) # TODO: ADD TEMPORAL GRADS!
+                        
+                        DV += DV_DP   
+                    
+                    return V, DV # TODO multiply by 1/N?
+
+            def V_N_DP_itp(tXg):
+                return V_N_DP_itp_combo(tXg, V_DP_sub, solution_grid, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+            
+            self.V_DP = V_N_DP_itp
+            
+            if decomposed:
+
+                def V_N_DP_1_itp(tXg):
+                    return V_N_DP_itp_combo(tXg, V_DP_sub_1, solution_grid, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+                def V_N_DP_2_itp(tXg):
+                    return V_N_DP_itp_combo(tXg, V_DP_sub_2, solution_grid, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+
+                self.V_DP_1 = V_N_DP_1_itp
+                self.V_DP_2 = V_N_DP_2_itp
+
+            if self.solve_grad:
+
+                def V_N_DP_itp_grad(tXg):
+                    return V_N_DP_itp_combo(tXg, V_DP_sub, solution_grid, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+
+                self.V_DP_grad = V_N_DP_itp_grad
+                
+                if decomposed:
+
+                    def V_N_DP_1_itp_grad(tXg):
+                        return V_N_DP_itp_combo(tXg, V_DP_sub_1, solution_grid, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+                    def V_N_DP_2_itp_grad(tXg):
+                        return V_N_DP_itp_combo(tXg, V_DP_sub_2, solution_grid, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+
+                    self.V_DP_1_grad = V_N_DP_1_itp_grad
+                    self.V_DP_2_grad = V_N_DP_2_itp_grad
+
+        ## Julia-Based Ground Truth Solutions (specific to "Linear Semi-Supervision" paper)
+        else:
             jl.seval("using JLD, JLD2, Interpolations")
             fast_interp_exec = """
             function fast_interp(_V_itp, tXg; compute_grad=false)
@@ -393,23 +523,23 @@ class ReachabilityDataset(Dataset):
                     self.V_DP_grad = lambda tXg: torch.from_numpy(self.fast_interp(self.V_DP_itp, tXg.numpy(), compute_grad=True).to_numpy())
 
             elif self.N > 2:
-                def V_N_DP_itp_combo(tXg):
+                def V_N_DP_itp_combo_julia(tXg):
                     V = 0 * tXg[0,:]
                     for i in range(self.N-1):
                         V += torch.from_numpy(self.fast_interp(self.V_DP_itp, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
                     return V
-                self.V_DP = V_N_DP_itp_combo
+                self.V_DP = V_N_DP_itp_combo_julia
 
                 self.V_DP_linear_itp = LessLinear2D_interpolations["g0_m0_a0"]
-                def V_N_DP_linear_itp_combo(tXg):
+                def V_N_DP_linear_itp_combo_julia(tXg):
                     V = 0 * tXg[0,:]
                     for i in range(self.N-1):
                         V += torch.from_numpy(self.fast_interp(self.V_DP_linear_itp, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
                     return V
-                self.V_DP_linear = V_N_DP_linear_itp_combo # for plotting the BRT of Linear Solution
+                self.V_DP_linear = V_N_DP_linear_itp_combo_julia # for plotting the BRT of Linear Solution
 
                 if self.solve_grad:
-                    def V_N_DP_itp_grad_combo(tXg):
+                    def V_N_DP_itp_grad_combo_julia(tXg):
                         V = 0 * tXg[0,:]
                         DV = 0 * tXg[1:,:].t()
                         for i in range(self.N-1):
@@ -417,31 +547,31 @@ class ReachabilityDataset(Dataset):
                             V += torch.from_numpy(Vi.to_numpy())
                             DV[:, [0, 1+i]] += torch.from_numpy(DVi.to_numpy()) # assumes xN first
                         return V, DV
-                    self.V_DP_grad = V_N_DP_itp_grad_combo
+                    self.V_DP_grad = V_N_DP_itp_grad_combo_julia
 
                 if load_lambda_var:
                     LessLinear2D_interpolations_lam = jl.load(self.llnd_path + f"interps/LessLinear2D1i_interpolations_res1e-2_r{int(100*self.dynamics.goalR_2d)}e-2_c{int(abs(self.dynamics.gamma))}_lambdavar.jld", "LessLinear2D_interpolations")
                     self.V_DP_inlam1_itp = LessLinear2D_interpolations_lam[model_key + f"_lp{int(10 * self.lambda_int_1):1d}"]
                     self.V_DP_inlam2_itp = LessLinear2D_interpolations_lam[model_key + f"_lp{int(10 * self.lambda_int_2):1d}"]
                     self.V_DP_inlam3_itp = LessLinear2D_interpolations_lam[model_key + f"_lp{int(10 * self.lambda_int_3):1d}"]
-                    def V_N_DP_inlam1_itp_combo(tXg):
+                    def V_N_DP_inlam1_itp_combo_julia(tXg):
                         V = 0 * tXg[0,:]
                         for i in range(self.N-1):
                             V += torch.from_numpy(self.fast_interp(self.V_DP_inlam1_itp, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
                         return V
-                    def V_N_DP_inlam2_itp_combo(tXg):
+                    def V_N_DP_inlam2_itp_combo_julia(tXg):
                         V = 0 * tXg[0,:]
                         for i in range(self.N-1):
                             V += torch.from_numpy(self.fast_interp(self.V_DP_inlam2_itp, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
                         return V
-                    def V_N_DP_inlam3_itp_combo(tXg):
+                    def V_N_DP_inlam3_itp_combo_julia(tXg):
                         V = 0 * tXg[0,:]
                         for i in range(self.N-1):
                             V += torch.from_numpy(self.fast_interp(self.V_DP_inlam3_itp, tXg[[0, 1, 2+i], :].numpy()).to_numpy())
                         return V
-                    self.V_DP_inlam1 = V_N_DP_inlam1_itp_combo # for plotting the BRT of Linear Solution
-                    self.V_DP_inlam2 = V_N_DP_inlam2_itp_combo # for plotting the BRT of Linear Solution
-                    self.V_DP_inlam3 = V_N_DP_inlam3_itp_combo # for plotting the BRT of Linear Solution
+                    self.V_DP_inlam1 = V_N_DP_inlam1_itp_combo_julia # for plotting the BRT of Linear Solution
+                    self.V_DP_inlam2 = V_N_DP_inlam2_itp_combo_julia # for plotting the BRT of Linear Solution
+                    self.V_DP_inlam3 = V_N_DP_inlam3_itp_combo_julia # for plotting the BRT of Linear Solution
                 
                 if make_benchmark_gts:
                     self.V_DP_itp_b1 = LessLinear2D_interpolations["g20_m0_a0"]
@@ -449,7 +579,7 @@ class ReachabilityDataset(Dataset):
                     self.V_DP_itp_b3 = LessLinear2D_interpolations["g-20_m-20_a1"]
                     self.V_DP_itp_b4 = LessLinear2D_interpolations["g20_m-20_a1"]
 
-                    def V_N_DP_b1_itp_grad_combo(tXg):
+                    def V_N_DP_b1_itp_grad_combo_julia(tXg):
                         V = 0 * tXg[0,:]
                         DV = 0 * tXg[1:,:].t()
                         for i in range(self.N-1):
@@ -458,7 +588,7 @@ class ReachabilityDataset(Dataset):
                             DV[:, [0, 1+i]] += torch.from_numpy(DVi.to_numpy()) # assumes xN first
                         return V, DV
                     
-                    def V_N_DP_b2_itp_grad_combo(tXg):
+                    def V_N_DP_b2_itp_grad_combo_julia(tXg):
                         V = 0 * tXg[0,:]
                         DV = 0 * tXg[1:,:].t()
                         for i in range(self.N-1):
@@ -467,7 +597,7 @@ class ReachabilityDataset(Dataset):
                             DV[:, [0, 1+i]] += torch.from_numpy(DVi.to_numpy()) # assumes xN first
                         return V, DV
                     
-                    def V_N_DP_b3_itp_grad_combo(tXg):
+                    def V_N_DP_b3_itp_grad_combo_julia(tXg):
                         V = 0 * tXg[0,:]
                         DV = 0 * tXg[1:,:].t()
                         for i in range(self.N-1):
@@ -476,7 +606,7 @@ class ReachabilityDataset(Dataset):
                             DV[:, [0, 1+i]] += torch.from_numpy(DVi.to_numpy()) # assumes xN first
                         return V, DV
                     
-                    def V_N_DP_b4_itp_grad_combo(tXg):
+                    def V_N_DP_b4_itp_grad_combo_julia(tXg):
                         V = 0 * tXg[0,:]
                         DV = 0 * tXg[1:,:].t()
                         for i in range(self.N-1):
@@ -485,10 +615,10 @@ class ReachabilityDataset(Dataset):
                             DV[:, [0, 1+i]] += torch.from_numpy(DVi.to_numpy()) # assumes xN first
                         return V, DV      
                                  
-                    self.V_DP_grad_b1 = V_N_DP_b1_itp_grad_combo
-                    self.V_DP_grad_b2 = V_N_DP_b2_itp_grad_combo
-                    self.V_DP_grad_b3 = V_N_DP_b3_itp_grad_combo
-                    self.V_DP_grad_b4 = V_N_DP_b4_itp_grad_combo
+                    self.V_DP_grad_b1_julia = V_N_DP_b1_itp_grad_combo
+                    self.V_DP_grad_b2_julia = V_N_DP_b2_itp_grad_combo
+                    self.V_DP_grad_b3_julia = V_N_DP_b3_itp_grad_combo
+                    self.V_DP_grad_b4_julia = V_N_DP_b4_itp_grad_combo
 
         ## Define a fixed spatiotemporal grid to score Jaccard
 
@@ -575,7 +705,7 @@ class ReachabilityDataset(Dataset):
             #     new_coords = torch.cat((times, self.model_states_grid), dim=1) 
             #     self.model_coords_grid_allt_hi = torch.cat((self.model_coords_grid_allt_hi, new_coords), dim=0) 
 
-        ## Precompute value & safe-set on grid for ground truth
+        ## Precompute value, gradient & safe-set on grid for ground truth
 
         if self.solve_grad:
             self.values_DP_grid, self.value_grads_DP_grid = self.V_DP_grad(self.dynamics.input_to_coord(self.model_coords_grid_allt).t())
