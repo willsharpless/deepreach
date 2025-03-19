@@ -13,6 +13,9 @@ import warnings
 warnings.filterwarnings("ignore",message="torch was imported before juliacall. This may cause a segfault.*",category=UserWarning,module="juliacall")
 from juliacall import Main as jl, convert as jlconvert
 
+import matplotlib.pyplot as plt ## TODO: remove later
+import matplotlib as mpl ## TODO: remove later
+
 # uses model input and real boundary fn
 class ReachabilityDataset(Dataset):
     def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, 
@@ -367,31 +370,50 @@ class ReachabilityDataset(Dataset):
         
         ## Python Ground Truth Solutions
         elif python_gt:
+            
+            # TODO: just for testing, remove later
+            self.dynamics.name = "Conveyor"
+            self.gt_key = "axes/bounded/Conveyor2D_axes_lin_BRAAT_bdbc"
 
             ## Load HJR solutions
             if not make_gt_solutions:
-                print("Loading ground truth solutions (hj_reachability.py)...")
-                solution_DP = pkl.load(open(f"value_fns/{self.dynamics.name}/{self.gt_key}.npz", "rb"))
-                grid_params = pkl.load(open(f"value_fns/{self.dynamics.name}/{self.dynamics.name}_base_params.npz", "rb"))
-            
+
+                print(f"Loading *{self.dynamics.name}/{self.gt_key}* ground truth solutions (hj_reachability.py)...")
+
+                grid_params = np.load(f"value_fns/{self.dynamics.name}/{self.dynamics.name}_base_params.npz")
+                
+                solution_grid = hj.Grid.from_lattice_parameters_and_boundary_conditions(hj.sets.Box(
+                    grid_params["lbs"] - grid_params["grid_pad"],
+                    grid_params["ubs"] + grid_params["grid_pad"]), 
+                    [grid_params["grid_L"] for _ in range(2)])
+
+                state_scale = (grid_params["ubs"] - grid_params["lbs"])/2
+                state_center = (grid_params["ubs"] + grid_params["lbs"])/2
+                self.dynamics.state_scale = state_scale
+                self.dynamics.state_center = state_center # TODO move these?
+
+                V_DP_sub = np.load(f"value_fns/{self.dynamics.name}/{self.gt_key}_V.npz")
+
+                if self.dynamics.name == "Conveyor":
+                    
+                    V_DP_sub_1 = np.load(f"value_fns/{self.dynamics.name}/{self.gt_key}_Va.npz")
+
+                elif self.dynamics.name == "Canoe":
+                    
+                    V_DP_sub_1 = np.load(f"value_fns/{self.dynamics.name}/{self.gt_key}_V1.npz")
+                    V_DP_sub_2 = np.load(f"value_fns/{self.dynamics.name}/{self.gt_key}_V2.npz")
+                
+                else:
+                    raise NotImplementedError
+                
             ## Solve hj_reachability.py for DP Solutions
             else:
                 # print("Generating ground truth solutions with dynamic programming (hj_reachability.py)...")
                 # solution_DP = solve_hjr_DP()
                 raise NotImplementedError
 
-            V_DP_sub = solution_DP["V"]
-            solution_grid = hj.Grid.from_lattice_parameters_and_boundary_conditions(hj.sets.Box(grid_params["lbs"] - grid_params["grid_pad"],
-                                                                                                grid_params["ubs"] + grid_params["grid_pad"]), 
-                                                                                                [grid_params["grid_L"] for _ in range(2)])
-
-            if decomposed:
-                
-                V_DP_sub_1 = solution_DP["V_1"]
-                V_DP_sub_2 = solution_DP["V_2"]
-
             ## Ground Truth interpolated composition of values and gradients
-            def V_N_DP_itp_combo(tXg, V_DP_base, grid, compute_grad=False, shared_x0=True, dim_sub=1):
+            def V_N_DP_itp_combo(tXg, V_DP_base, grid, compute_grad=False, shared_x0=True, dim_sub=1, scale=np.ones(3), center=np.zeros(3)):
                 
                 V = 0 * tXg[0,:]
                 
@@ -404,27 +426,30 @@ class ReachabilityDataset(Dataset):
                         # state_key = [0, dim_sub*i + 1, dim_sub*i + 2]
                         state_key = [0, dim_sub*i : dim_sub*(i+1)]
                     
-                    V += grid.interpolate(V_DP_base, state=tXg[state_key, :])
+                    V += grid.interpolate(V_DP_base, state = tXg[state_key, :] * scale + center)
                 
                 if not compute_grad:
                     return V
                 
-                # Compute Central Difference for Gradient
+                ## Compute Central Difference for Gradient
                 else:
 
                     DV = 0 * tXg[1:,:].t()
                     # DV = 0 * tXg.t() # TODO: ADD TEMPORAL GRADS!
 
-                    # for i in range(self.N-1):
-                    #     for j in range(tXg.shape[1]):
-                    #         i = np.argmin(np.abs(self.times - tXg[0, j]))
-                    #         DV_DP = grid.grad_values(V_DP_base[i,...])
-                    #         if shared_x0:
-                    #             DV[j,:] += grid.interpolate(DV_DP, state=tXg[[0, 1, 2*i], j])
-                    #             # V += grid.interpolate(DV_DP, tXg[[0, 1, 1 + dim_sub*i : 1 + dim_sub*(i+1)], :])
-                    #         else:
-                    #             # V += grid.interpolate(DV_DP, tXg[[0, dim_sub*i + 1, dim_sub*i + 2], :])
-                    #             DV[j,:] += grid.interpolate(DV_DP, tXg[[0, dim_sub*i : dim_sub*(i+1)], j])
+                    for i in range(self.N-1):
+                        for j in range(tXg.shape[1]):
+                            i = np.argmin(np.abs(self.times - tXg[0, j]))
+                            DV_DP = grid.grad_values(V_DP_base[i,...])
+                            if shared_x0:
+                                DV[j,:] += grid.interpolate(DV_DP, state = tXg[[0, 1, 2*i], j] * scale + center)
+                                # V += grid.interpolate(DV_DP, state = tXg[[0, 1, 1 + dim_sub*i : 1 + dim_sub*(i+1)], :] * scale + center)
+                            else:
+                                # V += grid.interpolate(DV_DP, state = tXg[[0, dim_sub*i + 1, dim_sub*i + 2], :] * scale + center)
+                                DV[j,:] += grid.interpolate(DV_DP, state = tXg[[0, dim_sub*i : dim_sub*(i+1)], j] * scale + center)
+
+                    DV = 0 * tXg[1:,:].t()
+                    # DV = 0 * tXg.t() # TODO: ADD TEMPORAL GRADS!
 
                     fd_delta_x = 0.01
                     # fd_delta_t = 0.01 # TODO: ADD TEMPORAL GRADS!
@@ -446,8 +471,8 @@ class ReachabilityDataset(Dataset):
                             # state_key = [0, dim_sub*i + 1, dim_sub*i + 2]
                             state_key = [0, dim_sub*i : dim_sub*(i+1)]
 
-                        values_U = grid.interpolate(V_DP_base, state=tXg_U[state_key, :])
-                        values_L = grid.interpolate(V_DP_base, state=tXg_L[state_key, :])
+                        values_U = grid.interpolate(V_DP_base, state = tXg_U[state_key, :] * scale + center)
+                        values_L = grid.interpolate(V_DP_base, state = tXg_L[state_key, :] * scale + center)
                         # values_Ut = grid.interpolate(V_DP_base, state=tXg_Ut[state_key, :]) # TODO: ADD TEMPORAL GRADS!
                         # values_Lt = grid.interpolate(V_DP_base, state=tXg_Lt[state_key, :]) # TODO: ADD TEMPORAL GRADS!
 
@@ -459,16 +484,16 @@ class ReachabilityDataset(Dataset):
                     return V, DV # TODO multiply by 1/N?
 
             def V_N_DP_itp(tXg):
-                return V_N_DP_itp_combo(tXg, V_DP_sub, solution_grid, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+                return V_N_DP_itp_combo(tXg, V_DP_sub, solution_grid, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, scale=self.dynamics.state_scale, center=self.dynamics.state_center)
             
             self.V_DP = V_N_DP_itp
             
             if decomposed:
 
                 def V_N_DP_1_itp(tXg):
-                    return V_N_DP_itp_combo(tXg, V_DP_sub_1, solution_grid, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+                    return V_N_DP_itp_combo(tXg, V_DP_sub_1, solution_grid, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, scale=self.dynamics.state_scale, center=self.dynamics.state_center)
                 def V_N_DP_2_itp(tXg):
-                    return V_N_DP_itp_combo(tXg, V_DP_sub_2, solution_grid, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+                    return V_N_DP_itp_combo(tXg, V_DP_sub_2, solution_grid, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, scale=self.dynamics.state_scale, center=self.dynamics.state_center)
 
                 self.V_DP_1 = V_N_DP_1_itp
                 self.V_DP_2 = V_N_DP_2_itp
@@ -476,22 +501,23 @@ class ReachabilityDataset(Dataset):
             if self.solve_grad:
 
                 def V_N_DP_itp_grad(tXg):
-                    return V_N_DP_itp_combo(tXg, V_DP_sub, solution_grid, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+                    return V_N_DP_itp_combo(tXg, V_DP_sub, solution_grid, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, scale=self.dynamics.state_scale, center=self.dynamics.state_center)
 
                 self.V_DP_grad = V_N_DP_itp_grad
                 
                 if decomposed:
 
                     def V_N_DP_1_itp_grad(tXg):
-                        return V_N_DP_itp_combo(tXg, V_DP_sub_1, solution_grid, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+                        return V_N_DP_itp_combo(tXg, V_DP_sub_1, solution_grid, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, scale=self.dynamics.state_scale, center=self.dynamics.state_center)
                     def V_N_DP_2_itp_grad(tXg):
-                        return V_N_DP_itp_combo(tXg, V_DP_sub_2, solution_grid, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+                        return V_N_DP_itp_combo(tXg, V_DP_sub_2, solution_grid, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, scale=self.dynamics.state_scale, center=self.dynamics.state_center)
 
                     self.V_DP_1_grad = V_N_DP_1_itp_grad
                     self.V_DP_2_grad = V_N_DP_2_itp_grad
+            
 
-        ## Julia-Based Ground Truth Solutions (specific to "Linear Semi-Supervision" paper)
-        else:
+        else: ## Julia-Based Ground Truth Solutions (specific to "Linear Semi-Supervision" paper)
+
             jl.seval("using JLD, JLD2, Interpolations")
             fast_interp_exec = """
             function fast_interp(_V_itp, tXg; compute_grad=false)
@@ -623,7 +649,7 @@ class ReachabilityDataset(Dataset):
         ## Define a fixed spatiotemporal grid to score Jaccard
 
         self.n_grid_t_pts, self.n_grid_t_pts_hi = 5, 20
-        xig = torch.arange(-0.99, 1.01, 0.02) # 100 x 100
+        xig = torch.arange(-0.99, 1.01, 0.02) # 100 x 100 # NOTE: assumes normal space
         self.X1g, self.X2g = torch.meshgrid(xig, xig)
         self.model_states_grid = torch.cat((self.X1g.ravel().reshape((1,xig.size()[0]**2)), self.X2g.ravel().reshape((1,xig.size()[0]**2))), dim=0).t()
         self.n_grid_pts = xig.size()[0]**2
@@ -726,6 +752,55 @@ class ReachabilityDataset(Dataset):
         self.model_coords_grid_allt = self.model_coords_grid_allt.cuda()
         # self.model_coords_grid_allt_hi = self.model_coords_grid_allt_hi.cuda()
         self.model_states_grid = self.model_states_grid.cuda()
+
+        
+        # TODO: isolated loading test, remove this
+        if python_gt:
+
+            times = torch.full((self.n_grid_pts, 1), 2.)
+            model_coords_grid_t2 = torch.cat((times, self.model_states_grid), dim=1)
+
+            n_grid_len = xig.size()[0]
+            plot_values_V_DP = self.V_DP(self.dynamics.input_to_coord(model_coords_grid_t2).t()).reshape(n_grid_len, n_grid_len)
+            plot_values_V_DP_1 = self.V_DP_1(self.dynamics.input_to_coord(model_coords_grid_t2).t()).reshape(n_grid_len, n_grid_len)
+            if self.dynamics.name == "Canoe":
+                plot_values_V_DP_2 = self.V_DP_2(self.dynamics.input_to_coord(model_coords_grid_t2).t()).reshape(n_grid_len, n_grid_len)
+
+            cmap_name = "RdBu_r"
+            vmin, vmax = -0.075, 0.075
+            levels = np.linspace(vmin, vmax)
+            n_bins_high = round(256 * vmax/(vmax - vmin))
+            scaled_colors = np.vstack((mpl.colormaps[cmap_name](np.linspace(0., 0.4, 256-n_bins_high)), mpl.colormaps[cmap_name](np.linspace(0.6, 1., n_bins_high))))
+            RdWhBl_vscaled = mpl.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
+            fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(15, 5)) if self.dynamics.name == "Canoe" else plt.subplots(nrows=1, ncols=2, figsize=(10, 5))
+            fig.suptitle(f"V_DP")
+
+            axes[0].contourf(self.X1g, self.X2g,
+                            plot_values_V_DP,
+                            levels=levels,
+                            extend="both",
+                            cmap=RdWhBl_vscaled)
+            axes[0].title(f"V_DP")
+
+            axes[1].contourf(self.X1g, self.X2g,
+                            plot_values_V_DP_1,
+                            levels=levels,
+                            extend="both",
+                            cmap=RdWhBl_vscaled)
+            axes[1].title(f"V_DP 1")
+
+            if self.dynamics.name == "Canoe":
+                axes[2].contourf(self.X1g, self.X2g,
+                            plot_values_V_DP_2,
+                            levels=levels,
+                            extend="both",
+                            cmap=RdWhBl_vscaled)
+                axes[2].title(f"V_DP 2")
+
+            axes[0].set_xlim(xlims)
+            axes[0].set_ylim(ylims)
+
+            plt.show()
     
     def make_DP_bank(self):
         
