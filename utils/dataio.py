@@ -371,7 +371,8 @@ class ReachabilityDataset(Dataset):
             ## Load HJR solutions
             if not make_gt_solutions:
                 print("Loading ground truth solutions (hj_reachability.py)...")
-                solution_DP = pkl.load(open(f"value_fns/{self.dynamics.name}/{self.gt_key}", "rb"))
+                solution_DP = pkl.load(open(f"value_fns/{self.dynamics.name}/{self.gt_key}.npz", "rb"))
+                grid_params = pkl.load(open(f"value_fns/{self.dynamics.name}/{self.dynamics.name}_base_params.npz", "rb"))
             
             ## Solve hj_reachability.py for DP Solutions
             else:
@@ -380,7 +381,6 @@ class ReachabilityDataset(Dataset):
                 raise NotImplementedError
 
             V_DP_sub = solution_DP["V"]
-            grid_params = solution_DP["grid_params"]
             solution_grid = hj.Grid.from_lattice_parameters_and_boundary_conditions(hj.sets.Box(grid_params["lbs"] - grid_params["grid_pad"],
                                                                                                 grid_params["ubs"] + grid_params["grid_pad"]), 
                                                                                                 [grid_params["grid_L"] for _ in range(2)])
