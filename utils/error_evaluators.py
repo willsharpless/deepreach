@@ -231,13 +231,15 @@ def scenario_optimization(model, policy, dynamics, tMin, tMax, dt, set_type, con
 
         # compute batch_scenario_costs
         # TODO: need to handle the case of using tStart_generator when extending a trajectory by a frozen initial state will inadvertently affect cost computation (the min lx cost formulation is unaffected, but other cost formulations might care)
+        traj_coords_io = self.dynamics.input_to_coord(traj_coords)
+        traj_states_io, traj_times_io = traj_coords_io[..., 1:], traj_coords_io[..., 0]
         if set_type == 'BRT':
-            batch_scenario_costs = dynamics.cost_fn(state_trajs.cuda())
+            batch_scenario_costs = dynamics.cost_fn(traj_states_io, traj_times_io)
         elif set_type == 'BRS':
             if control_type == 'init_ttr': # is this correct for init_ttr?
-                batch_scenario_costs =  dynamics.boundary_fn(state_trajs.cuda())[:, (init_traj_times - tMin) / dt]
+                batch_scenario_costs =  dynamics.boundary_fn(traj_states_io, traj_times_io)[:, (init_traj_times - tMin) / dt]
             elif control_type == 'value':
-                batch_scenario_costs =  dynamics.boundary_fn(state_trajs.cuda())[:, -1]
+                batch_scenario_costs =  dynamics.boundary_fn(traj_states_io, traj_times_io)[:, -1]
             else:
                 raise NotImplementedError # what is the correct thing to do for ttr?
 
