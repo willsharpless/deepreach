@@ -9,8 +9,9 @@ readonly base_args="--dynamics_class LessLinearND --N 10 --goalR 0.25 --solve_gr
 readonly lin_sys_args="--gamma 0 --mu 0 --alpha 0"
 readonly nlin_sys_args="--gamma 20 --mu 0 --alpha 0"
 
-readonly use_wandb="--use_wandb" # "" if you dont want wandb
-readonly wandb_project="deepreach_hopf_retest"
+readonly use_wandb="--use_wandb"
+# readonly use_wandb="" # if you dont want wandb
+readonly wandb_project="test"
 
 ## Make Linear Model for Semi-Supervision (hopf or vanilla deepreach)
 
