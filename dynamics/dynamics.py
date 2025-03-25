@@ -3,6 +3,7 @@ from utils import diff_operators
 
 import math
 import torch
+import torch.nn.functional.relu as relu
 
 # during training, states will be sampled uniformly by each state dimension from the model-unit -1 to 1 range (for training stability),
 # which may or may not correspond to proper test ranges
@@ -53,10 +54,12 @@ class Dynamics(ABC):
 
     # convert model io to real value
     def io_to_value(self, input, output):
+        coord = self.input_to_coord(input)
+        state, time = coord[..., 1:], coord[..., 0]
         if self.deepreach_model=="diff":
-            return (output * self.value_var / self.value_normto) + self.boundary_fn(self.input_to_coord(input)[..., 1:])
+            return (output * self.value_var / self.value_normto) + self.boundary_fn(state, time)
         elif self.deepreach_model=="exact":
-            return (output * input[..., 0] * self.value_var / self.value_normto) + self.boundary_fn(self.input_to_coord(input)[..., 1:])
+            return (output * input[..., 0] * self.value_var / self.value_normto) + self.boundary_fn(state, time)
         else:
             return (output * self.value_var / self.value_normto) + self.value_mean
 
@@ -68,8 +71,9 @@ class Dynamics(ABC):
             dvdt = (self.value_var / self.value_normto) * dodi[..., 0]
 
             dvds_term1 = (self.value_var / self.value_normto / self.state_var.to(device=dodi.device)) * dodi[..., 1:]
-            state = self.input_to_coord(input)[..., 1:]
-            dvds_term2 = diff_operators.jacobian(self.boundary_fn(state).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
+            coord = self.input_to_coord(input)
+            state, time = coord[..., 1:], coord[..., 0]
+            dvds_term2 = diff_operators.jacobian(self.boundary_fn(state, time).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
             dvds = dvds_term1 + dvds_term2
         elif self.deepreach_model=="exact":
             dvdt = (self.value_var / self.value_normto) * \
@@ -77,9 +81,9 @@ class Dynamics(ABC):
 
             dvds_term1 = (self.value_var / self.value_normto /
                           self.state_var.to(device=dodi.device)) * dodi[..., 1:] * input[..., 0].unsqueeze(-1)
-            state = self.input_to_coord(input)[..., 1:]
-            dvds_term2 = diff_operators.jacobian(self.boundary_fn(
-                state).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
+            coord = self.input_to_coord(input)
+            state, time = coord[..., 1:], coord[..., 0]
+            dvds_term2 = diff_operators.jacobian(self.boundary_fn(state, time).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
             dvds = dvds_term1 + dvds_term2
         else:
             dvdt = (self.value_var / self.value_normto) * dodi[..., 0]
@@ -102,7 +106,7 @@ class Dynamics(ABC):
         raise NotImplementedError
     
     @abstractmethod
-    def boundary_fn(self, state):
+    def boundary_fn(self, state, time):
         raise NotImplementedError
 
     @abstractmethod
@@ -110,7 +114,7 @@ class Dynamics(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def cost_fn(self, state_traj):
+    def cost_fn(self, state_traj, time_traj):
         raise NotImplementedError
 
     @abstractmethod
@@ -167,13 +171,13 @@ class ParameterizedVertDrone2D(Dynamics):
         dsdt[..., 2] = 0
         return dsdt
 
-    def boundary_fn(self, state):
+    def boundary_fn(self, state, time):
         return -torch.abs(state[..., 1] - 1.5) + 1.5
 
     def sample_target_state(self, num_samples):
         raise NotImplementedError
     
-    def cost_fn(self, state_traj):
+    def cost_fn(self, state_traj, time_traj):
         raise NotImplementedError
 
     def hamiltonian(self, state, dvds):
@@ -236,14 +240,14 @@ class Air3D(Dynamics):
         dsdt[..., 2] = disturbance[..., 0] - control[..., 0]
         return dsdt
     
-    def boundary_fn(self, state):
+    def boundary_fn(self, state, time):
         return torch.norm(state[..., :2], dim=-1) - self.collisionR
 
     def sample_target_state(self, num_samples):
         raise NotImplementedError
     
-    def cost_fn(self, state_traj):
-        return torch.min(self.boundary_fn(state_traj), dim=-1).values
+    def cost_fn(self, state_traj, time_traj):
+        return torch.min(self.boundary_fn(state_traj, time_traj), dim=-1).values
     
     def hamiltonian(self, state, dvds):
         ham = self.omega_max * torch.abs(dvds[..., 0] * state[..., 1] - dvds[..., 1] * state[..., 0] - dvds[..., 2])  # Control component
@@ -310,14 +314,14 @@ class Dubins3D(Dynamics):
         dsdt[..., 2] = control[..., 0]
         return dsdt
     
-    def boundary_fn(self, state):
+    def boundary_fn(self, state, time):
         return torch.norm(state[..., :2], dim=-1) - self.goalR
 
     def sample_target_state(self, num_samples):
         raise NotImplementedError
     
-    def cost_fn(self, state_traj):
-        return torch.min(self.boundary_fn(state_traj), dim=-1).values
+    def cost_fn(self, state_traj, time_traj):
+        return torch.min(self.boundary_fn(state_traj, time_traj), dim=-1).values
     
     def hamiltonian(self, state, dvds):
         if self.freeze_model:
@@ -385,15 +389,15 @@ class Linear2D(Dynamics):
         dsdt[..., 1] = self.a21 * state[..., 0] + self.a22 * state[..., 1] + self.b2 * control[..., 1] + self.c2 * disturbance[..., 1]
         return dsdt
     
-    def boundary_fn(self, state):
+    def boundary_fn(self, state, time):
         # return torch.norm(state[..., :2], dim=-1) - self.goalR
         return 0.5 * (torch.square(torch.norm(state[..., :2], dim=-1)) - torch.square(self.goalR))
 
     def sample_target_state(self, num_samples):
         raise NotImplementedError
     
-    def cost_fn(self, state_traj):
-        return torch.min(self.boundary_fn(state_traj), dim=-1).values
+    def cost_fn(self, state_traj, time_traj):
+        return torch.min(self.boundary_fn(state_traj, time_traj), dim=-1).values
     
     def hamiltonian(self, state, dvds):
         pAx = dvds[..., 0] * (self.a11 * state[..., 0] + self.a12 * state[..., 1]) + dvds[..., 1] * (self.a21 * state[..., 0] + self.a22 * state[..., 1])
@@ -478,15 +482,15 @@ class LessLinear2D(Dynamics):
         dsdt[..., 1] = self.a21 * state[..., 0] + self.a22 * state[..., 1] + self.b2 * control[..., 1] + self.c2 * disturbance[..., 1] + nl_term
         return dsdt
     
-    def boundary_fn(self, state):
+    def boundary_fn(self, state, time):
         # return torch.norm(state[..., :2], dim=-1) - self.goalR
         return 0.5 * (torch.square(torch.norm(state[..., :2], dim=-1)) - self.goalR ** 2)
 
     def sample_target_state(self, num_samples):
         raise NotImplementedError
     
-    def cost_fn(self, state_traj):
-        return torch.min(self.boundary_fn(state_traj), dim=-1).values
+    def cost_fn(self, state_traj, time_traj):
+        return torch.min(self.boundary_fn(state_traj, time_traj), dim=-1).values
     
     def hamiltonian(self, state, dvds):
         nl_term =  - self.gamma * state[..., 1] * state[..., 0] * state[..., 0]
@@ -587,7 +591,7 @@ class LessLinearND(Dynamics):
         dsdt[..., :] = torch.matmul(self.A, state[..., :]) + torch.matmul(self.B, control[..., :]) + torch.matmul(self.C, disturbance[..., :]) + torch.cat((nl_term_N, nl_term_i), 0)
         return dsdt
     
-    def boundary_fn(self, state):
+    def boundary_fn(self, state, time):
         if self.ellipse_params.device != state.device: # FIXME: Patch to cover de/attached state bug
             if state.device.type == 'cuda':
                 self.ellipse_params = self.ellipse_params.cuda()
@@ -599,8 +603,8 @@ class LessLinearND(Dynamics):
     def sample_target_state(self, num_samples):
         raise NotImplementedError
     
-    def cost_fn(self, state_traj):
-        return torch.min(self.boundary_fn(state_traj), dim=-1).values
+    def cost_fn(self, state_traj, time_traj):
+        return torch.min(self.boundary_fn(state_traj, time_traj), dim=-1).values
     
     def hamiltonian(self, state, dvds):
 
@@ -708,7 +712,7 @@ class LessLinearNDlambda(Dynamics):
         dsdt[..., -1] = 0
         return dsdt
     
-    def boundary_fn(self, state):
+    def boundary_fn(self, state, time):
         if self.ellipse_params.device != state.device: # FIXME: Patch to cover de/attached state bug
             if state.device.type == 'cuda':
                 self.ellipse_params = self.ellipse_params.cuda()
@@ -720,8 +724,8 @@ class LessLinearNDlambda(Dynamics):
     def sample_target_state(self, num_samples):
         raise NotImplementedError
     
-    def cost_fn(self, state_traj):
-        return torch.min(self.boundary_fn(state_traj), dim=-1).values
+    def cost_fn(self, state_traj, time_traj):
+        return torch.min(self.boundary_fn(state_traj, time_traj), dim=-1).values
     
     def hamiltonian(self, state, dvds):
 
@@ -819,13 +823,13 @@ class Dubins4D(Dynamics):
         wrapped_state[..., 2] = (wrapped_state[..., 2] + math.pi) % (2*math.pi) - math.pi
         return wrapped_state
 
-    def boundary_fn(self, state):
+    def boundary_fn(self, state, time):
         return torch.norm(state[..., 0:2] - state[..., 4:6], dim=-1) - self.collisionR
 
     def sample_target_state(self, num_samples):
         raise NotImplementedError
     
-    def cost_fn(self, state_traj):
+    def cost_fn(self, state_traj, time_traj):
         raise NotImplementedError
 
     def dsdt(self, state, control, disturbance):
@@ -938,7 +942,7 @@ class NarrowPassage(Dynamics):
         dsdt[..., 9] = control[..., 3]
         return dsdt
 
-    def reach_fn(self, state):
+    def reach_fn(self, state, time):
         if self.avoid_only:
             raise RuntimeError
         # vehicle 1
@@ -949,7 +953,7 @@ class NarrowPassage(Dynamics):
         dist_R2 = torch.norm(state[..., 5:7] - goal_tensor_R2, dim=-1) - self.L
         return torch.maximum(dist_R1, dist_R2)
     
-    def avoid_fn(self, state):
+    def avoid_fn(self, state, time):
         # distance from lower curb
         dist_lc_R1 = state[..., 1] - self.curb_positions[0] - 0.5*self.L
         dist_lc_R2 = state[..., 6] - self.curb_positions[0] - 0.5*self.L
@@ -971,22 +975,22 @@ class NarrowPassage(Dynamics):
 
         return self.avoid_fn_weight * torch.min(torch.min(torch.min(dist_lc, dist_uc), dist_stranded), dist_R1R2)
 
-    def boundary_fn(self, state):
+    def boundary_fn(self, state, time):
         if self.avoid_only:
-            return self.avoid_fn(state)
+            return self.avoid_fn(state, time)
         else:
-            return torch.maximum(self.reach_fn(state), -self.avoid_fn(state))
+            return torch.maximum(self.reach_fn(state, time), -self.avoid_fn(state, time))
 
     def sample_target_state(self, num_samples):
         raise NotImplementedError
     
-    def cost_fn(self, state_traj):    
+    def cost_fn(self, state_traj, time_traj):    
         if self.avoid_only:
-            return torch.min(self.avoid_fn(state_traj), dim=-1).values
+            return torch.min(self.avoid_fn(state_traj, time_traj), dim=-1).values
         else:   
             # return min_t max{l(x(t)), max_k_up_to_t{-g(x(k))}}, where l(x) is reach_fn, g(x) is avoid_fn 
-            reach_values = self.reach_fn(state_traj)
-            avoid_values = self.avoid_fn(state_traj)
+            reach_values = self.reach_fn(state_traj, time_traj)
+            avoid_values = self.avoid_fn(state_traj, time_traj)
             return torch.min(torch.maximum(reach_values, torch.cummax(-avoid_values, dim=-1).values), dim=-1).values
 
     def hamiltonian(self, state, dvds):
@@ -1088,7 +1092,7 @@ class ReachAvoidRocketLanding(Dynamics):
         dsdt[..., 5] = 0.3*control[..., 0]
         return dsdt
 
-    def reach_fn(self, state):
+    def reach_fn(self, state, time):
         # Only target set in the xy direction
         # Target set position in x direction
         dist_x = torch.abs(state[..., 0]) - 20.0 #[-20, 150] boundary_fn range
@@ -1100,7 +1104,7 @@ class ReachAvoidRocketLanding(Dynamics):
         max_dist = torch.max(dist_x, dist_y)
         return torch.where((max_dist >= 0), max_dist/150.0, max_dist/10.0)
 
-    def avoid_fn(self, state):
+    def avoid_fn(self, state, time):
         # distance to floor
         dist_y = state[..., 1]
 
@@ -1119,8 +1123,8 @@ class ReachAvoidRocketLanding(Dynamics):
 
         return torch.min(dist_y, dist_wall)
 
-    def boundary_fn(self, state):
-        return torch.maximum(self.reach_fn(state), -self.avoid_fn(state))
+    def boundary_fn(self, state, time):
+        return torch.maximum(self.reach_fn(state, time), -self.avoid_fn(state, time))
 
     def sample_target_state(self, num_samples):
         target_state_range = self.state_test_range()
@@ -1129,10 +1133,10 @@ class ReachAvoidRocketLanding(Dynamics):
         target_state_range = torch.tensor(target_state_range)
         return target_state_range[:, 0] + torch.rand(num_samples, self.state_dim)*(target_state_range[:, 1] - target_state_range[:, 0])
 
-    def cost_fn(self, state_traj):
+    def cost_fn(self, state_traj, time_traj):
         # return min_t max{l(x(t)), max_k_up_to_t{-g(x(k))}}, where l(x) is reach_fn, g(x) is avoid_fn 
-        reach_values = self.reach_fn(state_traj)
-        avoid_values = self.avoid_fn(state_traj)
+        reach_values = self.reach_fn(state_traj, time_traj)
+        avoid_values = self.avoid_fn(state_traj, time_traj)
         return torch.min(torch.maximum(reach_values, torch.cummax(-avoid_values, dim=-1).values), dim=-1).values
 
     def hamiltonian(self, state, dvds):
@@ -1249,7 +1253,7 @@ class RocketLanding(Dynamics):
         dsdt[..., 5] = 0.3*control[..., 0]
         return dsdt
 
-    def boundary_fn(self, state):
+    def boundary_fn(self, state, time):
         # Only target set in the yz direction
         # Target set position in y direction
         dist_y = torch.abs(state[..., 0]) - 20.0 #[-20, 150] boundary_fn range
@@ -1268,8 +1272,8 @@ class RocketLanding(Dynamics):
         target_state_range = torch.tensor(target_state_range)
         return target_state_range[:, 0] + torch.rand(num_samples, self.state_dim)*(target_state_range[:, 1] - target_state_range[:, 0])
 
-    def cost_fn(self, state_traj):
-        return torch.min(self.boundary_fn(state_traj), dim=-1).values
+    def cost_fn(self, state_traj, time_traj):
+        return torch.min(self.boundary_fn(state_traj, time_traj), dim=-1).values
 
     def hamiltonian(self, state, dvds):
         # Control Hamiltonian
@@ -1383,14 +1387,14 @@ class Quadrotor(Dynamics):
         dsdt[..., 12] =12*self.CT*self.CM/(7*self.arm_l**2*self.m)*(u1-u2+u3-u4)
         return dsdt
 
-    def boundary_fn(self, state):
+    def boundary_fn(self, state, time):
         return torch.norm(state[..., :3], dim=-1) - self.collisionR
 
     def sample_target_state(self, num_samples):
         raise NotImplementedError
 
-    def cost_fn(self, state_traj):
-        return torch.min(self.boundary_fn(state_traj), dim=-1).values
+    def cost_fn(self, state_traj, time_traj):
+        return torch.min(self.boundary_fn(state_traj, time_traj), dim=-1).values
 
     def hamiltonian(self, state, dvds):
         if self.set_mode == 'reach':
@@ -1539,7 +1543,7 @@ class MultiVehicleCollision(Dynamics):
         dsdt[..., 8] = control[..., 2]
         return dsdt
     
-    def boundary_fn(self, state):
+    def boundary_fn(self, state, time):
         boundary_values = torch.norm(state[..., 0:2] - state[..., 2:4], dim=-1) - self.collisionR
         for i in range(1, 2):
             boundary_values_current = torch.norm(state[..., 0:2] - state[..., 2*(i+1):2*(i+1)+2], dim=-1) - self.collisionR
@@ -1556,8 +1560,8 @@ class MultiVehicleCollision(Dynamics):
     def sample_target_state(self, num_samples):
         raise NotImplementedError
     
-    def cost_fn(self, state_traj):
-        return torch.min(self.boundary_fn(state_traj), dim=-1).values
+    def cost_fn(self, state_traj, time_traj):
+        return torch.min(self.boundary_fn(state_traj, time_traj), dim=-1).values
     
     def hamiltonian(self, state, dvds):
         # Compute the hamiltonian for the ego vehicle
