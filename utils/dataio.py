@@ -249,11 +249,14 @@ class ReachabilityDataset(Dataset):
                         hopf_values, hopf_grads = self.V_hopf_grad(0.999 * self.dynamics.input_to_coord(model_coords).t())
                     else:
                         hopf_values = self.V_hopf(0.999 * self.dynamics.input_to_coord(model_coords).t()) # rare itp-lim fp issue
-            
-        boundary_values = self.dynamics.boundary_fn(self.dynamics.input_to_coord(model_coords)[..., 1:])
+        
+        coords_io = self.dynamics.input_to_coord(model_coords)
+        states_io, times_io = coords_io[..., 1:], coords_io[..., 0]
+        
+        boundary_values = self.dynamics.boundary_fn(states_io, times_io)
         if self.dynamics.loss_type == 'brat_hjivi':
-            reach_values = self.dynamics.reach_fn(self.dynamics.input_to_coord(model_coords)[..., 1:])
-            avoid_values = self.dynamics.avoid_fn(self.dynamics.input_to_coord(model_coords)[..., 1:])
+            reach_values = self.dynamics.reach_fn(states_io, times_io)
+            avoid_values = self.dynamics.avoid_fn(states_io, times_io)
 
         if self.pretrain:
             dirichlet_masks = torch.ones(model_coords.shape[0]) > 0
@@ -362,7 +365,7 @@ class ReachabilityDataset(Dataset):
                     return V, DV
                 self.V_hopf_grad = V_N_hopf_grad_itp
     
-    def init_groundtruth_tests(self, load_lambda_var=False, make_benchmark_gts=False, manual_load=False, python_gt=True, make_gt_solutions=False, decomposed=True):
+    def init_groundtruth_tests(self, load_lambda_var=False, make_benchmark_gts=False, manual_load=False, python_gt=True, make_gt_solutions=False, decomposed=True, fd_grad=False):
         
         ## Manual load (WandB sweeps need this)
         if manual_load:
@@ -417,16 +420,15 @@ class ReachabilityDataset(Dataset):
                 
                 V = 0 * tXg[0,:]
                 
-                for i in range(self.N-1):
-
-                    if shared_x0:
-                        # state_key = [0, 1, 2*i]
-                        state_key = [0, 1, 1 + dim_sub*i : 1 + dim_sub*(i+1)]
-                    else:
-                        # state_key = [0, dim_sub*i + 1, dim_sub*i + 2]
-                        state_key = [0, dim_sub*i : dim_sub*(i+1)]
-                    
-                    V += grid.interpolate(V_DP_base, state = tXg[state_key, :] * scale + center)
+                i = 1 # main diagonal only (any subsys i is equiv on diag)
+                if shared_x0:
+                    # state_key = [0, 1, 2+i]
+                    state_key = [0, 1, 1 + dim_sub*i : 1 + dim_sub*(i+1)]
+                else:
+                    # state_key = [0, dim_sub*i + 1, dim_sub*i + 2]
+                    state_key = [0, dim_sub*i : dim_sub*(i+1)]
+                
+                V = grid.interpolate(V_DP_base, state = tXg[state_key, :] * scale + center)
                 
                 if not compute_grad:
                     return V
@@ -437,32 +439,31 @@ class ReachabilityDataset(Dataset):
                     DV = 0 * tXg[1:,:].t()
                     # DV = 0 * tXg.t() # TODO: ADD TEMPORAL GRADS!
 
-                    for i in range(self.N-1):
-                        for j in range(tXg.shape[1]):
-                            i = np.argmin(np.abs(self.times - tXg[0, j]))
-                            DV_DP = grid.grad_values(V_DP_base[i,...])
-                            if shared_x0:
-                                DV[j,:] += grid.interpolate(DV_DP, state = tXg[[0, 1, 2*i], j] * scale + center)
-                                # V += grid.interpolate(DV_DP, state = tXg[[0, 1, 1 + dim_sub*i : 1 + dim_sub*(i+1)], :] * scale + center)
-                            else:
-                                # V += grid.interpolate(DV_DP, state = tXg[[0, dim_sub*i + 1, dim_sub*i + 2], :] * scale + center)
-                                DV[j,:] += grid.interpolate(DV_DP, state = tXg[[0, dim_sub*i : dim_sub*(i+1)], j] * scale + center)
+                    for j in range(tXg.shape[1]):
+                        ti = np.argmin(np.abs(self.times - tXg[0, j]))
+                        DV_DP = grid.grad_values(V_DP_base[ti,...])
+                        i = 1 # main diagonal only
+                        if shared_x0:
+                            DV[j,:] = grid.interpolate(DV_DP, state = tXg[[0, 1, 2+i], j] * scale + center) # TODO: can we check multiple states at once?
+                            # V += grid.interpolate(DV_DP, state = tXg[[0, 1, 1 + dim_sub*i : 1 + dim_sub*(i+1)], :] * scale + center)
+                        else:
+                            # V += grid.interpolate(DV_DP, state = tXg[[0, dim_sub*i + 1, dim_sub*i + 2], :] * scale + center)
+                            DV[j,:] = grid.interpolate(DV_DP, state = tXg[[0, dim_sub*i : dim_sub*(i+1)], j] * scale + center)
 
-                    DV = 0 * tXg[1:,:].t()
-                    # DV = 0 * tXg.t() # TODO: ADD TEMPORAL GRADS!
+                    if fd_grad:
+                        DV = 0 * tXg[1:,:].t()
+                        # DV = 0 * tXg.t() # TODO: ADD TEMPORAL GRADS!
 
-                    fd_delta_x = 0.01
-                    # fd_delta_t = 0.01 # TODO: ADD TEMPORAL GRADS!
+                        fd_delta_x = 0.01
+                        # fd_delta_t = 0.01 # TODO: ADD TEMPORAL GRADS!
 
-                    delta_x_mat = fd_delta_x * torch.hstack((torch.zeros(self.dynamics.state_dim, 1), torch.eye(self.dynamics.state_dim)))
-                    # delta_t_mat = fd_delta_t * torch.hstack((torch.ones(1), torch.zeros(self.dynamics.state_dim))).unsqueeze(0)  # TODO: ADD TEMPORAL GRADS!
-                    
-                    tXg_U = tXg.unsqueeze(-2) + delta_x_mat
-                    tXg_L = tXg.unsqueeze(-2) - delta_x_mat
-                    # tXg_Ut = tXg + delta_t_mat # TODO: ADD TEMPORAL GRADS!
-                    # tXg_Lt = tXg - delta_t_mat # TODO: ADD TEMPORAL GRADS!
-
-                    for i in range(self.N-1):
+                        delta_x_mat = fd_delta_x * torch.hstack((torch.zeros(self.dynamics.state_dim, 1), torch.eye(self.dynamics.state_dim)))
+                        # delta_t_mat = fd_delta_t * torch.hstack((torch.ones(1), torch.zeros(self.dynamics.state_dim))).unsqueeze(0)  # TODO: ADD TEMPORAL GRADS!
+                        
+                        tXg_U = tXg.unsqueeze(-2) + delta_x_mat
+                        tXg_L = tXg.unsqueeze(-2) - delta_x_mat
+                        # tXg_Ut = tXg + delta_t_mat # TODO: ADD TEMPORAL GRADS!
+                        # tXg_Lt = tXg - delta_t_mat # TODO: ADD TEMPORAL GRADS!
 
                         if shared_x0:
                             # state_key = [0, 1, 2*i]
@@ -479,21 +480,31 @@ class ReachabilityDataset(Dataset):
                         DV_DP = (values_U - values_L) / (2 * fd_delta_x) 
                         # DV_DP = (values_Ut - values_Lt) / (2 * fd_delta_t) # TODO: ADD TEMPORAL GRADS!
                         
-                        DV += DV_DP   
+                        DV = DV_DP   
                     
-                    return V, DV # TODO multiply by 1/N?
+                    return V, DV
 
             def V_N_DP_itp(tXg):
-                return V_N_DP_itp_combo(tXg, V_DP_sub, solution_grid, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, scale=self.dynamics.state_scale, center=self.dynamics.state_center)
+                return V_N_DP_itp_combo(tXg, V_DP_sub, solution_grid, 
+                compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, 
+                # scale=torch.cat((torch.ones(1), self.dynamics.state_scale),0), center=torch.cat((torch.zeros(1), self.dynamics.state_center),0)
+                )
             
             self.V_DP = V_N_DP_itp
             
             if decomposed:
 
                 def V_N_DP_1_itp(tXg):
-                    return V_N_DP_itp_combo(tXg, V_DP_sub_1, solution_grid, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, scale=self.dynamics.state_scale, center=self.dynamics.state_center)
+                    return V_N_DP_itp_combo(tXg, V_DP_sub_1, solution_grid, 
+                    compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, 
+                    # scale=torch.cat((torch.ones(1), self.dynamics.state_scale),0), center=torch.cat((torch.zeros(1), self.dynamics.state_center),0)
+                    )
+
                 def V_N_DP_2_itp(tXg):
-                    return V_N_DP_itp_combo(tXg, V_DP_sub_2, solution_grid, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, scale=self.dynamics.state_scale, center=self.dynamics.state_center)
+                    return V_N_DP_itp_combo(tXg, V_DP_sub_2, solution_grid, 
+                    compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, 
+                    # scale=torch.cat((torch.ones(1), self.dynamics.state_scale),0), center=torch.cat((torch.zeros(1), self.dynamics.state_center),0)
+                    )
 
                 self.V_DP_1 = V_N_DP_1_itp
                 self.V_DP_2 = V_N_DP_2_itp
@@ -501,16 +512,26 @@ class ReachabilityDataset(Dataset):
             if self.solve_grad:
 
                 def V_N_DP_itp_grad(tXg):
-                    return V_N_DP_itp_combo(tXg, V_DP_sub, solution_grid, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, scale=self.dynamics.state_scale, center=self.dynamics.state_center)
+                    return V_N_DP_itp_combo(tXg, V_DP_sub, solution_grid, 
+                    compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, 
+                    # scale=torch.cat((torch.ones(1), self.dynamics.state_scale),0), center=torch.cat((torch.zeros(1), self.dynamics.state_center),0)
+                    )
 
                 self.V_DP_grad = V_N_DP_itp_grad
                 
                 if decomposed:
 
                     def V_N_DP_1_itp_grad(tXg):
-                        return V_N_DP_itp_combo(tXg, V_DP_sub_1, solution_grid, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, scale=self.dynamics.state_scale, center=self.dynamics.state_center)
+                        return V_N_DP_itp_combo(tXg, V_DP_sub_1, solution_grid, 
+                        compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, 
+                        # scale=torch.cat((torch.ones(1), self.dynamics.state_scale),0), center=torch.cat((torch.zeros(1), self.dynamics.state_center),0)
+                        )
+
                     def V_N_DP_2_itp_grad(tXg):
-                        return V_N_DP_itp_combo(tXg, V_DP_sub_2, solution_grid, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, scale=self.dynamics.state_scale, center=self.dynamics.state_center)
+                        return V_N_DP_itp_combo(tXg, V_DP_sub_2, solution_grid, 
+                        compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, 
+                        # scale=torch.cat((torch.ones(1), self.dynamics.state_scale),0), center=torch.cat((torch.zeros(1), self.dynamics.state_center),0)
+                        )
 
                     self.V_DP_1_grad = V_N_DP_1_itp_grad
                     self.V_DP_2_grad = V_N_DP_2_itp_grad
@@ -648,11 +669,16 @@ class ReachabilityDataset(Dataset):
 
         ## Define a fixed spatiotemporal grid to score Jaccard
 
+        xig_1, xig_2 = torch.arange(-0.99, 1.01, 0.02), torch.arange(-0.99, 1.01, 0.02) # 100 x 100
+        if hasattr(self.dynamics,'state_scale'):
+            xig_1 = xig_1 * self.dynamics.state_scale[0] + self.dynamics.state_center[0]
+            xig_2 = xig_2 * self.dynamics.state_scale[1] + self.dynamics.state_center[1]            
+        
+        grid_L = xig_1.size()[0]
+        self.X1g, self.X2g = torch.meshgrid(xig_1, xig_2)
+        self.model_states_grid = torch.cat((self.X1g.ravel().reshape((1,grid_L**2)), self.X2g.ravel().reshape((1,grid_L**2))), dim=0).t()
+        self.n_grid_pts = grid_L**2
         self.n_grid_t_pts, self.n_grid_t_pts_hi = 5, 20
-        xig = torch.arange(-0.99, 1.01, 0.02) # 100 x 100 # NOTE: assumes normal space
-        self.X1g, self.X2g = torch.meshgrid(xig, xig)
-        self.model_states_grid = torch.cat((self.X1g.ravel().reshape((1,xig.size()[0]**2)), self.X2g.ravel().reshape((1,xig.size()[0]**2))), dim=0).t()
-        self.n_grid_pts = xig.size()[0]**2
 
         ## Make a low and high res grids wrt time
         if self.N == 2:
@@ -670,16 +696,8 @@ class ReachabilityDataset(Dataset):
             #     new_coords = torch.cat((times, self.model_states_grid), dim=1) 
             #     self.model_coords_grid_allt_hi = torch.cat((self.model_coords_grid_allt_hi, new_coords), dim=0) 
         
-        ## In N dimension, using same 2D grid on 3 slices of total space
+        ## In N dims, define 2D grid on the ND Main Diagonal (any subsys i is equiv on diag)
         elif self.N > 2:
-
-            # xnxi_plane = torch.zeros(self.n_grid_pts, self.dynamics.state_dim)
-            # xnxi_plane[:, 0] = self.model_states_grid[:, 0]
-            # xnxi_plane[:, 1] = self.model_states_grid[:, 1]
-
-            # xixj_plane = torch.zeros(self.n_grid_pts, self.dynamics.state_dim)
-            # xixj_plane[:, 1] = self.model_states_grid[:, 0]
-            # xixj_plane[:, 2] = self.model_states_grid[:, 1]
 
             if not load_lambda_var:
                 xnxixj_plane = torch.zeros(self.n_grid_pts, self.dynamics.state_dim)
@@ -760,7 +778,7 @@ class ReachabilityDataset(Dataset):
             times = torch.full((self.n_grid_pts, 1), 2.)
             model_coords_grid_t2 = torch.cat((times, self.model_states_grid), dim=1)
 
-            n_grid_len = xig.size()[0]
+            n_grid_len = grid_L
             plot_values_V_DP = self.V_DP(self.dynamics.input_to_coord(model_coords_grid_t2).t()).reshape(n_grid_len, n_grid_len)
             plot_values_V_DP_1 = self.V_DP_1(self.dynamics.input_to_coord(model_coords_grid_t2).t()).reshape(n_grid_len, n_grid_len)
             if self.dynamics.name == "Canoe":
@@ -818,7 +836,9 @@ class ReachabilityDataset(Dataset):
                                                             bank[i:i+step, 1:self.dynamics.state_dim+1]), dim=1)
                 
                 # Solve Boundary & Hopf Value 
-                bank[i:i+step, self.dynamics.state_dim+1] = self.dynamics.boundary_fn(self.dynamics.input_to_coord(bank[i:i+step, 0:self.dynamics.state_dim+1])[..., 1:])
+                coords_io = self.dynamics.input_to_coord(bank[i:i+step, 0:self.dynamics.state_dim+1])
+                states_io, times_io = coords_io[..., 1:], coords_io[..., 0]
+                bank[i:i+step, self.dynamics.state_dim+1] = self.dynamics.boundary_fn(states_io, times_io)
                 if self.solve_grad:
                     bank[i:i+step, self.dynamics.state_dim+2], bank[i:i+step, self.dynamics.state_dim+3:] = self.V_hopf_grad(self.dynamics.input_to_coord(bank[i:i+step, 0:self.dynamics.state_dim+1]).t())
                 else:
