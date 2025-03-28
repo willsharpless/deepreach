@@ -401,17 +401,17 @@ class ReachabilityDataset(Dataset):
                 self.dynamics.state_scale = state_scale
                 self.dynamics.state_center = state_center # TODO move these?
 
-                V_DP_sub = np.load(f"value_fns/{self.dynamics.name}/solutions/{self.gt_key}_V.npz")["V"]
+                self.V_DP_2d = np.load(f"value_fns/{self.dynamics.name}/solutions/{self.gt_key}_V.npz")["V"]
 
                 if self.dynamics.name == "Conveyor":
                     
-                    V_DP_sub_1 = np.load(f"value_fns/{self.dynamics.name}/solutions/{self.gt_key}_Vr.npz")["Vr"]
-                    V_DP_sub_2 = np.load(f"value_fns/{self.dynamics.name}/solutions/{self.gt_key}_Va.npz")["Va"]
+                    self.V_DP_2d_1 = np.load(f"value_fns/{self.dynamics.name}/solutions/{self.gt_key}_Vr.npz")["Vr"]
+                    self.V_DP_2d_2 = np.load(f"value_fns/{self.dynamics.name}/solutions/{self.gt_key}_Va.npz")["Va"]
 
                 elif self.dynamics.name == "Canoe":
                     
-                    V_DP_sub_1 = np.load(f"value_fns/{self.dynamics.name}/solutions/{self.gt_key}_V1.npz")["V1"]
-                    V_DP_sub_2 = np.load(f"value_fns/{self.dynamics.name}/solutions/{self.gt_key}_V2.npz")["V2"]
+                    self.V_DP_2d_1 = np.load(f"value_fns/{self.dynamics.name}/solutions/{self.gt_key}_V1.npz")["V1"]
+                    self.V_DP_2d_2 = np.load(f"value_fns/{self.dynamics.name}/solutions/{self.gt_key}_V2.npz")["V2"]
                 
                 else:
                     raise NotImplementedError
@@ -453,17 +453,17 @@ class ReachabilityDataset(Dataset):
                     
 
             def V_N_DP_itp(tXg):
-                return V_N_DP_itp_combo(tXg, V_DP_sub, solution_grid, solution_times, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+                return V_N_DP_itp_combo(tXg, self.V_DP_2d, solution_grid, solution_times, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
             
             self.V_DP = V_N_DP_itp
             
             if decomposed:
 
                 def V_N_DP_1_itp(tXg):
-                    return V_N_DP_itp_combo(tXg, V_DP_sub_1, solution_grid, solution_times, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+                    return V_N_DP_itp_combo(tXg, self.V_DP_2d_1, solution_grid, solution_times, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
 
                 def V_N_DP_2_itp(tXg):
-                    return V_N_DP_itp_combo(tXg, V_DP_sub_2, solution_grid, solution_times, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+                    return V_N_DP_itp_combo(tXg, self.V_DP_2d_2, solution_grid, solution_times, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
 
                 self.V_DP_1 = V_N_DP_1_itp
                 self.V_DP_2 = V_N_DP_2_itp
@@ -471,17 +471,17 @@ class ReachabilityDataset(Dataset):
             if self.solve_grad:
 
                 def V_N_DP_itp_grad(tXg):
-                    return V_N_DP_itp_combo(tXg, V_DP_sub, solution_grid, solution_times, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+                    return V_N_DP_itp_combo(tXg, self.V_DP_2d, solution_grid, solution_times, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
 
                 self.V_DP_grad = V_N_DP_itp_grad
                 
                 if decomposed:
 
                     def V_N_DP_1_itp_grad(tXg):
-                        return V_N_DP_itp_combo(tXg, V_DP_sub_1, solution_grid, solution_times, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+                        return V_N_DP_itp_combo(tXg, self.V_DP_2d_1, solution_grid, solution_times, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
 
                     def V_N_DP_2_itp_grad(tXg):
-                        return V_N_DP_itp_combo(tXg, V_DP_sub_2, solution_grid, solution_times, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+                        return V_N_DP_itp_combo(tXg, self.V_DP_2d_2, solution_grid, solution_times, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
 
                     self.V_DP_1_grad = V_N_DP_1_itp_grad
                     self.V_DP_2_grad = V_N_DP_2_itp_grad
@@ -645,6 +645,9 @@ class ReachabilityDataset(Dataset):
             #     times = torch.full((self.n_grid_pts_2d, 1), (i+1)*(self.tMax - self.tMin)/(self.n_grid_t_pts_hi-1))
             #     new_coords = torch.cat((times, self.model_states_grid_2d), dim=1) 
             #     self.model_coords_grid_allt_hi = torch.cat((self.model_coords_grid_allt_hi, new_coords), dim=0) 
+
+            self.model_states_grid = self.model_states_grid_2d
+            self.n_grid_pts = self.n_grid_pts_2d
         
         ## In N dims, define 2D grid on the Main Diagonal (any subsys i is equiv on diag)
         elif self.N > 2:
@@ -742,115 +745,124 @@ class ReachabilityDataset(Dataset):
         # self.model_coords_grid_allt_hi = self.model_coords_grid_allt_hi.cuda()
         self.model_states_grid = self.model_states_grid.cuda()
 
-        
         # TODO: isolated loading test, remove this
-        if hasattr(self.dynamics, "name") and self.dynamics.name in ["Conveyor","Canoe"]:
+        test_times = torch.full((self.n_grid_pts_2d, 1), -2.) if self.dynamics.N>2 else torch.full((self.n_grid_pts_2d, 1), -2.)
+        test_states_grid = score_plane1 if self.dynamics.N>2 else self.model_states_grid_2d
+        self.interp_bc_check(test_times, test_states_grid, grid_L, grid_params, solution_grid)
 
-            times = torch.full((self.n_grid_pts_2d, 1), -2.) if self.dynamics.N>2 else torch.full((self.n_grid_pts_2d, 1), -2.)
-            test_states_grid = score_plane1 if self.dynamics.N>2 else self.model_states_grid_2d
-            # test_coords_grid = torch.cat((times, test_states_grid.cpu()), dim=1) # for ITP testing
-            test_coords_grid = torch.cat((0 * times, test_states_grid.cpu()), dim=1) # for BC testing
+        del self.V_DP_2d
+        del self.V_DP_2d_1
+        del self.V_DP_2d_2
+        gc.collect()
 
-            ## Solve Interpolated Values on Main Diagonal Grid
-            n_grid_len = grid_L
-            plot_values_V_DP = self.V_DP(self.dynamics.input_to_coord(test_coords_grid).t()).reshape(n_grid_len, n_grid_len)
-            plot_values_V_DP_1 = self.V_DP_1(self.dynamics.input_to_coord(test_coords_grid).t()).reshape(n_grid_len, n_grid_len)
-            plot_values_V_DP_2 = self.V_DP_2(self.dynamics.input_to_coord(test_coords_grid).t()).reshape(n_grid_len, n_grid_len)
+    def interp_bc_check(self, test_times, test_states_grid, grid_L, grid_params, solution_grid):
+        
+        if not hasattr(self.dynamics, "name") or self.dynamics.name not in ["Conveyor","Canoe"]:
+            raise NotImplementedError
 
-            ## Solve BC on Main Diagonal
-            test_states_grid_scaled = self.dynamics.input_to_coord(test_coords_grid)[:, 1:]
-            plot_values_bc_t0 = self.dynamics.boundary_fn(test_states_grid_scaled, 0*times).reshape(n_grid_len, n_grid_len)
-            plot_values_bc_t2 = self.dynamics.boundary_fn(test_states_grid_scaled, times).reshape(n_grid_len, n_grid_len)
-            
-            if self.dynamics.name == "Conveyor":
-                plot_values_bc1_t0 = self.dynamics.reach_fn(test_states_grid_scaled, 0*times).reshape(n_grid_len, n_grid_len)
-                plot_values_bc2_t0 = -self.dynamics.avoid_fn(test_states_grid_scaled, 0*times).reshape(n_grid_len, n_grid_len)
-                plot_values_bc1_t2 = self.dynamics.reach_fn(test_states_grid_scaled, times).reshape(n_grid_len, n_grid_len)
-                plot_values_bc2_t2 = -self.dynamics.avoid_fn(test_states_grid_scaled, times).reshape(n_grid_len, n_grid_len)
-            
-            elif self.dynamics.name == "Canoe":
-                plot_values_bc1_t0 = self.dynamics.reach_fn_1(test_states_grid_scaled, 0*times).reshape(n_grid_len, n_grid_len)
-                plot_values_bc2_t0 = self.dynamics.reach_fn_2(test_states_grid_scaled, 0*times).reshape(n_grid_len, n_grid_len)
-                plot_values_bc1_t2 = self.dynamics.reach_fn_1(test_states_grid_scaled, times).reshape(n_grid_len, n_grid_len)
-                plot_values_bc2_t2 = self.dynamics.reach_fn_2(test_states_grid_scaled, times).reshape(n_grid_len, n_grid_len)
+        # test_coords_grid = torch.cat((test_times, test_states_grid.cpu()), dim=1) # for ITP testing
+        test_coords_grid = torch.cat((0 * test_times, test_states_grid.cpu()), dim=1) # for BC testing
 
-            cmap_name = "RdBu_r"
-            # vmin, vmax = -0.075, 0.075
-            vmin, vmax = -0.25, 0.5
-            levels = np.linspace(vmin, vmax)
-            n_bins_high = round(256 * vmax/(vmax - vmin))
-            scaled_colors = np.vstack((mpl.colormaps[cmap_name](np.linspace(0., 0.4, 256-n_bins_high)), mpl.colormaps[cmap_name](np.linspace(0.6, 1., n_bins_high))))
-            RdWhBl_vscaled = mpl.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
-            fig, axes = plt.subplots(nrows=3, ncols=3, figsize=(8, 8))
-            fig.suptitle(f"V DP - Ground Truth Test")
+        ## Solve Interpolated Values on Main Diagonal Grid
+        n_grid_len = grid_L
+        plot_values_V_DP = self.V_DP(self.dynamics.input_to_coord(test_coords_grid).t()).reshape(n_grid_len, n_grid_len)
+        plot_values_V_DP_1 = self.V_DP_1(self.dynamics.input_to_coord(test_coords_grid).t()).reshape(n_grid_len, n_grid_len)
+        plot_values_V_DP_2 = self.V_DP_2(self.dynamics.input_to_coord(test_coords_grid).t()).reshape(n_grid_len, n_grid_len)
 
-            xlims = (grid_params["lbs"][0], grid_params["ubs"][0])
-            ylims = (grid_params["lbs"][1], grid_params["ubs"][1])
+        ## Solve BC on Main Diagonal
+        test_states_grid_scaled = self.dynamics.input_to_coord(test_coords_grid)[:, 1:]
+        plot_values_bc_t0 = self.dynamics.boundary_fn(test_states_grid_scaled, 0*test_times).reshape(n_grid_len, n_grid_len)
+        plot_values_bc_t2 = self.dynamics.boundary_fn(test_states_grid_scaled, test_times).reshape(n_grid_len, n_grid_len)
+        
+        if self.dynamics.name == "Conveyor":
+            plot_values_bc1_t0 = self.dynamics.reach_fn(test_states_grid_scaled, 0*test_times).reshape(n_grid_len, n_grid_len)
+            plot_values_bc2_t0 = -self.dynamics.avoid_fn(test_states_grid_scaled, 0*test_times).reshape(n_grid_len, n_grid_len)
+            plot_values_bc1_t2 = self.dynamics.reach_fn(test_states_grid_scaled, test_times).reshape(n_grid_len, n_grid_len)
+            plot_values_bc2_t2 = -self.dynamics.avoid_fn(test_states_grid_scaled, test_times).reshape(n_grid_len, n_grid_len)
+        
+        elif self.dynamics.name == "Canoe":
+            plot_values_bc1_t0 = self.dynamics.reach_fn_1(test_states_grid_scaled, 0*test_times).reshape(n_grid_len, n_grid_len)
+            plot_values_bc2_t0 = self.dynamics.reach_fn_2(test_states_grid_scaled, 0*test_times).reshape(n_grid_len, n_grid_len)
+            plot_values_bc1_t2 = self.dynamics.reach_fn_1(test_states_grid_scaled, test_times).reshape(n_grid_len, n_grid_len)
+            plot_values_bc2_t2 = self.dynamics.reach_fn_2(test_states_grid_scaled, test_times).reshape(n_grid_len, n_grid_len)
 
-            names = ["V2", "V", "V1"]
-            # plot_values_raw = [V_DP_sub_2[-1].T, V_DP_sub[-1].T, V_DP_sub_1[-1].T] # for ITP
-            plot_values_raw = [V_DP_sub_2[1].T, V_DP_sub[1].T, V_DP_sub_1[1].T] # for BC
-            plot_values_itp = [plot_values_V_DP_2, plot_values_V_DP, plot_values_V_DP_1]
+        cmap_name = "RdBu_r"
+        # vmin, vmax = -0.075, 0.075
+        vmin, vmax = -0.5, 0.5
+        levels = np.linspace(vmin, vmax)
+        n_bins_high = round(256 * vmax/(vmax - vmin))
+        scaled_colors = np.vstack((mpl.colormaps[cmap_name](np.linspace(0., 0.4, 256-n_bins_high)), mpl.colormaps[cmap_name](np.linspace(0.6, 1., n_bins_high))))
+        RdWhBl_vscaled = mpl.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
+        fig, axes = plt.subplots(nrows=3, ncols=3, figsize=(8, 8))
+        fig.suptitle(f"V DP - Ground Truth Test")
 
-            plot_values_bcs_t0 = [plot_values_bc2_t0, plot_values_bc_t0, plot_values_bc1_t0] # for BC
-            plot_values_bcs_t2 = [plot_values_bc2_t2, plot_values_bc_t2, plot_values_bc1_t2] # for BC
+        xlims = (grid_params["lbs"][0], grid_params["ubs"][0])
+        ylims = (grid_params["lbs"][1], grid_params["ubs"][1])
 
-            for k in range(3):
+        names = ["V2", "V", "V1"]
+        # plot_values_raw = [self.V_DP_2d_2[-1].T, self.V_DP_2d[-1].T, self.V_DP_2d_1[-1].T] # for ITP
+        plot_values_raw = [self.V_DP_2d_2[0].T, self.V_DP_2d[0].T, self.V_DP_2d_1[0].T] # for BC
+        plot_values_itp = [plot_values_V_DP_2, plot_values_V_DP, plot_values_V_DP_1]
 
-                # Plot raw values for ITP
-                axes[0][k].set_title(f"{names[k]} raw")
-                axes[0][k].contourf(solution_grid.coordinate_vectors[0], solution_grid.coordinate_vectors[1],
-                                plot_values_raw[k],
-                                levels=levels,
-                                extend="both",
-                                cmap=RdWhBl_vscaled)
-                axes[0][k].contour(solution_grid.coordinate_vectors[0], solution_grid.coordinate_vectors[1],
-                                plot_values_raw[k], levels=0, colors="black", linewidth=2)
-                axes[0][k].set_xlim(xlims)
-                axes[0][k].set_ylim(ylims)
-                axes[0][k].set_aspect('equal')
+        plot_values_bcs_t0 = [plot_values_bc2_t0, plot_values_bc_t0, plot_values_bc1_t0] # for BC
+        plot_values_bcs_t2 = [plot_values_bc2_t2, plot_values_bc_t2, plot_values_bc1_t2] # for BC
 
-                # Plot dynamics bc
-                axes[1][k].set_title(f"{names[k]} BC")
-                axes[1][k].contourf(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
-                                plot_values_bcs_t0[k],
-                                levels=levels,
-                                extend="both",
-                                cmap=RdWhBl_vscaled)
-                axes[1][k].contour(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
-                                plot_values_bcs_t0[k], levels=0, colors="black", linewidth=2, linestyle="dash")
-                axes[1][k].set_xlim(xlims)
-                axes[1][k].set_ylim(ylims)
-                axes[1][k].set_aspect('equal')
+        for k in range(3):
 
-                # Plot interpolation
-                axes[2][k].set_title(f"{names[k]} itp")
-                axes[2][k].contourf(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
-                                plot_values_itp[k],
-                                levels=levels,
-                                extend="both",
-                                cmap=RdWhBl_vscaled)
-                axes[2][k].contour(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
-                                plot_values_itp[k], levels=0, colors="black", linewidth=2)
-                axes[2][k].set_xlim(xlims)
-                axes[2][k].set_ylim(ylims)
-                axes[2][k].set_aspect('equal')
+            # Plot raw values for ITP
+            axes[0][k].set_title(f"{names[k]} raw")
+            axes[0][k].contourf(solution_grid.coordinate_vectors[0], solution_grid.coordinate_vectors[1],
+                            plot_values_raw[k],
+                            levels=levels,
+                            extend="both",
+                            cmap=RdWhBl_vscaled)
+            axes[0][k].contour(solution_grid.coordinate_vectors[0], solution_grid.coordinate_vectors[1],
+                            plot_values_raw[k], levels=0, colors="black", linewidth=2)
+            axes[0][k].set_xlim(xlims)
+            axes[0][k].set_ylim(ylims)
+            axes[0][k].set_aspect('equal')
 
-                axes[2][k].contour(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
-                                plot_values_bcs_t0[k], levels=0, colors="magenta", linewidth=2, linestyle="dash")
+            # Plot dynamics bc
+            axes[1][k].set_title(f"{names[k]} BC")
+            axes[1][k].contourf(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
+                            plot_values_bcs_t0[k],
+                            levels=levels,
+                            extend="both",
+                            cmap=RdWhBl_vscaled)
+            axes[1][k].contour(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
+                            plot_values_bcs_t0[k], levels=0, colors="black", linewidth=2, linestyle="dash")
+            axes[1][k].set_xlim(xlims)
+            axes[1][k].set_ylim(ylims)
+            axes[1][k].set_aspect('equal')
 
-                # TODO: test reach / avoid bc fns here, in N-dimensions (could also check N-dim itp combo works)
-                # TODO: then write vanilla BRAAT & BRRT loss fn's, & test w/ vanilla
-                # TODO: then write supervision BRAAT & BRRT loss fn's, & test w/ vanilla
-                # TODO: then implement various models, and test w/ DR
+            # Plot interpolation
+            axes[2][k].set_title(f"{names[k]} itp")
+            axes[2][k].contourf(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
+                            plot_values_itp[k],
+                            levels=levels,
+                            extend="both",
+                            cmap=RdWhBl_vscaled)
+            axes[2][k].contour(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
+                            plot_values_itp[k], levels=0, colors="black", linewidth=2)
+            axes[2][k].set_xlim(xlims)
+            axes[2][k].set_ylim(ylims)
+            axes[2][k].set_aspect('equal')
 
-            # plt.savefig(f"plots/random/{self.dynamics.name}_test_ITP_plot.png")
-            plt.savefig(f"plots/random/{self.dynamics.name}_test_bc_plot.png")
+            axes[2][k].contour(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
+                            plot_values_bcs_t0[k], levels=0, colors="magenta", linewidth=2, linestyle="dash")
 
-            print(f"Mean Error for bc 1: {(plot_values_bc1_t0 - plot_values_V_DP_1).abs().mean():2.0e}")
-            print(f"Mean Error for bc 2: {(plot_values_bc2_t0 - plot_values_V_DP_2).abs().mean():2.0e}")
-            print(f"Mean Error for bc: {(plot_values_bc_t0 - plot_values_V_DP).abs().mean():2.0e}")
-            return
+            # TODO: test reach / avoid bc fns here, in N-dimensions (could also check N-dim itp combo works)
+            # TODO: then write vanilla BRAAT & BRRT loss fn's, & test w/ vanilla
+            # TODO: then write supervision BRAAT & BRRT loss fn's, & test w/ vanilla
+            # TODO: then implement various models, and test w/ DR
+
+        # plt.savefig(f"plots/mulob_tests/{self.dynamics.name}_test_ITP_plot.png")
+        plt.savefig(f"plots/mulob_tests/{self.dynamics.name}_test_bc_plot.png")
+
+        print(f"Mean Error for bc 1: {(plot_values_bc1_t0 - plot_values_V_DP_1).abs().mean():2.0e}")
+        print(f"Mean Error for bc 2: {(plot_values_bc2_t0 - plot_values_V_DP_2).abs().mean():2.0e}")
+        print(f"Mean Error for bc: {(plot_values_bc_t0 - plot_values_V_DP).abs().mean():2.0e}")
+        return
     
     def make_DP_bank(self):
         
