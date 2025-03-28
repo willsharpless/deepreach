@@ -85,7 +85,8 @@ def BRAT(t, v, reach_values, avoid_values, lam): return jnp.maximum(jnp.minimum(
 ## nearest neighbor 
 def BRAAT(t, v, vA, times, rBC, aBC, lam=0.):
     i = jnp.argmin(jnp.abs(t - times)) # nearest ix
-    return jnp.minimum(jnp.maximum(v, aBC - jnp.maximum(lam, 0)), jnp.maximum(rBC+lam, vA[i,...]) - jnp.maximum(lam, 0))
+    return jnp.minimum(jnp.maximum(v, aBC - jnp.maximum(lam, 0)), 
+                       jnp.maximum(rBC+lam, vA[i,...]) - jnp.maximum(lam, 0))
 
 # Ultimately these need to be wrapped, e.g.
 # def vpp(t, v): return BRAAT_value_postprocessor(t, v, values_avoid, times, reach_values(t), avoid_values(t), lam)
@@ -98,7 +99,7 @@ diffgame_nlin = Conveyor(u_bd=u_bd, d_bd=d_bd, alpha=1., control_mode="min", dis
 
 ## params
 N = 1
-bounded_bc = False
+bounded_bc = True
 width_half = 1.5
 eps = 0.5
 ubs = np.concatenate(([eps], width_half * np.ones(N))) 
@@ -161,6 +162,9 @@ def init_values_reachavoid_ball_lam(lam): return BRAT(0., reach_values(0.), reac
 def init_values_reachavoid_axes_lam(lam): return BRAT(0., reach_values(0.), reach_values, avoid_values_axes, lam)
 
 lambdas = [-1., -0.2, 0., 0.1, 1.] if bounded_bc else [-3., -0.2, 0., 0.1, 3.0]
+
+ntimes = 101
+times = -np.linspace(0., TC, ntimes)
 
 # %% 
 
@@ -269,25 +273,19 @@ def solveplot(diffgame, init_values, post_processor, title="", tf=TC, ntimes=5,
 
 # %% 
 
-# ## Ball - BRT 
-# def BRT_pp(t,vlast,v): return BRT(t, v, reach_values)
+## BRT
+def BRT_pp(t,vlast,v): return BRT(t, v, reach_values)
 
-# # Linear
-# BRT_values, BRT_fig = solveplot(diffgame_lin, init_values_reach, BRT_pp, title="Conveyor BRT (Linear)", plot_reach_solid=False, plot_rBC=True)
+BRT_values_lin_full, BRT_lin_fig = solveplot(diffgame_lin, init_values_reach, BRT_pp, title="Conveyor BRT (Linear)", plot_reach_solid=False, plot_rBC=True, one_shot=True, ntimes=ntimes)
+BRT_values_nlin_full, BRT_nlin_fig = solveplot(diffgame_nlin, init_values_reach, BRT_pp, title="Conveyor BRT (Nonlinear)", plot_reach_solid=False, plot_rBC=True, one_shot=True, ntimes=ntimes)
 
-# # Nonlinear
-# BRT_values, BRT_fig = solveplot(diffgame_nlin, init_values_reach, BRT_pp, title="Conveyor BRT (Nonlinear)", plot_reach_solid=False, plot_rBC=True)
+# %%
 
-# %% 
+## Ball - BRAT
+def BAT_ball_pp(t,vlast,v): return BAT(t, v, avoid_values_ball)
 
-# ## Ball - BAT 
-# def BAT_ball_pp(t,vlast,v): return BAT(t, v, avoid_values_ball)
-
-# # Linear
-# BAT_values, BAT_fig = solveplot(diffgame_lin, init_values_avoid_ball, BAT_ball_pp, title="Conveyor BAT Ball (Linear)", plot_avoid_solid=True, plot_aBC=True, avoid_game=True)
-
-# # Nonlinear
-# BAT_values, BAT_fig = solveplot(diffgame_nlin, init_values_avoid_ball, BAT_ball_pp, title="Conveyor BAT Ball (Nonlinear)", plot_avoid_solid=True, plot_aBC=True, avoid_game=True)
+BAT_values_lin_ball_full, BAT_ball_lin_fig = solveplot(diffgame_lin, init_values_avoid_ball, BAT_ball_pp, title="Conveyor BAT Ball (Linear)", plot_avoid_solid=False, plot_no_value=False, plot_aBC=True, avoid_game=True, one_shot=True, ntimes=ntimes)
+BAT_values_nlin_ball_full, BAT_ball_nlin_fig = solveplot(diffgame_nlin, init_values_avoid_ball, BAT_ball_pp, title="Conveyor BAT Ball (Nonlinear)", plot_avoid_solid=False, plot_no_value=False, plot_aBC=True, avoid_game=True, one_shot=True, ntimes=ntimes)
 
 # %% 
 
@@ -299,19 +297,6 @@ def solveplot(diffgame, init_values, post_processor, title="", tf=TC, ntimes=5,
 
 # # Nonlinear
 # BRAT_values, BRAT_fig = solveplot(diffgame_nlin, init_values_reachavoid_ball, BRAT_ball_pp, title="Conveyor BRAT Ball (Nonlinear)", plot_reach_solid=False, plot_avoid_solid=False, plot_bcs=True, plot_no_value=False)
-
-# %%
-
-## Ball - BRAT
-def BAT_ball_pp(t,vlast,v): return BAT(t, v, avoid_values_ball)
-
-## Ball - BAT (full) for BRAAT
-
-ntimes = 101
-times = -np.linspace(0., TC, ntimes)
-
-BAT_values_lin_ball_full, BAT_fig = solveplot(diffgame_lin, init_values_avoid_ball, BAT_ball_pp, title="Conveyor BAT Ball (Linear)", plot_avoid_solid=False, plot_no_value=False, plot_aBC=True, avoid_game=True, one_shot=True, ntimes=ntimes)
-BAT_values_nlin_ball_full, BAT_nlin_fig = solveplot(diffgame_nlin, init_values_avoid_ball, BAT_ball_pp, title="Conveyor BAT Ball (Nonlinear)", plot_avoid_solid=False, plot_no_value=False, plot_aBC=True, avoid_game=True, one_shot=True, ntimes=ntimes)
 
 # %%
 
@@ -509,38 +494,38 @@ def anim_BRAATpanel(values_lams, lams, times, i, reach_values=reach_values, avoi
 ## Ball - BRAAT lambda panel
 
 ## Linear
-BRAAT_values_ball_lam_lin, times = solve_BRAATpanel(diffgame_lin, init_values_reachavoid_ball_lam, BAT_values_lin_ball_full, lambdas, reach_values, avoid_values_ball) 
+BRAAT_values_lam_ball_lin, times = solve_BRAATpanel(diffgame_lin, init_values_reachavoid_ball_lam, BAT_values_lin_ball_full, lambdas, reach_values, avoid_values_ball) 
 
 ## Nonlnear
-BRAAT_values_ball_lam_nlin, times = solve_BRAATpanel(diffgame_nlin, init_values_reachavoid_ball_lam, BAT_values_nlin_ball_full, lambdas, reach_values, avoid_values_ball)
+BRAAT_values_lam_ball_nlin, times = solve_BRAATpanel(diffgame_nlin, init_values_reachavoid_ball_lam, BAT_values_nlin_ball_full, lambdas, reach_values, avoid_values_ball)
 
 ## Plot
-BRAAT_ball_lam_lin_fig = plot_BRAATpanel(BRAAT_values_ball_lam_lin, lambdas, times, -1)
-BRAAT_ball_lam_nlin_fig = plot_BRAATpanel(BRAAT_values_ball_lam_nlin, lambdas, times, -1)
+BRAAT_lam_ball_lin_fig = plot_BRAATpanel(BRAAT_values_lam_ball_lin, lambdas, times, -1)
+BRAAT_lam_ball_nlin_fig = plot_BRAATpanel(BRAAT_values_lam_ball_nlin, lambdas, times, -1)
 
 # %%
 
 ## Ball - BRAAT lambda panel anim
 
 ## Linear
-BRAAT_lam_lin_anim = anim_BRAATpanel(BRAAT_values_ball_lam_lin, lambdas, times, -1, bounce=True)
+BRAAT_lam_ball_lin_anim = anim_BRAATpanel(BRAAT_values_lam_ball_lin, lambdas, times, -1, bounce=True)
 # HTML(BRAAT_lam_lin_anim.to_jshtml())
 
-BRAAT_lam_lin_anim.save('Conveyor2D_BRAAT_lam_ball_lin_anim.mp4', writer='ffmpeg', fps=25)
+# BRAAT_lam_ball_lin_anim.save('Conveyor2D_BRAAT_lam_ball_lin_anim.mp4', writer='ffmpeg', fps=25)
 
 ## Nonlinear
-BRAAT_lam_nlin_anim = anim_BRAATpanel(BRAAT_values_ball_lam_nlin, lambdas, times, -1, bounce=True)
+BRAAT_lam_ball_nlin_anim = anim_BRAATpanel(BRAAT_values_lam_ball_nlin, lambdas, times, -1, bounce=True)
 # HTML(BRAAT_lam_nlin_anim.to_jshtml())
 
-BRAAT_lam_nlin_anim.save('Conveyor2D_BRAAT_lam_ball_nlin_anim.mp4', writer='ffmpeg', fps=25)
+# BRAAT_lam_ball_nlin_anim.save('Conveyor2D_BRAAT_lam_ball_nlin_anim.mp4', writer='ffmpeg', fps=25)
 
 # %% 
 
 ## Axes - BAT (full) for BRAAT
 
 def BAT_axes_pp(t,vlast,v): return BAT(t, v, avoid_values_axes)
-BAT_values_lin_axes_full, BAT_axe_fig = solveplot(diffgame_lin, init_values_avoid_axes, BAT_axes_pp, title="Conveyor BAT Axes (Linear)", plot_avoid_solid=False, plot_no_value=False, plot_aBC=True, avoid_game=True, one_shot=True, ntimes=100, avoid_values=avoid_values_axes, offset=0)
-BAT_values_nlin_axes_full, BAT_axe_fig = solveplot(diffgame_nlin, init_values_avoid_axes, BAT_axes_pp, title="Conveyor BAT Axes (Nonlinear)", plot_avoid_solid=False, plot_no_value=False, plot_aBC=True, avoid_game=True, one_shot=True, ntimes=100, avoid_values=avoid_values_axes, offset=0)
+BAT_values_lin_axes_full, BAT_axes_lin_fig = solveplot(diffgame_lin, init_values_avoid_axes, BAT_axes_pp, title="Conveyor BAT Axes (Linear)", plot_avoid_solid=False, plot_no_value=False, plot_aBC=True, avoid_game=True, one_shot=True, ntimes=100, avoid_values=avoid_values_axes, offset=0)
+BAT_values_nlin_axes_full, BAT_axes_nlin_fig = solveplot(diffgame_nlin, init_values_avoid_axes, BAT_axes_pp, title="Conveyor BAT Axes (Nonlinear)", plot_avoid_solid=False, plot_no_value=False, plot_aBC=True, avoid_game=True, one_shot=True, ntimes=100, avoid_values=avoid_values_axes, offset=0)
 
 # %% 
 
@@ -561,59 +546,89 @@ BAT_values_nlin_axes_full, BAT_axe_fig = solveplot(diffgame_nlin, init_values_av
 ## Axes - BRAAT lambda solve
 
 ## Linear
-BRAAT_values_axes_lam_lin, times = solve_BRAATpanel(diffgame_lin, init_values_reachavoid_axes_lam, BAT_values_lin_axes_full, lambdas, reach_values, avoid_values_axes) #, tf=0.5)
+BRAAT_values_lam_axes_lin, times = solve_BRAATpanel(diffgame_lin, init_values_reachavoid_axes_lam, BAT_values_lin_axes_full, lambdas, reach_values, avoid_values_axes) #, tf=0.5)
 
 ## Nonlnear
-BRAAT_values_axes_lam_nlin, times = solve_BRAATpanel(diffgame_nlin, init_values_reachavoid_axes_lam, BAT_values_lin_axes_full, lambdas, reach_values, avoid_values_axes) #, tf=0.5)
+BRAAT_values_lam_axes_nlin, times = solve_BRAATpanel(diffgame_nlin, init_values_reachavoid_axes_lam, BAT_values_lin_axes_full, lambdas, reach_values, avoid_values_axes) #, tf=0.5)
 
 ## Plot
-BRAAT_lam_axes_lin_fig = plot_BRAATpanel(BRAAT_values_axes_lam_lin, lambdas, times, -1, avoid_values=avoid_values_axes)
-BRAAT_lam_axes_nlin_fig = plot_BRAATpanel(BRAAT_values_axes_lam_nlin, lambdas, times, -1, avoid_values=avoid_values_axes)
+BRAAT_lam_axes_lin_fig = plot_BRAATpanel(BRAAT_values_lam_axes_lin, lambdas, times, -1, avoid_values=avoid_values_axes)
+BRAAT_lam_axes_nlin_fig = plot_BRAATpanel(BRAAT_values_lam_axes_nlin, lambdas, times, -1, avoid_values=avoid_values_axes)
 
 # %% 
 
 # Axes - BRAAT lambda panel anim
 
 ## Linear
-BRAAT_lam_axes_lin_anim = anim_BRAATpanel(BRAAT_values_axes_lam_lin, lambdas, times, -1, avoid_values=avoid_values_axes, bounce=True)
+BRAAT_lam_axes_lin_anim = anim_BRAATpanel(BRAAT_values_lam_axes_lin, lambdas, times, -1, avoid_values=avoid_values_axes, bounce=True)
 # HTML(BRAAT_lam_axes_lin_anim.to_jshtml())
 
-BRAAT_lam_axes_lin_anim.save('Conveyor2D_BRAAT_lam_axes_lin_anim.mp4', writer='ffmpeg', fps=25)
+# BRAAT_lam_axes_lin_anim.save('Conveyor2D_BRAAT_lam_axes_lin_anim.mp4', writer='ffmpeg', fps=25)
 
 ## Nonlinear
-BRAAT_lam_axes_nlin_anim = anim_BRAATpanel(BRAAT_values_axes_lam_nlin, lambdas, times, -1, avoid_values=avoid_values_axes, bounce=True)
+BRAAT_lam_axes_nlin_anim = anim_BRAATpanel(BRAAT_values_lam_axes_nlin, lambdas, times, -1, avoid_values=avoid_values_axes, bounce=True)
 # HTML(BRAAT_lam_axes_nlin_anim.to_jshtml())
 
-BRAAT_lam_axes_nlin_anim.save('Conveyor2D_BRAAT_lam_axes_nlin_anim.mp4', writer='ffmpeg', fps=25)
+# BRAAT_lam_axes_nlin_anim.save('Conveyor2D_BRAAT_lam_axes_nlin_anim.mp4', writer='ffmpeg', fps=25)
 
 # %%
 
+## Save
+import os
+
+sys_f = "Conveyor"
+bd_tag, bd_f = ("bdbc", "bounded") if bounded_bc else ("ubdbc", "unbounded")
+base_tag = f"{sys_f}2D_BRAAT"
+ball_tag, axes_tag, lin_tag, nlin_tag = "ball", "axes", "lin", "nlin"
+f_path_ball, f_path_axes = f"{sys_f}/solutions/{bd_f}/{ball_tag}", f"{sys_f}/soultions/{bd_f}/{axes_tag}" 
+f_path_figs = f"{sys_f}/figs/{bd_f}"
+os.makedirs(f_path_ball, exist_ok=True)
+os.makedirs(f_path_axes, exist_ok=True)
+os.makedirs(f_path_figs, exist_ok=True)
+
+np.savez_compressed(sys_f + f"/{sys_f}2D_base_params.npz", times=times, lbs=lbs, ubs=ubs, grid_pad=grid_pad, grid_L=grid_L)
+
 reduced_type = np.float16
 
-# np.savez_compressed("Conveyor2D_base_params.npz", times=times, lbs=lbs, ubs=ubs, grid_pad=grid_pad, grid_L=grid_L)
+# Reach Value (same for ball/axes)
+np.savez_compressed(f_path_ball + f"/{base_tag}_{bd_tag}_{lin_tag}_Vr.npz", Vr=BRT_values_lin_full.astype(reduced_type))
+np.savez_compressed(f_path_axes + f"/{base_tag}_{bd_tag}_{lin_tag}_Vr.npz", Vr=BRT_values_lin_full.astype(reduced_type))
+np.savez_compressed(f_path_ball + f"/{base_tag}_{bd_tag}_{nlin_tag}_Vr.npz", Vr=BRT_values_nlin_full.astype(reduced_type))
+np.savez_compressed(f_path_axes + f"/{base_tag}_{bd_tag}_{nlin_tag}_Vr.npz", Vr=BRT_values_nlin_full.astype(reduced_type))
 
-np.savez_compressed("Conveyor2D_ball_lin_BRAAT_Va.npz", 
-                    Va=BAT_values_lin_ball_full.astype(reduced_type))
+# Avoid
+np.savez_compressed(f_path_ball + f"/{base_tag}_{bd_tag}_{ball_tag}_{lin_tag}_Va.npz", Va=BAT_values_lin_ball_full.astype(reduced_type))
+np.savez_compressed(f_path_ball + f"/{base_tag}_{bd_tag}_{ball_tag}_{nlin_tag}_Va.npz", Va=BAT_values_nlin_ball_full.astype(reduced_type))
+np.savez_compressed(f_path_axes + f"/{base_tag}_{bd_tag}_{axes_tag}_{lin_tag}_Va.npz", Va=BAT_values_lin_axes_full.astype(reduced_type))
+np.savez_compressed(f_path_axes + f"/{base_tag}_{bd_tag}_{axes_tag}_{nlin_tag}_Va.npz", Va=BAT_values_nlin_axes_full.astype(reduced_type))
 
-np.savez_compressed("Conveyor2D_ball_nlin_BRAAT_Va.npz", 
-                    Va=BAT_values_nlin_ball_full.astype(reduced_type))
+# Reach-Avoid
+np.savez_compressed(f_path_ball + f"/{base_tag}_{bd_tag}_{ball_tag}_{lin_tag}_V.npz", V=BRAAT_values_lam_ball_lin[2].astype(reduced_type))
+np.savez_compressed(f_path_ball + f"/{base_tag}_{bd_tag}_{ball_tag}_{nlin_tag}_V.npz", V=BRAAT_values_lam_ball_nlin[2].astype(reduced_type))
+np.savez_compressed(f_path_axes + f"/{base_tag}_{bd_tag}_{axes_tag}_{lin_tag}_V.npz", V=BRAAT_values_lam_axes_lin[2].astype(reduced_type))
+np.savez_compressed(f_path_axes + f"/{base_tag}_{bd_tag}_{axes_tag}_{nlin_tag}_V.npz", V=BRAAT_values_lam_axes_nlin[2].astype(reduced_type))
 
-np.savez_compressed("Conveyor2D_ball_lin_BRAAT_V.npz", 
-                    V=BRAAT_values_ball_lam_nlin[2].astype(reduced_type))
+# %%
 
-np.savez_compressed("Conveyor2D_ball_nlin_BRAAT_V.npz", 
-                    V=BRAAT_values_ball_lam_lin[2].astype(reduced_type))
+# Figures
+BRT_lin_fig.savefig(f_path_figs + f'/{base_tag}_{bd_tag}_{lin_tag}_BRT')
+BRT_nlin_fig.savefig(f_path_figs + f'/{base_tag}_{bd_tag}_{nlin_tag}_BRT')
 
-np.savez_compressed("Conveyor2D_axes_lin_BRAAT_Va.npz", 
-                    Va=BAT_values_lin_axes_full.astype(reduced_type))
+BAT_ball_lin_fig.savefig(f_path_figs + f'/{base_tag}_{bd_tag}_{ball_tag}_{lin_tag}_BAT')
+BAT_ball_nlin_fig.savefig(f_path_figs + f'/{base_tag}_{bd_tag}_{ball_tag}_{nlin_tag}_BAT')
+BAT_axes_lin_fig.savefig(f_path_figs + f'/{base_tag}_{bd_tag}_{axes_tag}_{lin_tag}_BAT')
+BAT_axes_nlin_fig.savefig(f_path_figs + f'/{base_tag}_{bd_tag}_{axes_tag}_{nlin_tag}_BAT')
 
-np.savez_compressed("Conveyor2D_axes_nlin_BRAAT_Va.npz", 
-                    Va=BAT_values_nlin_axes_full.astype(reduced_type))
+BRAAT_lam_ball_lin_fig.savefig(f_path_figs + f'/{base_tag}_{bd_tag}_{ball_tag}_{lin_tag}_BRAAT_lam')
+BRAAT_lam_ball_nlin_fig.savefig(f_path_figs + f'/{base_tag}_{bd_tag}_{ball_tag}_{nlin_tag}_BRAAT_lam')
+BRAAT_lam_axes_lin_fig.savefig(f_path_figs + f'/{base_tag}_{bd_tag}_{axes_tag}_{lin_tag}_BRAAT_lam')
+BRAAT_lam_axes_nlin_fig.savefig(f_path_figs + f'/{base_tag}_{bd_tag}_{axes_tag}_{nlin_tag}_BRAAT_lam')
 
-np.savez_compressed("Conveyor2D_axes_lin_BRAAT_V.npz", 
-                    V=BRAAT_values_axes_lam_nlin[2].astype(reduced_type))
+# Animations
+BRAAT_lam_ball_lin_anim.save(f_path_figs + f'/{base_tag}_{bd_tag}_{ball_tag}_{lin_tag}_lam_anim.mp4', writer='ffmpeg', fps=25)
+BRAAT_lam_ball_nlin_anim.save(f_path_figs + f'/{base_tag}_{bd_tag}_{ball_tag}_{nlin_tag}_lam_anim.mp4', writer='ffmpeg', fps=25)
 
-np.savez_compressed("Conveyor2D_axes_nlin_BRAAT_V.npz", 
-                    V=BRAAT_values_axes_lam_lin[2].astype(reduced_type))
+BRAAT_lam_axes_lin_anim.save(f_path_figs + f'/{base_tag}_{bd_tag}_{axes_tag}_{lin_tag}_lam_anim.mp4', writer='ffmpeg', fps=25)
+BRAAT_lam_axes_nlin_anim.save(f_path_figs + f'/{base_tag}_{bd_tag}_{axes_tag}_{nlin_tag}_lam_anim.mp4', writer='ffmpeg', fps=25)
 
 # %%
