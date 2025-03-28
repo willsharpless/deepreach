@@ -591,10 +591,10 @@ np.savez_compressed(sys_f + f"/{sys_f}2D_base_params.npz", times=times, lbs=lbs,
 reduced_type = np.float16
 
 # Reach Value (same for ball/axes)
-np.savez_compressed(f_path_ball + f"/{base_tag}_{bd_tag}_{lin_tag}_Vr.npz", Vr=BRT_values_lin_full.astype(reduced_type))
-np.savez_compressed(f_path_axes + f"/{base_tag}_{bd_tag}_{lin_tag}_Vr.npz", Vr=BRT_values_lin_full.astype(reduced_type))
-np.savez_compressed(f_path_ball + f"/{base_tag}_{bd_tag}_{nlin_tag}_Vr.npz", Vr=BRT_values_nlin_full.astype(reduced_type))
-np.savez_compressed(f_path_axes + f"/{base_tag}_{bd_tag}_{nlin_tag}_Vr.npz", Vr=BRT_values_nlin_full.astype(reduced_type))
+np.savez_compressed(f_path_ball + f"/{base_tag}_{bd_tag}_{ball_tag}_{lin_tag}_Vr.npz", Vr=BRT_values_lin_full.astype(reduced_type))
+np.savez_compressed(f_path_axes + f"/{base_tag}_{bd_tag}_{ball_tag}_{lin_tag}_Vr.npz", Vr=BRT_values_lin_full.astype(reduced_type))
+np.savez_compressed(f_path_ball + f"/{base_tag}_{bd_tag}_{axes_tag}_{nlin_tag}_Vr.npz", Vr=BRT_values_nlin_full.astype(reduced_type))
+np.savez_compressed(f_path_axes + f"/{base_tag}_{bd_tag}_{axes_tag}_{nlin_tag}_Vr.npz", Vr=BRT_values_nlin_full.astype(reduced_type))
 
 # Avoid
 np.savez_compressed(f_path_ball + f"/{base_tag}_{bd_tag}_{ball_tag}_{lin_tag}_Va.npz", Va=BAT_values_lin_ball_full.astype(reduced_type))

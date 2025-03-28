@@ -379,14 +379,14 @@ class ReachabilityDataset(Dataset):
             # TODO: just for testing, remove later
             # self.dynamics.name = "Conveyor"
             if self.dynamics.name == "Conveyor":
-                self.gt_key = "axes/bounded/Conveyor2D_axes_nlin_BRAAT_bdbc"
+                self.gt_key = "bounded/axes/Conveyor2D_BRAAT_bdbc_axes_lin"
             elif self.dynamics.name == "Canoe":
                 self.gt_key = "bounded/Canoe2D_BRRT_bdbc_tv"
 
             ## Load HJR solutions
             if not make_gt_solutions:
 
-                print(f"Loading *{self.dynamics.name}/{self.gt_key}* ground truth solutions (hj_reachability.py)...")
+                print(f"Loading *{self.gt_key}* ground truth solutions (hj_reachability.py)...")
 
                 grid_params = np.load(f"value_fns/{self.dynamics.name}/{self.dynamics.name}_base_params.npz")
                 
@@ -401,17 +401,17 @@ class ReachabilityDataset(Dataset):
                 self.dynamics.state_scale = state_scale
                 self.dynamics.state_center = state_center # TODO move these?
 
-                V_DP_sub = np.load(f"value_fns/{self.dynamics.name}/{self.gt_key}_V.npz")["V"]
+                V_DP_sub = np.load(f"value_fns/{self.dynamics.name}/solutions/{self.gt_key}_V.npz")["V"]
 
                 if self.dynamics.name == "Conveyor":
                     
-                    V_DP_sub_1 = np.load(f"value_fns/{self.dynamics.name}/{self.gt_key}_Vr.npz")["Vr"]
-                    V_DP_sub_2 = np.load(f"value_fns/{self.dynamics.name}/{self.gt_key}_Va.npz")["Va"]
+                    V_DP_sub_1 = np.load(f"value_fns/{self.dynamics.name}/solutions/{self.gt_key}_Vr.npz")["Vr"]
+                    V_DP_sub_2 = np.load(f"value_fns/{self.dynamics.name}/solutions/{self.gt_key}_Va.npz")["Va"]
 
                 elif self.dynamics.name == "Canoe":
                     
-                    V_DP_sub_1 = np.load(f"value_fns/{self.dynamics.name}/{self.gt_key}_V1.npz")["V1"]
-                    V_DP_sub_2 = np.load(f"value_fns/{self.dynamics.name}/{self.gt_key}_V2.npz")["V2"]
+                    V_DP_sub_1 = np.load(f"value_fns/{self.dynamics.name}/solutions/{self.gt_key}_V1.npz")["V1"]
+                    V_DP_sub_2 = np.load(f"value_fns/{self.dynamics.name}/solutions/{self.gt_key}_V2.npz")["V2"]
                 
                 else:
                     raise NotImplementedError
