@@ -130,14 +130,15 @@ else:
 ## Define BC with post-processors (with values = bc(0.))
 init_values_1 = target_values_1(0.)
 init_values_2 = target_values_2(0.)
-init_values = jnp.minimum(target_values_1(0.), target_values_2(0.))
+init_values = jnp.maximum(target_values_1(0.), target_values_2(0.))
 
 init_values_1_tv = target_values_1_tv(0.)
-init_values_tv = jnp.minimum(target_values_1_tv(0.), target_values_2(0.))
+init_values_tv = jnp.maximum(target_values_1_tv(0.), target_values_2(0.))
 
-def init_values_lam(lam): return BRRT(0., jnp.inf * jnp.abs(target_values_1(0.)), target_values_1(0.), target_values_2(0.), times, target_values_1(0.), target_values_2(0.), lam)
-def init_values_lam_tv(lam): return BRRT(0., jnp.inf * jnp.abs(target_values_1_tv(0.)), target_values_1(0.), target_values_2(0.), times, target_values_1_tv(0.), target_values_2(0.), lam)
-# this is to be careful but also could be init_val_lam = max{target_values_1+lambda, target_values_2}-max{lambda,0}
+# def init_values_lam(lam): return jnp.maximum(target_values_1(0.) + lam, target_values_2(0.)) - jnp.maximum(lam, 0)
+def init_values_lam(lam): return jnp.maximum(target_values_1(0.) - jnp.maximum(-lam, 0), target_values_2(0.) + jnp.maximum(lam, 0))
+# def init_values_lam_tv(lam): return jnp.maximum(target_values_1_tv(0.) + lam, target_values_2(0.)) - jnp.maximum(lam, 0)
+def init_values_lam_tv(lam): return jnp.maximum(target_values_1_tv(0.) - jnp.maximum(-lam, 0), target_values_2(0.) + jnp.maximum(lam, 0))
 
 lambdas = [-1., -0.2, 0., 0.2, 1.] if bounded_bc else [-3., -0.2, 0., 0.2, 3.]
 
@@ -590,6 +591,7 @@ np.savez_compressed(f_path + f"/{base_tag}_{bd_tag}_tv_V1.npz", V1=reach_values_
 
 # Reach 2
 np.savez_compressed(f_path + f"/{base_tag}_{bd_tag}_V2.npz", V2=reach_values_2.astype(reduced_type))
+np.savez_compressed(f_path + f"/{base_tag}_{bd_tag}_tv_V2.npz", V2=reach_values_2.astype(reduced_type))
 
 # Reach-Reach
 np.savez_compressed(f_path + f"/{base_tag}_{bd_tag}_V.npz", V=reach_values_stat.astype(reduced_type))
