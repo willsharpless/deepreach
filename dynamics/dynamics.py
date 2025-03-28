@@ -760,11 +760,13 @@ class LessLinearNDlambda(Dynamics):
         }
 
 class ConveyorND(Dynamics):
-    def __init__(self, N:int, goalR:float):
+    def __init__(self, N:int, bounded_bc:bool):
     # def __init__(self, N:int):
         self.name = "Conveyor"
+        self.bounded_bc, self.bc_alpha = bounded_bc, 0.5
         reach_only, avoid_only = False, False
         u_max, d_max = 0.6, 0.2
+        goalR = 0.3
         alpha = 0. # = 0 -> linear dynamics
 
         if reach_only:
@@ -775,8 +777,9 @@ class ConveyorND(Dynamics):
             self.reach_only, self.avoid_only = False, True
         else:
             loss_type, set_mode = 'brat_hjivi', 'reach'
+            self.reach_only, self.avoid_only = False, False
 
-        self.N = N 
+        self.N = N # num dims, = num sub sys + 1
         self.u_max, self.d_max = u_max, d_max
         self.input_center = torch.zeros(N-1)
         self.input_shape = "box"
@@ -784,7 +787,6 @@ class ConveyorND(Dynamics):
         self.shared_x0 = True # if certain decomposable system
         self.dim_sub = 1 # dim of ea. subsystem
         
-        # self.A = (-0.5 * torch.eye(N) - torch.cat((torch.cat((torch.zeros(1,1),torch.ones(N-1,1)),0),torch.zeros(N,N-1)),1)).cuda()
         self.B = torch.cat((torch.zeros(1,N-1), torch.eye(N-1)), 0)
         self.Bumax = u_max * torch.matmul(self.B, torch.ones(self.N-1)).unsqueeze(0).unsqueeze(0).cuda()
         self.C = torch.cat((torch.zeros(1,N-1), torch.eye(N-1)), 0)
@@ -851,9 +853,9 @@ class ConveyorND(Dynamics):
 
     def avoid_fn(self, state, time):
 
-        c1_t = torch.tensor([-0.5, 0.]) * torch.ones_like(state[..., :2]) + torch.stack((torch.zeros_like(state[..., 0]), torch.cos(torch.pi * time)),-1)
-        c2_t = torch.tensor([-1.0, 0.]) * torch.ones_like(state[..., :2]) + torch.stack((torch.zeros_like(state[..., 0]), torch.cos(torch.pi * (time + 1))),-1)
-        c3_t = torch.tensor([-1.5, 0.]) * torch.ones_like(state[..., :2]) + torch.stack((torch.zeros_like(state[..., 0]), torch.cos(torch.pi * time)),-1)
+        c1_t = torch.tensor([-0.5, 0.]) * torch.ones_like(state[..., :2]) + torch.hstack((torch.zeros_like(state[..., 0:1]), torch.cos(torch.pi * time)))
+        c2_t = torch.tensor([-1.0, 0.]) * torch.ones_like(state[..., :2]) + torch.hstack((torch.zeros_like(state[..., 0:1]), torch.cos(torch.pi * (time + 1))))
+        c3_t = torch.tensor([-1.5, 0.]) * torch.ones_like(state[..., :2]) + torch.hstack((torch.zeros_like(state[..., 0:1]), torch.cos(torch.pi * time)))
 
         shape_p = torch.cat((5 * torch.ones_like(state[..., 0:1]), torch.ones_like(state[..., 1:2])), 1)
 
@@ -862,9 +864,9 @@ class ConveyorND(Dynamics):
             
             tf_state = state[..., [0, 1+i]]
 
-            values_i_axe_1 = torch.norm(shape_p * (tf_state - c1_t), dim=-1, p=1)
-            values_i_axe_2 = torch.norm(shape_p * (tf_state - c2_t), dim=-1, p=1)
-            values_i_axe_3 = torch.norm(shape_p * (tf_state - c3_t), dim=-1, p=1)
+            values_i_axe_1 = torch.norm(shape_p * (tf_state - c1_t), dim=-1, p=float("inf"))
+            values_i_axe_2 = torch.norm(shape_p * (tf_state - c2_t), dim=-1, p=float("inf"))
+            values_i_axe_3 = torch.norm(shape_p * (tf_state - c3_t), dim=-1, p=float("inf"))
             values_i_axes = torch.minimum(values_i_axe_1, torch.minimum(values_i_axe_2, values_i_axe_3)) - self.goalR
             
             if self.bounded_bc:
@@ -930,11 +932,13 @@ class ConveyorND(Dynamics):
         }
 
 class ConveyorNDlambda(Dynamics):
-    def __init__(self, N:int, goalR:float):
+    def __init__(self, N:int, bounded_bc:bool):
     # def __init__(self, N:int):
         self.name = "Conveyor"
+        self.bounded_bc, self.bc_alpha = bounded_bc, 0.5
         reach_only, avoid_only = False, False
         u_max, d_max = 0.6, 0.2
+        goalR = 0.3
         alpha = 0. # = 0 -> linear dynamics
 
         if reach_only:
@@ -946,7 +950,7 @@ class ConveyorNDlambda(Dynamics):
         else:
             loss_type, set_mode = 'brat_hjivi', 'reach'
 
-        self.N = N 
+        self.N = N # num dims, = num sub sys + 1 (w/o lambda)
         self.u_max, self.d_max = u_max, d_max
         self.input_center = torch.zeros(N-1)
         self.input_shape = "box"
@@ -954,7 +958,6 @@ class ConveyorNDlambda(Dynamics):
         self.shared_x0 = True # if certain decomposable system
         self.dim_sub = 1 # dim of ea. subsystem
         
-        # self.A = (-0.5 * torch.eye(N) - torch.cat((torch.cat((torch.zeros(1,1),torch.ones(N-1,1)),0),torch.zeros(N,N-1)),1)).cuda()
         self.B = torch.cat((torch.zeros(1,N-1), torch.eye(N-1)), 0)
         self.Bumax = u_max * torch.matmul(self.B, torch.ones(self.N-1)).unsqueeze(0).unsqueeze(0).cuda()
         self.C = torch.cat((torch.zeros(1,N-1), torch.eye(N-1)), 0)
@@ -1026,9 +1029,9 @@ class ConveyorNDlambda(Dynamics):
 
     def avoid_fn(self, state, time):
 
-        c1_t = torch.tensor([-0.5, 0.]) * torch.ones_like(state[..., :2]) + torch.stack((torch.zeros_like(state[..., 0]), torch.cos(torch.pi * time)),-1)
-        c2_t = torch.tensor([-1.0, 0.]) * torch.ones_like(state[..., :2]) + torch.stack((torch.zeros_like(state[..., 0]), torch.cos(torch.pi * (time + 1))),-1)
-        c3_t = torch.tensor([-1.5, 0.]) * torch.ones_like(state[..., :2]) + torch.stack((torch.zeros_like(state[..., 0]), torch.cos(torch.pi * time)),-1)
+        c1_t = torch.tensor([-0.5, 0.]) * torch.ones_like(state[..., :2]) + torch.hstack((torch.zeros_like(state[..., 0:1]), torch.cos(torch.pi * time)))
+        c2_t = torch.tensor([-1.0, 0.]) * torch.ones_like(state[..., :2]) + torch.hstack((torch.zeros_like(state[..., 0:1]), torch.cos(torch.pi * (time + 1))))
+        c3_t = torch.tensor([-1.5, 0.]) * torch.ones_like(state[..., :2]) + torch.hstack((torch.zeros_like(state[..., 0:1]), torch.cos(torch.pi * time)))
 
         shape_p = torch.cat((5 * torch.ones_like(state[..., 0:1]), torch.ones_like(state[..., 1:2])), 1)
 
@@ -1037,9 +1040,9 @@ class ConveyorNDlambda(Dynamics):
             
             tf_state = state[..., [0, 1+i]]
 
-            values_i_axe_1 = torch.norm(shape_p * (tf_state - c1_t), dim=-1, p=1)
-            values_i_axe_2 = torch.norm(shape_p * (tf_state - c2_t), dim=-1, p=1)
-            values_i_axe_3 = torch.norm(shape_p * (tf_state - c3_t), dim=-1, p=1)
+            values_i_axe_1 = torch.norm(shape_p * (tf_state - c1_t), dim=-1, p=float("inf"))
+            values_i_axe_2 = torch.norm(shape_p * (tf_state - c2_t), dim=-1, p=float("inf"))
+            values_i_axe_3 = torch.norm(shape_p * (tf_state - c3_t), dim=-1, p=float("inf"))
             values_i_axes = torch.minimum(values_i_axe_1, torch.minimum(values_i_axe_2, values_i_axe_3)) - self.goalR
             
             if self.bounded_bc:
@@ -1107,11 +1110,13 @@ class ConveyorNDlambda(Dynamics):
 
 
 class CanoeND(Dynamics):
-    def __init__(self, Nh:int, goalR:float):
+    def __init__(self, Nh:int, bounded_bc:bool):
     # def __init__(self, N:int):
         self.name = "Canoe"
+        self.bounded_bc, self.bc_alpha = bounded_bc, 0.5
         reach_1_only, reach_2_only = False, False
         u_max, d_max = 1.0, 0.1
+        goalR = 0.2
         alpha = 0. # = 0 -> linear dynamics
 
         if reach_1_only:
@@ -1122,6 +1127,7 @@ class CanoeND(Dynamics):
             self.reach_1_only, self.reach_2_only = False, True
         else:
             loss_type, set_mode = 'brrt_hjivi', 'reach'
+            self.reach_1_only, self.reach_2_only = False, False
 
         self.Nh = Nh # num subsystems
         self.N = 2*Nh # num dims
@@ -1130,9 +1136,8 @@ class CanoeND(Dynamics):
         self.input_shape = "box"
         self.game = set_mode
         self.shared_x0 = True # if certain decomposable system
-        self.dim_sub = 1 # dim of ea. subsystem
+        self.dim_sub = 2 # dim of ea. subsystem
         
-        # self.A = (-0.5 * torch.eye(N) - torch.cat((torch.cat((torch.zeros(1,1),torch.ones(N-1,1)),0),torch.zeros(N,N-1)),1)).cuda()
         self.B = torch.eye(self.N)
         self.Bumax = u_max * torch.matmul(self.B, torch.ones(self.N)).unsqueeze(0).unsqueeze(0).cuda()
         self.C = torch.eye(self.N)
@@ -1152,7 +1157,7 @@ class CanoeND(Dynamics):
         self.u_max, self.d_max = u_max, d_max
         super().__init__(
             loss_type=loss_type, set_mode=set_mode,
-            state_dim=self.N, input_dim=self.N+1, control_dim=self.N, disturbance_dim=self.N,
+            state_dim=self.N, input_dim=self.N+1, control_dim=self.N, disturbance_dim=self.N,   
             state_mean=[self.state_center_2d[i] for _ in range(Nh) for i in range(2)],
             state_var=[self.state_scale for _ in range(self.N)],
             value_mean=0.25, 
@@ -1192,14 +1197,13 @@ class CanoeND(Dynamics):
 
         target_width = 0.5
         target_height = 1.
-
-        c1_t = torch.tensor([-1.0, target_height]) * torch.ones_like(state[..., :2]) - self.current_h * torch.stack((time * torch.ones_like(state[..., 0]), torch.zeros_like(state[..., 1])),-1)
-        # c2 = torch.tensor([target_width, target_height]) * torch.ones_like(state[..., :2])
+        
+        c1_t = torch.tensor([-1.0, target_height]) * torch.ones_like(state[..., :2]) - self.current_h * torch.hstack((time * torch.ones_like(state[..., 0:1]), torch.zeros_like(state[..., 0:1])))
 
         values = 0. * state[..., 0]
-        for i in range(self.N-1):
+        for i in range(self.Nh):
 
-            tf_state = state[..., [0, 1+i]]
+            tf_state = state[..., i*self.dim_sub:(i+1)*self.dim_sub]
             values_i = torch.norm(tf_state - c1_t, dim=-1) - self.goalR
 
             if self.bounded_bc:
@@ -1207,21 +1211,19 @@ class CanoeND(Dynamics):
             else:
                 values += values_i
 
-        # return self.bc_alpha * value / (self.N-1)
-        return (self.bc_alpha * values / (self.N-1)) - F.relu(-state[..., -1]) # NOTE now bc_val - F.relu(-lam) s.t. lam >> 0 -> bc = reach_fn_1
+        return (self.bc_alpha * values / self.Nh)
 
     def reach_fn_2(self, state, time):
 
         target_width = 0.5
         target_height = 1.
 
-        # c1_t = torch.tensor([-1.0, target_height]) * torch.ones_like(state[..., :2]) - self.current_h * torch.cat((time * torch.ones_like(state[..., 0]), torch.zeros_like(state[..., 1])),-1)
         c2 = torch.tensor([target_width, target_height]) * torch.ones_like(state[..., :2])
 
         values = 0. * state[..., 0]
-        for i in range(self.N-1):
+        for i in range(self.Nh):
 
-            tf_state = state[..., [0, 1+i]]
+            tf_state = state[..., i*self.dim_sub:(i+1)*self.dim_sub]
             values_i = torch.norm(tf_state - c2, dim=-1) - self.goalR
 
             if self.bounded_bc:
@@ -1229,16 +1231,15 @@ class CanoeND(Dynamics):
             else:
                 values += values_i
 
-        # return self.bc_alpha * value / (self.N-1)
-        return (self.bc_alpha * values / (self.N-1)) - F.relu(state[..., -1]) # NOTE now bc_val - F.relu(lam) s.t. lam << 0 -> bc = reach_fn_2
+        return (self.bc_alpha * values / self.Nh)
 
     def boundary_fn(self, state, time):
         if self.reach_1_only:
-            return self.reach_1_only(state, time)
+            return self.reach_fn_1(state, time)
         elif self.reach_2_only:
-            return self.reach_2_only(state, time)
+            return self.reach_fn_2(state, time)
         else:
-            return torch.maximum(self.reach_1_only(state, time), self.reach_2_only(state, time))
+            return torch.maximum(self.reach_fn_1(state, time), self.reach_fn_2(state, time))
 
     def sample_target_state(self, num_samples):
         raise NotImplementedError
@@ -1290,11 +1291,13 @@ class CanoeND(Dynamics):
         }
 
 class CanoeNDlambda(Dynamics):
-    def __init__(self, Nh:int, goalR:float):
+    def __init__(self, Nh:int, bounded_bc:bool):
     # def __init__(self, N:int):
         self.name = "Canoe"
+        self.bounded_bc, self.bc_alpha = bounded_bc, 0.5
         reach_1_only, reach_2_only = False, False
         u_max, d_max = 1.0, 0.1
+        goalR = 0.2
         alpha = 0. # = 0 -> linear dynamics
 
         if reach_1_only:
@@ -1305,17 +1308,17 @@ class CanoeNDlambda(Dynamics):
             self.reach_1_only, self.reach_2_only = False, True
         else:
             loss_type, set_mode = 'brrt_hjivi', 'reach'
+            self.reach_1_only, self.reach_2_only = False, False
 
         self.Nh = Nh # num subsystems
-        self.N = 2*Nh # num dims
+        self.N = 2*Nh # num dims (w/o lambda)
         self.u_max, self.d_max = u_max, d_max
         self.input_center = torch.zeros(self.N)
         self.input_shape = "box"
         self.game = set_mode
         self.shared_x0 = True # if certain decomposable system
-        self.dim_sub = 1 # dim of ea. subsystem
+        self.dim_sub = 2 # dim of ea. subsystem
         
-        # self.A = (-0.5 * torch.eye(N) - torch.cat((torch.cat((torch.zeros(1,1),torch.ones(N-1,1)),0),torch.zeros(N,N-1)),1)).cuda()
         self.B = torch.eye(self.N)
         self.Bumax = u_max * torch.matmul(self.B, torch.ones(self.N)).unsqueeze(0).unsqueeze(0).cuda()
         self.C = torch.eye(self.N)
@@ -1340,7 +1343,7 @@ class CanoeNDlambda(Dynamics):
         self.u_max, self.d_max = u_max, d_max
         super().__init__(
             loss_type=loss_type, set_mode=set_mode,
-            state_dim=self.N+1, input_dim=self.N+2, control_dim=self.N-1, disturbance_dim=self.N-1, # NOTE lambda
+            state_dim=self.N+1, input_dim=self.N+2, control_dim=self.N, disturbance_dim=self.N, # NOTE lambda
             state_mean=[self.state_center_2d[i] for _ in range(Nh) for i in range(2)] + [self.lambda_center], # NOTE lambda 
             state_var=[self.state_scale for _ in range(self.N)] + [self.lambda_range/2], # NOTE lambda
             value_mean=0.25, 
@@ -1381,13 +1384,12 @@ class CanoeNDlambda(Dynamics):
         target_width = 0.5
         target_height = 1.
 
-        c1_t = torch.tensor([-1.0, target_height]) * torch.ones_like(state[..., :2]) - self.current_h * torch.cat((time * torch.ones_like(state[..., 0]), torch.zeros_like(state[..., 1])),-1)
-        # c2 = torch.tensor([target_width, target_height]) * torch.ones_like(state[..., :2])
+        c1_t = torch.tensor([-1.0, target_height]) * torch.ones_like(state[..., :2]) - self.current_h * torch.hstack((time * torch.ones_like(state[..., 0:1]), torch.zeros_like(state[..., 0:1])))
 
         values = 0. * state[..., 0]
-        for i in range(self.N-1):
+        for i in range(self.Nh):
 
-            tf_state = state[..., [0, 1+i]]
+            tf_state = state[..., i*self.dim_sub:(i+1)*self.dim_sub]
             values_i = torch.norm(tf_state - c1_t, dim=-1) - self.goalR
 
             if self.bounded_bc:
@@ -1395,20 +1397,19 @@ class CanoeNDlambda(Dynamics):
             else:
                 values += values_i
 
-        return (self.bc_alpha * values / (self.N-1)) - F.relu(state[..., -1]) # NOTE now bc_val - F.relu(-lambda)
+        return (self.bc_alpha * values / self.Nh) - F.relu(state[..., -1]) # NOTE now bc_val - F.relu(-lambda)
 
     def reach_fn_2(self, state, time):
 
         target_width = 0.5
         target_height = 1.
 
-        # c1_t = torch.tensor([-1.0, target_height]) * torch.ones_like(state[..., :2]) - self.current_h * torch.cat((time * torch.ones_like(state[..., 0]), torch.zeros_like(state[..., 1])),-1)
         c2 = torch.tensor([target_width, target_height]) * torch.ones_like(state[..., :2])
 
         values = 0. * state[..., 0]
-        for i in range(self.N-1):
+        for i in range(self.Nh):
 
-            tf_state = state[..., [0, 1+i]]
+            tf_state = state[..., i*self.dim_sub:(i+1)*self.dim_sub]
             values_i = torch.norm(tf_state - c2, dim=-1) - self.goalR
 
             if self.bounded_bc:
@@ -1416,15 +1417,15 @@ class CanoeNDlambda(Dynamics):
             else:
                 values += values_i
 
-        return (self.bc_alpha * values / (self.N-1)) - F.relu(-state[..., -1]) # NOTE now bc_val - F.relu(-lambda)
+        return (self.bc_alpha * values / self.Nh) - F.relu(-state[..., -1]) # NOTE now bc_val - F.relu(-lambda)
 
     def boundary_fn(self, state, time):
         if self.reach_1_only:
-            return self.reach_1_only(state, time)
+            return self.reach_fn_1(state, time)
         elif self.reach_2_only:
-            return self.reach_2_only(state, time)
+            return self.reach_fn_2(state, time)
         else:
-            return torch.maximum(self.reach_1_only(state, time), self.reach_2_only(state, time))
+            return torch.maximum(self.reach_fn_1(state, time), self.reach_fn_2(state, time))
 
     def sample_target_state(self, num_samples):
         raise NotImplementedError
