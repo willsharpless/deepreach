@@ -1135,7 +1135,7 @@ class CanoeND(Dynamics):
         self.input_center = torch.zeros(self.N)
         self.input_shape = "box"
         self.game = set_mode
-        self.shared_x0 = True # if certain decomposable system
+        self.shared_x0 = False # if certain decomposable system
         self.dim_sub = 2 # dim of ea. subsystem
         
         self.B = torch.eye(self.N)
@@ -1316,7 +1316,7 @@ class CanoeNDlambda(Dynamics):
         self.input_center = torch.zeros(self.N)
         self.input_shape = "box"
         self.game = set_mode
-        self.shared_x0 = True # if certain decomposable system
+        self.shared_x0 = False
         self.dim_sub = 2 # dim of ea. subsystem
         
         self.B = torch.eye(self.N)

@@ -626,65 +626,86 @@ class ReachabilityDataset(Dataset):
         
         grid_L = xig_1.size()[0]
         self.X1g, self.X2g = torch.meshgrid(xig_1, xig_2)
-        self.model_states_grid = torch.cat((self.X1g.ravel().reshape((1,grid_L**2)), self.X2g.ravel().reshape((1,grid_L**2))), dim=0).t()
-        self.n_grid_pts = grid_L**2
+        self.model_states_grid_2d = torch.cat((self.X1g.ravel().reshape((1,grid_L**2)), self.X2g.ravel().reshape((1,grid_L**2))), dim=0).t()
+        self.n_grid_pts_2d = grid_L**2
         self.n_grid_t_pts, self.n_grid_t_pts_hi = 5, 20
 
         ## Make a low and high res grids wrt time
         if self.N == 2:
 
-            times = torch.full((self.n_grid_pts, 1), self.tMin) # TODO: remove first time-point if model='exact'
-            self.model_coords_grid_allt = torch.cat((times, self.model_states_grid), dim=1) 
-            # self.model_coords_grid_allt_hi = torch.cat((times, self.model_states_grid), dim=1) 
+            times = torch.full((self.n_grid_pts_2d, 1), self.tMin) # TODO: remove first time-point if model='exact'
+            self.model_coords_grid_allt = torch.cat((times, self.model_states_grid_2d), dim=1) 
+            # self.model_coords_grid_allt_hi = torch.cat((times, self.model_states_grid_2d), dim=1) 
 
             for i in range(self.n_grid_t_pts-1):
-                times = torch.full((self.n_grid_pts, 1), (i+1)*(self.tMax - self.tMin)/(self.n_grid_t_pts-1))
-                new_coords = torch.cat((times, self.model_states_grid), dim=1) 
+                times = torch.full((self.n_grid_pts_2d, 1), (i+1)*(self.tMax - self.tMin)/(self.n_grid_t_pts-1))
+                new_coords = torch.cat((times, self.model_states_grid_2d), dim=1) 
                 self.model_coords_grid_allt = torch.cat((self.model_coords_grid_allt, new_coords), dim=0) 
             # for i in range(self.n_grid_t_pts_hi-1):
-            #     times = torch.full((self.n_grid_pts, 1), (i+1)*(self.tMax - self.tMin)/(self.n_grid_t_pts_hi-1))
-            #     new_coords = torch.cat((times, self.model_states_grid), dim=1) 
+            #     times = torch.full((self.n_grid_pts_2d, 1), (i+1)*(self.tMax - self.tMin)/(self.n_grid_t_pts_hi-1))
+            #     new_coords = torch.cat((times, self.model_states_grid_2d), dim=1) 
             #     self.model_coords_grid_allt_hi = torch.cat((self.model_coords_grid_allt_hi, new_coords), dim=0) 
         
-        ## In N dims, define 2D grid on the ND Main Diagonal (any subsys i is equiv on diag)
+        ## In N dims, define 2D grid on the Main Diagonal (any subsys i is equiv on diag)
         elif self.N > 2:
+            
+            # TODO: three planes is artifact, should just use one
+            score_plane1 = torch.zeros(self.n_grid_pts_2d, self.dynamics.state_dim)
+            score_plane2 = torch.zeros(self.n_grid_pts_2d, self.dynamics.state_dim) + 1/300
+            score_plane3 = torch.zeros(self.n_grid_pts_2d, self.dynamics.state_dim) + 2/300
 
-            if not load_lambda_var:
-                xnxixj_plane = torch.zeros(self.n_grid_pts, self.dynamics.state_dim)
-                xnxixj_plane[:, 0] = self.model_states_grid[:, 0]
-                xnxixj_plane[:, 1:] = (self.model_states_grid[:, 1] * torch.ones(self.dynamics.state_dim-1, self.n_grid_pts)).t()
+            ## (N-1)d Main Diagonal; x0 shared state and N-1 states repeated
+            if not hasattr(self.dynamics, "shared_x0") or self.dynamics.shared_x0:
 
-                xnxixj_plane2 = torch.zeros(self.n_grid_pts, self.dynamics.state_dim)
-                xnxixj_plane2[:, 0] = self.model_states_grid[:, 0] + 1/300
-                xnxixj_plane2[:, 1:] = (self.model_states_grid[:, 1] * torch.ones(self.dynamics.state_dim-1, self.n_grid_pts)).t() + 1/300
+                score_plane1[:, 0] = score_plane1[:, 0] + self.model_states_grid_2d[:, 0]
+                score_plane2[:, 0] = score_plane2[:, 0] + self.model_states_grid_2d[:, 0]
+                score_plane3[:, 0] = score_plane3[:, 0] + self.model_states_grid_2d[:, 0]
 
-                xnxixj_plane3 = torch.zeros(self.n_grid_pts, self.dynamics.state_dim)
-                xnxixj_plane3[:, 0] = self.model_states_grid[:, 0] + 2/300
-                xnxixj_plane3[:, 1:] = (self.model_states_grid[:, 1] * torch.ones(self.dynamics.state_dim-1, self.n_grid_pts)).t() + 2/300
+                if not load_lambda_var:
 
+                    xixj = (self.model_states_grid_2d[:, 1] * torch.ones(self.dynamics.state_dim-1, self.n_grid_pts_2d)).t()
+                    
+                    score_plane1[:, 1:] = score_plane1[:, 1:] + xixj
+                    score_plane2[:, 1:] = score_plane2[:, 1:] + xixj
+                    score_plane3[:, 1:] = score_plane3[:, 1:] + xixj
+
+                else:
+
+                    xixj = (self.model_states_grid_2d[:, 1] * torch.ones(self.dynamics.N-1, self.n_grid_pts_2d)).t()
+                    
+                    score_plane1[:, 1:] = score_plane1[:, 1:-1] + xixj
+                    score_plane2[:, 1:] = score_plane2[:, 1:-1] + xixj
+                    score_plane3[:, 1:] = score_plane3[:, 1:-1] + xixj
+
+                    # Scoring only on specific lambda slice at desired solution
+                    score_plane1[:, -1] = self.dynamics.lambda_base * torch.ones(self.n_grid_pts_2d) 
+                    score_plane2[:, -1] = self.dynamics.lambda_base * torch.ones(self.n_grid_pts_2d)
+                    score_plane3[:, -1] = self.dynamics.lambda_base * torch.ones(self.n_grid_pts_2d)
+            
+            ## Nd Main Diagonal; Nh pairs of repeated states
             else:
-                xnxixj_plane = torch.zeros(self.n_grid_pts, self.dynamics.state_dim)
-                xnxixj_plane[:, 0] = self.model_states_grid[:, 0]
-                xnxixj_plane[:, 1:-1] = (self.model_states_grid[:, 1] * torch.ones(self.dynamics.N-1, self.n_grid_pts)).t()
-                xnxixj_plane[:, -1] = torch.ones(self.n_grid_pts)
 
-                xnxixj_plane2 = torch.zeros(self.n_grid_pts, self.dynamics.state_dim)
-                xnxixj_plane2[:, 0] = self.model_states_grid[:, 0] + 1/300
-                xnxixj_plane2[:, 1:-1] = (self.model_states_grid[:, 1] * torch.ones(self.dynamics.N-1, self.n_grid_pts)).t() + 1/300
-                xnxixj_plane2[:, -1] = torch.ones(self.n_grid_pts)
+                xixj = self.model_states_grid_2d.repeat(1, self.dynamics.Nh)
+            
+                if not load_lambda_var:
+                    
+                    score_plane1 = score_plane1 + xixj
+                    score_plane2 = score_plane2 + xixj
+                    score_plane3 = score_plane3 + xixj
 
-                xnxixj_plane3 = torch.zeros(self.n_grid_pts, self.dynamics.state_dim)
-                xnxixj_plane3[:, 0] = self.model_states_grid[:, 0] + 2/300
-                xnxixj_plane3[:, 1:-1] = (self.model_states_grid[:, 1] * torch.ones(self.dynamics.N-1, self.n_grid_pts)).t() + 2/300
-                xnxixj_plane3[:, -1] = torch.ones(self.n_grid_pts)
+                else:
+                    
+                    score_plane1[:, :-1] = score_plane1[:, :-1] + xixj
+                    score_plane2[:, :-1] = score_plane2[:, :-1] + xixj
+                    score_plane3[:, :-1] = score_plane3[:, :-1] + xixj
 
-            # self.model_states_grid = torch.cat((xnxi_plane, xixj_plane, xnxixj_plane), dim=0)
-            # self.n_grid_pts = 3 * self.n_grid_pts
+                    # lambda = 1 (scoring only NL approx.)
+                    score_plane1[:, -1] = self.dynamics.lambda_base * torch.ones(self.n_grid_pts_2d) 
+                    score_plane2[:, -1] = self.dynamics.lambda_base * torch.ones(self.n_grid_pts_2d)
+                    score_plane3[:, -1] = self.dynamics.lambda_base * torch.ones(self.n_grid_pts_2d)
 
-            ## only scoring on xn-(xi=xj) plane
-            # self.model_states_grid = xnxixj_plane
-            self.model_states_grid = torch.cat((xnxixj_plane, xnxixj_plane2, xnxixj_plane3), dim=0)
-            self.n_grid_pts = 3 * self.n_grid_pts
+            self.model_states_grid = torch.cat((score_plane1, score_plane2, score_plane3), dim=0)
+            self.n_grid_pts = 3 * self.n_grid_pts_2d
 
             times = torch.full((self.n_grid_pts, 1), self.tMin) # TODO: remove first time-point if model='exact'
             self.model_coords_grid_allt = torch.cat((times, self.model_states_grid), dim=1) 
@@ -725,8 +746,8 @@ class ReachabilityDataset(Dataset):
         # TODO: isolated loading test, remove this
         if hasattr(self.dynamics, "name") and self.dynamics.name in ["Conveyor","Canoe"]:
 
-            times = torch.full((self.n_grid_pts//3, 1), -2.) if self.dynamics.N>2 else torch.full((self.n_grid_pts, 1), -2.)
-            test_states_grid = xnxixj_plane if self.dynamics.N>2 else self.model_states_grid
+            times = torch.full((self.n_grid_pts_2d, 1), -2.) if self.dynamics.N>2 else torch.full((self.n_grid_pts_2d, 1), -2.)
+            test_states_grid = score_plane1 if self.dynamics.N>2 else self.model_states_grid_2d
             # test_coords_grid = torch.cat((times, test_states_grid.cpu()), dim=1) # for ITP testing
             test_coords_grid = torch.cat((0 * times, test_states_grid.cpu()), dim=1) # for BC testing
 
@@ -755,7 +776,7 @@ class ReachabilityDataset(Dataset):
 
             cmap_name = "RdBu_r"
             # vmin, vmax = -0.075, 0.075
-            vmin, vmax = -0.5, 0.5
+            vmin, vmax = -0.25, 0.5
             levels = np.linspace(vmin, vmax)
             n_bins_high = round(256 * vmax/(vmax - vmin))
             scaled_colors = np.vstack((mpl.colormaps[cmap_name](np.linspace(0., 0.4, 256-n_bins_high)), mpl.colormaps[cmap_name](np.linspace(0.6, 1., n_bins_high))))
@@ -825,6 +846,10 @@ class ReachabilityDataset(Dataset):
 
             # plt.savefig(f"plots/random/{self.dynamics.name}_test_ITP_plot.png")
             plt.savefig(f"plots/random/{self.dynamics.name}_test_bc_plot.png")
+
+            print(f"Mean Error for bc 1: {(plot_values_bc1_t0 - plot_values_V_DP_1).abs().mean():2.0e}")
+            print(f"Mean Error for bc 2: {(plot_values_bc2_t0 - plot_values_V_DP_2).abs().mean():2.0e}")
+            print(f"Mean Error for bc: {(plot_values_bc_t0 - plot_values_V_DP).abs().mean():2.0e}")
             return
     
     def make_DP_bank(self):
