@@ -388,7 +388,7 @@ class ReachabilityDataset(Dataset):
 
                 print(f"Loading *{self.gt_key}* ground truth solutions (hj_reachability.py)...")
 
-                grid_params = np.load(f"value_fns/{self.dynamics.name}/{self.dynamics.name}_base_params.npz")
+                grid_params = np.load(f"value_fns/{self.dynamics.name}/{self.dynamics.name}2D_base_params.npz")
                 
                 solution_grid = hj.Grid.from_lattice_parameters_and_boundary_conditions(hj.sets.Box(
                     grid_params["lbs"] - grid_params["grid_pad"],
@@ -725,32 +725,58 @@ class ReachabilityDataset(Dataset):
         # TODO: isolated loading test, remove this
         if hasattr(self.dynamics, "name") and self.dynamics.name in ["Conveyor","Canoe"]:
 
-            times = torch.full((self.n_grid_pts//3, 1), -2.)
-            test_states_grid = xnxixj_plane
-            test_coords_grid = torch.cat((times, test_states_grid.cpu()), dim=1)
+            times = torch.full((self.n_grid_pts//3, 1), -2.) if self.dynamics.N>2 else torch.full((self.n_grid_pts, 1), -2.)
+            test_states_grid = xnxixj_plane if self.dynamics.N>2 else self.model_states_grid
+            # test_coords_grid = torch.cat((times, test_states_grid.cpu()), dim=1) # for ITP testing
+            test_coords_grid = torch.cat((0 * times, test_states_grid.cpu()), dim=1) # for BC testing
 
+            ## Solve Interpolated Values on Main Diagonal Grid
             n_grid_len = grid_L
             plot_values_V_DP = self.V_DP(self.dynamics.input_to_coord(test_coords_grid).t()).reshape(n_grid_len, n_grid_len)
             plot_values_V_DP_1 = self.V_DP_1(self.dynamics.input_to_coord(test_coords_grid).t()).reshape(n_grid_len, n_grid_len)
             plot_values_V_DP_2 = self.V_DP_2(self.dynamics.input_to_coord(test_coords_grid).t()).reshape(n_grid_len, n_grid_len)
 
+            ## Solve BC on Main Diagonal
+            test_states_grid_scaled = self.dynamics.input_to_coord(test_coords_grid)[:, 1:]
+            plot_values_bc_t0 = self.dynamics.boundary_fn(test_states_grid_scaled, 0*times).reshape(n_grid_len, n_grid_len)
+            plot_values_bc_t2 = self.dynamics.boundary_fn(test_states_grid_scaled, times).reshape(n_grid_len, n_grid_len)
+            
+            if self.dynamics.name == "Conveyor":
+                plot_values_bc1_t0 = self.dynamics.reach_fn(test_states_grid_scaled, 0*times).reshape(n_grid_len, n_grid_len)
+                plot_values_bc2_t0 = -self.dynamics.avoid_fn(test_states_grid_scaled, 0*times).reshape(n_grid_len, n_grid_len)
+                plot_values_bc1_t2 = self.dynamics.reach_fn(test_states_grid_scaled, times).reshape(n_grid_len, n_grid_len)
+                plot_values_bc2_t2 = -self.dynamics.avoid_fn(test_states_grid_scaled, times).reshape(n_grid_len, n_grid_len)
+            
+            elif self.dynamics.name == "Canoe":
+                plot_values_bc1_t0 = self.dynamics.reach_fn_1(test_states_grid_scaled, 0*times).reshape(n_grid_len, n_grid_len)
+                plot_values_bc2_t0 = self.dynamics.reach_fn_2(test_states_grid_scaled, 0*times).reshape(n_grid_len, n_grid_len)
+                plot_values_bc1_t2 = self.dynamics.reach_fn_1(test_states_grid_scaled, times).reshape(n_grid_len, n_grid_len)
+                plot_values_bc2_t2 = self.dynamics.reach_fn_2(test_states_grid_scaled, times).reshape(n_grid_len, n_grid_len)
+
             cmap_name = "RdBu_r"
-            vmin, vmax = -0.075, 0.075
+            # vmin, vmax = -0.075, 0.075
+            vmin, vmax = -0.5, 0.5
             levels = np.linspace(vmin, vmax)
             n_bins_high = round(256 * vmax/(vmax - vmin))
             scaled_colors = np.vstack((mpl.colormaps[cmap_name](np.linspace(0., 0.4, 256-n_bins_high)), mpl.colormaps[cmap_name](np.linspace(0.6, 1., n_bins_high))))
             RdWhBl_vscaled = mpl.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
-            fig, axes = plt.subplots(nrows=2, ncols=3, figsize=(8, 6))
+            fig, axes = plt.subplots(nrows=3, ncols=3, figsize=(8, 8))
             fig.suptitle(f"V DP - Ground Truth Test")
 
             xlims = (grid_params["lbs"][0], grid_params["ubs"][0])
             ylims = (grid_params["lbs"][1], grid_params["ubs"][1])
 
             names = ["V2", "V", "V1"]
-            plot_values_raw = [V_DP_sub_2[-1].T, V_DP_sub[-1].T, V_DP_sub_1[-1].T]
+            # plot_values_raw = [V_DP_sub_2[-1].T, V_DP_sub[-1].T, V_DP_sub_1[-1].T] # for ITP
+            plot_values_raw = [V_DP_sub_2[1].T, V_DP_sub[1].T, V_DP_sub_1[1].T] # for BC
             plot_values_itp = [plot_values_V_DP_2, plot_values_V_DP, plot_values_V_DP_1]
 
+            plot_values_bcs_t0 = [plot_values_bc2_t0, plot_values_bc_t0, plot_values_bc1_t0] # for BC
+            plot_values_bcs_t2 = [plot_values_bc2_t2, plot_values_bc_t2, plot_values_bc1_t2] # for BC
+
             for k in range(3):
+
+                # Plot raw values for ITP
                 axes[0][k].set_title(f"{names[k]} raw")
                 axes[0][k].contourf(solution_grid.coordinate_vectors[0], solution_grid.coordinate_vectors[1],
                                 plot_values_raw[k],
@@ -763,28 +789,42 @@ class ReachabilityDataset(Dataset):
                 axes[0][k].set_ylim(ylims)
                 axes[0][k].set_aspect('equal')
 
-                axes[1][k].set_title(f"{names[k]} itp")
+                # Plot dynamics bc
+                axes[1][k].set_title(f"{names[k]} BC")
                 axes[1][k].contourf(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
-                                plot_values_itp[k],
+                                plot_values_bcs_t0[k],
                                 levels=levels,
                                 extend="both",
                                 cmap=RdWhBl_vscaled)
                 axes[1][k].contour(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
-                                plot_values_itp[k], levels=0, colors="black", linewidth=2)
+                                plot_values_bcs_t0[k], levels=0, colors="black", linewidth=2, linestyle="dash")
                 axes[1][k].set_xlim(xlims)
                 axes[1][k].set_ylim(ylims)
                 axes[1][k].set_aspect('equal')
 
-            # axes[1].contourf(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
-            #                 plot_values_V_DP_1,
-            #                 levels=levels,
-            #                 extend="both",
-            #                 cmap=RdWhBl_vscaled)
-            # axes[1].set_title(f"V_DP 1")
-            # axes[1].contour(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
-            #                 plot_values_V_DP_1, levels=0, colors="black", linewidth=2)
+                # Plot interpolation
+                axes[2][k].set_title(f"{names[k]} itp")
+                axes[2][k].contourf(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
+                                plot_values_itp[k],
+                                levels=levels,
+                                extend="both",
+                                cmap=RdWhBl_vscaled)
+                axes[2][k].contour(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
+                                plot_values_itp[k], levels=0, colors="black", linewidth=2)
+                axes[2][k].set_xlim(xlims)
+                axes[2][k].set_ylim(ylims)
+                axes[2][k].set_aspect('equal')
 
-            plt.savefig(f"plots/{self.dynamics.name}_test_ITP_plot_2.png")
+                axes[2][k].contour(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
+                                plot_values_bcs_t0[k], levels=0, colors="magenta", linewidth=2, linestyle="dash")
+
+                # TODO: test reach / avoid bc fns here, in N-dimensions (could also check N-dim itp combo works)
+                # TODO: then write vanilla BRAAT & BRRT loss fn's, & test w/ vanilla
+                # TODO: then write supervision BRAAT & BRRT loss fn's, & test w/ vanilla
+                # TODO: then implement various models, and test w/ DR
+
+            # plt.savefig(f"plots/random/{self.dynamics.name}_test_ITP_plot.png")
+            plt.savefig(f"plots/random/{self.dynamics.name}_test_bc_plot.png")
             return
     
     def make_DP_bank(self):
