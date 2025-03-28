@@ -205,7 +205,7 @@ if __name__ == '__main__':
         # opt.numpoints, opt.lr, opt.lr_decay_w = 60000, 1e-5, 1.
 
     ## Clarity Prints for Wills Sanity
-    print("\n\nTraining DeepReach,\n")
+    print(f"\n\nTraining DeepReach on {opt.dynamics_class},\n")
     if opt.capacity_test: print(" - using supervised learning of ground truth (capacity test)")
     elif opt.hopf_loss != 'none': 
         print(f" - with hopf loss {opt.hopf_loss}")
