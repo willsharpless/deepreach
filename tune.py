@@ -8,7 +8,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("-trf",   "--trainfile",         default="run_experiment_hopf_tune.py")
 parser.add_argument("-fn",    "--runname",           default="test") #DR_Hopf_WAS
 parser.add_argument("-nt",    "--nametag",           default="test") #sw1
-parser.add_argument("-poi",   "--paramsofinterest",  default="lr lr_hopf hopf_pretrain_iters")
+parser.add_argument("-poi",   "--paramsofinterest",  default="lr lr_hopf super_pretrain_iters")
 parser.add_argument("-sc",    "--scale",             default="1e-5, 1e-5, 1000 2000 5000") #sep p sets by comma + space, p vals by space eg. "NC C HC, 2 4 6 8 10, 1e-3 1e-4"
 # parser.add_argument("-ld",    "--loadpath",          default="") # if not loading: "", else give local name i.e. "AEwarm"
 parser.add_argument("-ns",    "--numberofseeds",     default="1")
@@ -51,7 +51,7 @@ print("scales:" + str(scales))
 #         "lr_hopf_decay_w":     {"max": 0.99,   "min": 0.96},
 #         "hopf_loss_divisor":   {"max": 10.,    "min": 0.1},
 #         "hopf_loss_decay_w":   {"max": 0.9999, "min": 0.9996},
-#         "hopf_pretrain_iters": {"max": 20000,  "min": 2000},
+#         "super_pretrain_iters": {"max": 20000,  "min": 2000},
 #     },
 # }
 
@@ -91,7 +91,7 @@ def train_helper(pois, scales, pval_path_init, poi_args_init, depth, num_seeds):
                 
                 ## example call:
                 # python run_experiment_hopf.py
-                #    --lr 0.00002 --pretrain --hopf_pretrain --hopf_pretrain_iters 10000 --hopf_loss_divisor 5 
+                #    --lr 0.00002 --pretrain --super_pretrain --super_pretrain_iters 10000 --hopf_loss_divisor 5 
                 #    --hopf_loss_decay --hopf_loss_decay_w 0.9998
 
                 command = ["python", args["trainfile"]] + info_args + poi_args + ["--seed", str(sdx)]

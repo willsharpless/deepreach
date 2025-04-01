@@ -116,7 +116,7 @@ class Experiment(ABC):
         train_dataloader = DataLoader(self.dataset, shuffle=True, batch_size=batch_size, pin_memory=True, num_workers=0)
 
         ## Define Optimizers and Schedulers ## TODO, would SGD be better than Adam?
-        if dual_lr and self.dataset.hopf_pretrain:
+        if dual_lr and self.dataset.super_pretrain:
             if use_sgd:
                 optim_hopf = torch.optim.SGD(params=self.model.parameters(), lr=lr_hopf, momentum=0.2)
                 optim_std = torch.optim.SGD(params=self.model.parameters(), lr=lr, momentum=0.2)
@@ -155,13 +155,17 @@ class Experiment(ABC):
         ## Params
         total_steps = 0
         JIp_s_max, JIp_s = 0., 0.
-        total_pretrain_iters = self.dataset.pretrain_iters if hopf_loss=='none' else self.dataset.pretrain_iters + self.dataset.hopf_pretrain_iters
+        total_pretrain_iters = self.dataset.pretrain_iters if hopf_loss=='none' else self.dataset.pretrain_iters + self.dataset.super_pretrain_iters
         self.total_pretrain_iters = total_pretrain_iters
         self.epochs = epochs
         nl_perc = 0.
 
         ## Dynamic Weighting
-        loss_weights = {'dirichlet': 1., 'hopf': 1., 'diff_constraint_hom': 1.}
+        loss_weights = {'dirichlet': 1., 'hopf': 1., 'diff_constraint_hom': 1., 
+                        'dss_value_1_loss': 1., 'dss_value_2_loss': 1., 
+                        'dss_grad_1_loss': 1., 'dss_vgrad_2_loss': 1., 
+                        'lbss_value_loss': 1., 'lbss_grad_loss': 1.,
+                        }
         if diff_con_loss_incr:
             loss_weights['diff_constraint_hom'] = 0.
         if hopf_loss_decay_type == 'negative_exponential': 
@@ -189,7 +193,7 @@ class Experiment(ABC):
                 CSL_tMax = self.dataset.tMin + int(time_interval_length/CSL_dt)*CSL_dt
 
                 ## Reset Weights
-                if reset_loss_w and epoch % reset_loss_period == 0 and not self.dataset.pretrain and not self.dataset.hopf_pretrain:
+                if reset_loss_w and epoch % reset_loss_period == 0 and not self.dataset.pretrain and not self.dataset.super_pretrain:
                     loss_weights = og_loss_weights.copy()
 
                 ## If hopf-solving, Bank Deposits
@@ -215,7 +219,7 @@ class Experiment(ABC):
                         #     reset grad steps
 
                 ## Parameter Scaling for Nonlinearity Curriculum
-                not_pretraining = not(self.dataset.pretrain) and not(self.dataset.hopf_pretrain)
+                not_pretraining = not(self.dataset.pretrain) and not(self.dataset.super_pretrain)
                 if nonlin_scale:
                     if not_pretraining and ((epoch-total_pretrain_iters) % nl_scale_epoch_step) == 0 and epoch <= (epochs-nl_scale_epoch_post):
                         nl_perc = ((epoch - total_pretrain_iters)/((epochs - nl_scale_epoch_post) - total_pretrain_iters)) # instead of epoch/(epochs-post), this gives 1 step to switch from hopf to pde loss w/o changin dynamcis
@@ -290,8 +294,8 @@ class Experiment(ABC):
                     if self.timing: print("Pre-loss Computation took:", time.time() - start_time_2)
 
                     if self.dataset.memory_tracking:
-                        print(f"Epoch {epoch}-1, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
-                        print(f"Epoch {epoch}-1, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch} - init, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch} - init, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
                         print()  
 
                     ## Compute Loss
@@ -305,6 +309,65 @@ class Experiment(ABC):
                     elif self.dataset.dynamics.loss_type == 'brat_hjivi':
                         losses = loss_fn(states, values, dvdt, dvdx, boundary_values, reach_values, avoid_values, dirichlet_masks, model_results['model_out'], diss=diss)
                     
+                    ## Multi-Objective (BRAT, BRAAT, BRRT)
+                    elif self.dataset.dynamics.loss_type == 'mulob_hjivi':
+
+                        if self.dataset.load_decomposed_models:
+                            # note, decomposed values inferred on data wo lambda, and appropriately shifted if augmented for pde loss (but not ss losses)
+                            
+                            with torch.inference_mode():
+                                if not self.dataset.lambda_var:
+                                    loaded_model_results_1 = self.dataset.loaded_model_1({'coords': model_input['model_coords']})
+                                    loaded_model_results_2 = self.dataset.loaded_model_2({'coords': model_input['model_coords']})
+                                else: 
+                                    loaded_model_results_1 = self.dataset.loaded_model_1({'coords': model_input['model_coords'][..., :-1]})
+                                    loaded_model_results_2 = self.dataset.loaded_model_2({'coords': model_input['model_coords'][..., :-1]})
+
+                                decomposed_values_1 = self.dataset.dynamics.io_to_value(loaded_model_results_1['model_in'], loaded_model_results_1['model_out'].squeeze(dim=-1)).detach()
+                                decomposed_values_2 = self.dataset.dynamics.io_to_value(loaded_model_results_2['model_in'], loaded_model_results_2['model_out'].squeeze(dim=-1)).detach()
+
+                                if self.dataset.solve_grad:
+                                    decomposed_grads_1 = self.dataset.loaded_dynamics.io_to_dv(loaded_model_results_1['model_in'], loaded_model_results_1['model_out'].squeeze(dim=-1)).detach() # NOTE: keeping time grad too now, add [..., 1:] otherwise
+                                    decomposed_grads_2 = self.dataset.loaded_dynamics.io_to_dv(loaded_model_results_2['model_in'], loaded_model_results_2['model_out'].squeeze(dim=-1)).detach()
+                                else:
+                                    decomposed_grads_1, decomposed_values_2 = None, None
+
+                        # elif self.dataset.use_gt_decomposed:
+                        else:
+
+                            if not hasattr(self.dataset, "V_DP"):
+                                raise AssertionError("Must have ground truth solution if not loading decomposed solutions")
+                            
+                            decomposed_values_1, decomposed_values_2 = gt['gt_decomposed_values_1'], gt['gt_decomposed_values_2']
+
+                            if self.dataset.solve_grad:
+                                decomposed_grads_1, decomposed_grads_2 =  gt['gt_decomposed_grads_1'], gt['gt_decomposed_grads_2']
+                            else:
+                                decomposed_grads_1, decomposed_grads_2 = None, None
+
+                        bc_value_1, bc_value_2 = gt['bc_values_1'], gt['bc_values_2']
+                        
+                        # For fixed lambda slice supervision, infer model values on slices
+                        if self.dataset.lam_slice_super:
+                            
+                            model_results_poslam = self.model({'coords': model_input['model_coords_poslam']})
+                            model_results_neglam = self.model({'coords': model_input['model_coords_neglam']})
+
+                            values_poslam = self.dataset.dynamics.io_to_value(model_results_poslam['model_in'].detach(), model_results_poslam['model_out'].squeeze(dim=-1))
+                            values_neglam = self.dataset.dynamics.io_to_value(model_results_neglam['model_in'].detach(), model_results_neglam['model_out'].squeeze(dim=-1))
+                            
+                            dvs_poslam = self.dataset.dynamics.io_to_dv(model_results_poslam['model_in'], model_results_poslam['model_out'].squeeze(dim=-1))
+                            dvs_neglam = self.dataset.dynamics.io_to_dv(model_results_neglam['model_in'], model_results_neglam['model_out'].squeeze(dim=-1))
+
+                        else:
+                            values_poslam, dvs_poslam, values_neglam, dvs_neglam = values, dvs, values, dvs
+
+                        losses = loss_fn(states, values, dvs, boundary_values, dirichlet_masks, model_results['model_out'], 
+                                        bc_value_1, bc_value_2, 
+                                        decomposed_values_1, decomposed_values_2, 
+                                        decomposed_grads_1, decomposed_grads_2,
+                                        values_poslam, dvs_poslam, values_neglam, dvs_neglam)
+
                     ## Linear Supervision BRT (non-baseline)
                     elif hopf_loss != 'none':
                         hopf_values = gt['hopf_values']
@@ -319,7 +382,7 @@ class Experiment(ABC):
                                     loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords']})
                                     hopf_values = self.dataset.dynamics.io_to_value(loaded_model_results['model_in'], loaded_model_results['model_out'].squeeze(dim=-1)).detach()
                                 else:
-                                    if not self.dataset.zerolambda_LS or self.dataset.pretrain or self.dataset.hopf_pretrain or self.dataset.hopf_pretrain_counter == self.dataset.hopf_pretrain_iters:
+                                    if not self.dataset.zerolambda_LS or self.dataset.pretrain or self.dataset.super_pretrain or self.dataset.super_pretrain_counter == self.dataset.super_pretrain_iters:
                                         loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords'][..., :-1]}) # remove lambda
                                         hopf_values = self.dataset.dynamics.io_to_value(model_input['model_coords'], loaded_model_results['model_out'].squeeze(dim=-1)).detach() 
                                     else: # use model coords with lambda=0 only for linear value
@@ -333,7 +396,7 @@ class Experiment(ABC):
                             
                             # If we want grads from a loaded linear model that does not have same dim as current model (eg lambda variation), need to use loaded model dynamics class
                             else:
-                                if not self.dataset.zerolambda_LS or self.dataset.pretrain or self.dataset.hopf_pretrain or self.dataset.hopf_pretrain_counter == self.dataset.hopf_pretrain_iters:
+                                if not self.dataset.zerolambda_LS or self.dataset.pretrain or self.dataset.super_pretrain or self.dataset.super_pretrain_counter == self.dataset.super_pretrain_iters:
                                     loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords'][..., :-1]}) # remove lambda
                                     # loaded_results_w_lambda = torch.cat((loaded_model_results['model_in'], torch.zeros(1, self.dataset.numpoints, 1).cuda()), dim=2) # put lambda back just for next line (removed b4 loss)
                                     # hopf_grads = self.dataset.dynamics.io_to_dv(loaded_model_results['model_in'], loaded_model_results['model_out'].squeeze(dim=-1)).detach()
@@ -342,13 +405,13 @@ class Experiment(ABC):
                                     loaded_model_results = self.dataset.loaded_model({'coords': gt['model_coords_hopf'][..., :-1]}) # remove lambda
                                     hopf_grads = self.dataset.loaded_dynamics.io_to_dv(loaded_model_results['model_in'], loaded_model_results['model_out'].squeeze(dim=-1))[..., 1:].detach()    
                             
-                        if self.dataset.memory_tracking:
-                            print(f"Epoch {epoch}-2, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
-                            print(f"Epoch {epoch}-2, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
-                            print()
+                        # if self.dataset.memory_tracking:
+                        #     print(f"Epoch {epoch} - w/ losses, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+                        #     print(f"Epoch {epoch} - w/ losses, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+                        #     print()
 
                         ## Seperate Hopf Coords (for the hopf loss to allow unrestricted sampling for PDE loss OR supervision on lambda=0 data only)
-                        if (not self.dataset.use_bank or self.dataset.hopf_pretrain_counter == 0) and (not self.dataset.zerolambda_LS or (self.dataset.pretrain or self.dataset.hopf_pretrain or self.dataset.hopf_pretrain_counter == self.dataset.hopf_pretrain_iters)):
+                        if (not self.dataset.use_bank or self.dataset.super_pretrain_counter == 0) and (not self.dataset.zerolambda_LS or (self.dataset.pretrain or self.dataset.super_pretrain or self.dataset.super_pretrain_counter == self.dataset.super_pretrain_iters)):
                             
                             learned_hopf_values = values
                             if hopf_loss == 'lin_val_grad_diff':
@@ -365,11 +428,6 @@ class Experiment(ABC):
                                     learned_hopf_grads = self.dataset.dynamics.io_to_dv(model_results_hopf['model_in'], model_results_hopf['model_out'].squeeze(dim=-1))[..., 1:]
                                 else:
                                     learned_hopf_grads = self.dataset.dynamics.io_to_dv(model_results_hopf['model_in'], model_results_hopf['model_out'].squeeze(dim=-1))[..., 1:-1] # remove lambda grad
-                        
-                        if self.dataset.memory_tracking:
-                            print(f"Epoch {epoch}-3, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
-                            print(f"Epoch {epoch}-3, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
-                            print()
 
                         if hopf_loss == 'lin_val_grad_diff':
                             losses = loss_fn(states, values, dvdt, dvdx, boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, learned_hopf_values, hopf_grads, learned_hopf_grads, epoch, state_times)
@@ -381,8 +439,8 @@ class Experiment(ABC):
                         raise NotImplementedError
                     
                     if self.dataset.memory_tracking:
-                        print(f"Epoch {epoch}-4, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
-                        print(f"Epoch {epoch}-4, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch} - after losses, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch} - after losses, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
                         print()
 
                     if self.timing: print("Loss Computation took:", time.time() - start_time_2)
@@ -401,24 +459,14 @@ class Experiment(ABC):
                             elif hopf_loss == 'lin_val_grad_diff':
                                 hopf_grads_t, learned_grads_t = hopf_grads[t_ix].unsqueeze(0), learned_hopf_grads[t_ix].unsqueeze(0)
                                 losses_t[str(tp)] = loss_fn(states_t, values_t, dvs_t[..., 0], dvs_t[..., 1:], boundary_values_t, dirichlet_masks_t, model_results_t, hopf_values_t, learned_hopf_values_t, hopf_grads_t, learned_grads_t, epoch, state_times_t)
-                    
-                    if self.dataset.memory_tracking:
-                        print(f"Epoch {epoch}-5, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
-                        print(f"Epoch {epoch}-5, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
-                        print()
 
                     ## Switch Optimizers/Rates (after Hopf Pretraining)
                     if self.timing: start_time_2 = time.time()
-                    if dual_lr and not(self.dataset.hopf_pretrain) and self.dataset.hopf_pretrained:
+                    if dual_lr and not(self.dataset.super_pretrain) and self.dataset.super_pretrained:
                         optim = optim_std
                         lr_scheduler = lr_scheduler_std
                     if self.timing: print("Loss Scheduler took:", time.time() - start_time_2)
                     
-                    if self.dataset.memory_tracking:
-                        print(f"Epoch {epoch}-6, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
-                        print(f"Epoch {epoch}-6, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
-                        print()
-
                     ## Decay Hopf Loss(es)
                     if hopf_loss_decay and hopf_loss != 'none': #                         
                         if epoch >= total_pretrain_iters or hopf_loss_decay_early:
@@ -440,15 +488,15 @@ class Experiment(ABC):
                             loss_weights['diff_constraint_hom'] = 1 - loss_weights['hopf']
 
                     if self.dataset.memory_tracking:
-                        print(f"Epoch {epoch}-7, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
-                        print(f"Epoch {epoch}-7, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch} - after weight scheduler, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch} - after weight scheduler, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
                         print()
 
                     ## Combine Losses
                     if self.timing: start_time_2 = time.time()
                     train_loss = 0.
                     for loss_name, loss in losses.items():
-                        single_loss = loss.mean() ## TODO: this is not the right place for this
+                        single_loss = loss.mean() ## TODO: why did the prev authors put this here?
                         writer.add_scalar(loss_name, single_loss, total_steps)
                         train_loss += loss_weights[loss_name] * single_loss
 
@@ -463,8 +511,8 @@ class Experiment(ABC):
                         # summary_fn(model, model_input, gt, model_output, writer, total_steps)
 
                     if self.dataset.memory_tracking:
-                        print(f"Epoch {epoch}-8, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
-                        print(f"Epoch {epoch}-8, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch} - loss combo, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch} - loss combo, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
                         print()
 
                     ## Take Gradient Step
@@ -488,8 +536,8 @@ class Experiment(ABC):
                         if self.timing: print("Grad/Sched step took:", time.time() - start_time_2)
 
                     if self.dataset.memory_tracking:
-                        print(f"Epoch {epoch}-9, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
-                        print(f"Epoch {epoch}-9, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch} - grad step, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch} - grad step, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
                         print()
 
                     ## Record Data Summary
@@ -519,7 +567,7 @@ class Experiment(ABC):
                             for loss_name, loss in losses.items():
                                 log_dict[loss_name + "_loss"] = loss
 
-                            if nonlin_scale and not(self.dataset.pretrain) and not(self.dataset.hopf_pretrain):
+                            if nonlin_scale and not(self.dataset.pretrain) and not(self.dataset.super_pretrain):
                                 log_dict["Nonlinearity Scale"] = nl_perc
 
                             if self.dataset.record_gt_metrics:
@@ -552,8 +600,8 @@ class Experiment(ABC):
                             wandb.log(log_dict)
 
                     if self.dataset.memory_tracking:
-                        print(f"Epoch {epoch}-end, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
-                        print(f"Epoch {epoch}-end, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch} - end, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+                        print(f"Epoch {epoch} - end, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
                         print()
 
                     pbar.update(1)
@@ -575,8 +623,8 @@ class Experiment(ABC):
                     np.savetxt(os.path.join(checkpoints_dir, 'train_losses_epoch_%04d.txt' % (epoch+1)),
                         np.array(train_losses))
                     self.validate(
-                        # epoch=epoch+1, save_path=os.path.join(checkpoints_dir, 'BRS_validation_plot_epoch_%04d.png' % (epoch+1)),
-                        epoch=epoch+1, save_path=os.path.join(checkpoints_dir, 'BRS_validation_plot.png'), # overwriting to save data
+                        epoch=epoch+1, save_path=os.path.join(checkpoints_dir, 'BRS_validation_plot_epoch_%04d.png' % (epoch+1)),
+                        # epoch=epoch+1, save_path=os.path.join(checkpoints_dir, 'BRS_validation_plot.png'), # overwriting to save data
                         x_resolution = val_x_resolution, y_resolution = val_y_resolution, z_resolution=val_z_resolution, time_resolution=val_time_resolution)
                 if self.timing: print("Checkpointing took:", time.time() - start_time_2)
 
@@ -608,7 +656,7 @@ class Experiment(ABC):
 
             # for i in tqdm(range(sidelen), desc='Checkpoint'):
             #     self._load_checkpoint(epoch=checkpoints[i])
-                # raise NotImplementedError
+            # raise NotImplementedError
 
         else:
             print('running specific-checkpoint testing')
@@ -631,12 +679,18 @@ class DeepReachHopf(Experiment):
     def init_special(self, N=2, timing=False):
         self.N = N
         self.timing = timing
-        if N == 2:
-            self.validate = self.validate2D
+        if N == 2 and not self.dataset.lambda_var:
+            if hasattr(self.dataset.dynamics, 'name') and self.dataset.dynamics.name in ["Conveyor","Canoe"]:
+                self.validate = self.validate2Dmulob
+            else:
+                self.validate = self.validate2D
         elif N > 2:
             self.validate = self.validateND
-            if self.dataset.lambda_var:
+            if self.dataset.lambda_var and self.dataset.dynamics.name == "LessLinear":
                 self.validate = self.validateNDlambda
+            elif self.dataset.lambda_var and self.dataset.dynamics.name in ["Conveyor","Canoe"]:
+                self.validate = self.validateNDlambdaMulOb
+
         pass        
     
     def validate2D(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution):
@@ -669,7 +723,7 @@ class DeepReachHopf(Experiment):
             # coords[:, 1 + plot_config['z_axis_idx']] = zs[j]
 
             with torch.no_grad():
-                model_results = self.model({'coords': self.dataset.dynamics.coord_to_input(coords.cuda())})
+                model_results = self.model({'coords': coords.cuda()})
                 values = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach())
             
             ax = fig.add_subplot(1, len(times), (j+1) + i)
@@ -679,6 +733,95 @@ class DeepReachHopf(Experiment):
             cax = divider.append_axes("right", size="5%", pad=0.05)
             fig.colorbar(s, cax=cax) 
 
+        fig.savefig(save_path)
+        if self.use_wandb:
+            wandb.log({
+                'step': epoch,
+                'val_plot': wandb.Image(fig),
+            })
+        plt.close()
+
+        # if self.dataset.record_gt_metrics:
+        #     self.plot_set_metrics_eachtime(epoch, times)
+        #     if self.use_wandb:
+        #         wandb.log({'Time vs. Epoch vs. Set Accuracy compared to DP': wandb.Image(self.t_ep_acc_fig),})
+        #     plt.close()
+
+        if was_training:
+            self.model.train()
+            self.model.requires_grad_(True)
+
+    def validate2Dmulob(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution):
+        was_training = self.model.training
+        self.model.eval()
+        self.model.requires_grad_(False)
+
+        plot_config = self.dataset.dynamics.plot_config()
+
+        state_test_range = self.dataset.dynamics.state_test_range()
+        x_min, x_max = state_test_range[plot_config['x_axis_idx']]
+        y_min, y_max = state_test_range[plot_config['y_axis_idx']]
+        # z_min, z_max = state_test_range[plot_config['z_axis_idx']]
+
+        solve_times = torch.linspace(0, self.dataset.tMax, time_resolution)
+        xs = torch.linspace(x_min, x_max, x_resolution)
+        ys = torch.linspace(y_min, y_max, y_resolution)
+        # zs = torch.linspace(z_min, z_max, z_resolution)
+        xys = torch.cartesian_prod(xs, ys)
+        
+        fig = plt.figure(figsize=(5*len(solve_times), 5*1))
+        for i in range(len(solve_times)):
+            j = 0
+
+            states = self.dataset.model_states_grid
+            times = torch.full((self.dataset.n_grid_pts_2d, 1), solve_times[i]).cuda()
+            coords = torch.cat((times, states), dim=1) 
+            n_grid_len = self.dataset.X1g.size()[0]
+
+            values_gt = self.dataset.V_DP(self.dataset.dynamics.input_to_coord(coords).cpu().t()).reshape(n_grid_len, n_grid_len)
+
+            states_scaled = self.dataset.dynamics.input_to_coord(coords)[:, 1:]
+            values_bc = self.dataset.dynamics.boundary_fn(states_scaled, times).reshape(n_grid_len, n_grid_len).cpu()
+
+            with torch.no_grad():
+                model_results = self.model({'coords': coords.cuda()})
+                values_learned = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach()).reshape(n_grid_len, n_grid_len).cpu()
+            
+            ax = fig.add_subplot(1, len(solve_times), (j+1) + i)
+            ax.set_title('t = %0.2f' % (solve_times[i])) #, plot_config['state_labels'][plot_config['z_axis_idx']], zs[j]))
+            
+            cmap_name = "RdBu_r"
+            # vmin, vmax = -0.075, 0.075
+            vmin, vmax = -0.5, 0.5
+            levels = np.linspace(vmin, vmax)
+            n_bins_high = round(256 * vmax/(vmax - vmin))
+            offset=2
+            scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0., 0.4, 256-n_bins_high+offset)), matplotlib.colormaps[cmap_name](np.linspace(0.6, 1., n_bins_high-offset))))
+            RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
+            
+            # ax.contourf(self.dataset.X1g * self.dataset.dynamics.state_var[0] + self.dataset.dynamics.state_mean[0], 
+            #             self.dataset.X2g * self.dataset.dynamics.state_var[1] + self.dataset.dynamics.state_mean[1],
+            #             values_gt,
+            #             levels=levels, extend="both", cmap=RdWhBl_vscaled)
+            
+            ax.contourf(self.dataset.X1g * self.dataset.dynamics.state_var[0] + self.dataset.dynamics.state_mean[0], 
+                        self.dataset.X2g * self.dataset.dynamics.state_var[1] + self.dataset.dynamics.state_mean[1],
+                        values_learned,
+                        levels=levels, extend="both", cmap=RdWhBl_vscaled)
+            
+            ax.contour(self.dataset.X1g * self.dataset.dynamics.state_var[0] + self.dataset.dynamics.state_mean[0], 
+                        self.dataset.X2g * self.dataset.dynamics.state_var[1] + self.dataset.dynamics.state_mean[1],
+                        values_gt, 
+                        levels=0, colors="black", linewidths=3, alpha=0.7)
+            
+            ax.contour(self.dataset.X1g * self.dataset.dynamics.state_var[0] + self.dataset.dynamics.state_mean[0], 
+                        self.dataset.X2g * self.dataset.dynamics.state_var[1] + self.dataset.dynamics.state_mean[1],
+                        values_bc, 
+                        levels=0, colors="gold", linewidths=3, alpha=0.7)
+            
+            ax.set_aspect('equal')
+
+        # plt.savefig(f"plots/mulob_tests/{self.dataset.dynamics.name}_test_training_plot_0.png")
         fig.savefig(save_path)
         if self.use_wandb:
             wandb.log({
@@ -1136,6 +1279,206 @@ class DeepReachHopf(Experiment):
 
         if was_training:
             self.model.train()
+            self.model.requires_grad_(True)   
+
+    ## TODO
+    def validateNDlambdamulob(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution, plot_value=True):
+        was_training = self.model.training
+        self.model.eval()
+        self.model.requires_grad_(False)
+
+        plot_config = self.dataset.dynamics.plot_config()
+
+        state_test_range = self.dataset.dynamics.state_test_range()
+        x_min, x_max = state_test_range[plot_config['x_axis_idx']]
+        y_min, y_max = state_test_range[plot_config['y_axis_idx']]
+        # z_min, z_max = state_test_range[plot_config['z_axis_idx']]
+
+        times = torch.linspace(0, self.dataset.tMax, time_resolution)
+        xs = torch.linspace(x_min, x_max, x_resolution)
+        ys = torch.linspace(y_min, y_max, y_resolution)
+        # zs = torch.linspace(z_min, z_max, z_resolution)
+        xys = torch.cartesian_prod(xs, ys)
+        Xg, Yg = torch.meshgrid(xs, ys)
+        
+        ## Plot Set and Value Fn
+        
+        # fig_set = plt.figure(figsize=(5*len(times), 2*5*1))
+        # fig_val = plt.figure(figsize=(5*len(times), 2*5*1), facecolor='white')
+
+        fig = plt.figure(figsize=(5*len(times), 5*5*1), facecolor='white')
+        
+        plt.rcParams['text.usetex'] = False
+
+        for i in range(5*len(times)):
+        # for i in range(2*len(times)):
+            
+            # ax_set = fig_set.add_subplot(2, len(times), 1+i)
+            # ax_val = fig_val.add_subplot(2, len(times), 1+i, projection='3d')
+            # ax_set.set_title('t = %0.2f' % (times[i % len(times)]))
+            # ax_val.set_title('t = %0.2f' % (times[i % len(times)]))
+
+            if i < len(times):
+                lambda_val = -1 
+            elif i < 2*len(times):
+                lambda_val = -0.2
+            elif i < 3*len(times):
+                lambda_val = 0.
+            elif i < 4*len(times):
+                lambda_val = 0.2
+            else:
+                lambda_val = 1 
+
+            ax = fig.add_subplot(5, len(times), 1+i)
+            ax.set_title(f"t = {times[i % len(times)]:0.2f}, lambda = {lambda_val:1.1f}")
+
+            ## Define Grid Slice to Plot
+
+            coords = torch.zeros(x_resolution*y_resolution, self.dataset.dynamics.state_dim + 1)
+            coords[:, 0] = times[i % len(times)]
+            coords[:, 1:] = torch.tensor(plot_config['state_slices']) # initialized to zero (nothing else to set!)
+            coords[:, -1] = lambda_val
+
+            # xN - (xi = xj) plane
+            pad_label = 0
+            ax.set_xlabel(r"$x_N$", fontsize=12, labelpad=pad_label); ax.set_ylabel(r"$x_i = x_j$", fontsize=12, labelpad=pad_label)
+            ax.set_xticks([-1, 1])
+            ax.set_xticklabels([r'$-1$', r'$1$'])
+            ax.set_yticks([-1, 1])
+            ax.set_yticklabels([r'$-1$', r'$1$'])
+
+            ax_pad = 0
+            ax.xaxis.set_tick_params(pad=ax_pad)
+            ax.yaxis.set_tick_params(pad=ax_pad)
+
+            # FIXME
+            coords[:, 1 + plot_config['x_axis_idx']] = xys[:, 0]
+            coords[:, 2:-1] = (xys[:, 1] * torch.ones(self.N-1, xys.size()[0])).t()
+
+            with torch.no_grad():
+                model_results = self.model({'coords': self.dataset.dynamics.coord_to_input(coords.cuda())})
+                values = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach())
+            
+            learned_value = values.detach().cpu().numpy().reshape(x_resolution, y_resolution)
+
+            n_grid_plane_pts = int(self.dataset.n_grid_pts/3)
+            n_grid_len = int(n_grid_plane_pts ** 0.5)
+            pix_start = (i // len(times)) * n_grid_plane_pts
+            tix_start = (i % len(times)) * self.dataset.n_grid_pts
+            # ix = pix_start + tix_start # plane and grid no longer synced
+            ix = tix_start
+
+            Vgt = self.dataset.values_DP_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len).cpu() 
+            if i < len(times):
+                # Vgt = self.dataset.values_DP_linear_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len).cpu()
+                pass # FIXME: add bc 2
+            elif i < 2*len(times):
+                # Vgt = self.dataset.values_DP_grid_inlam1[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len).cpu()
+                pass
+            elif i < 3*len(times):
+                Vgt = self.dataset.values_DP_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len).cpu() 
+            elif i < 4*len(times):
+                # Vgt = self.dataset.values_DP_grid_inlam2[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len).cpu()
+                pass
+            else:
+                # Vgt = self.dataset.values_DP_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len).cpu() 
+                pass # FIXME: add bc 1
+
+            ## Make Value-Based Colormap
+            # cmap_name = "coolwarm"
+            cmap_name = "RdBu"
+
+            if learned_value.min() > 0:
+                # RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', [(1,1,1), (0.5,0.5,1), (0,0,1), (0,0,1)])
+                scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0.6, 1., 256))))
+                RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
+
+            elif learned_value.max() < 0:
+                # RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', [(1,0,0), (1,0,0), (1,0.5,0.5), (1,1,1)])
+                scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0., 0.4, 256))))
+                RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
+
+            else:
+                # n_bins_high = int(256 * (learned_value.max()/(learned_value.max() - learned_value.min())) // 1)
+                n_bins_high = round(256 * learned_value.max()/(learned_value.max() - learned_value.min()))
+
+                offset = 0
+                scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0., 0.4, 256-n_bins_high+offset)), matplotlib.colormaps[cmap_name](np.linspace(0.6, 1., n_bins_high-offset))))
+                RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
+
+            ## Plot Zero-level Set of Learned Value
+            
+            # s = ax.imshow(1*(learned_value.T <= 0), cmap='bwr', origin='lower', extent=(-1., 1., -1., 1.))
+            s = ax.imshow(learned_value.T, cmap=RdWhBl_vscaled, origin='lower', extent=(-1., 1., -1., 1.))
+            # s = ax.contourf(Xg, Yg, learned_value, cmap=RdWhBl_vscaled, levels=256)
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes("right", size="5%", pad=0.05)
+            cbar = fig.colorbar(s, cax=cax)
+            cbar.set_ticks([learned_value.min(), 0., learned_value.max()])  # Define custom tick locations
+            cbar.set_ticklabels([f'{learned_value.min():1.1f}', '0', f'{learned_value.max():1.1f}'])  # Define custom tick labels
+
+            ## Plot Ground-Truth Zero-Level Contour
+            ## TODO: remove gt plotting for plots 2/4
+            ax.contour(self.dataset.X1g, self.dataset.X2g, Vgt, [0.], linewidths=4, alpha=0.7, colors='k')
+
+            # ## Plot the Linear Ground-Truth (ideal warm-start) Zero-Level Contour
+
+            # Vgt = self.dataset.values_DP_linear_grid[ix:ix+n_grid_plane_pts].reshape(n_grid_len, n_grid_len).cpu()
+            # ax.contour(self.dataset.X1g, self.dataset.X2g, Vgt, [0.], colors='gold', linestyles='dashed')
+
+            ## Plot 3D Value Fn
+
+            # else:
+            #     if plot_value:
+            #         # ax_val.grid(False)
+            #         ax.view_init(elev=15, azim=-60)
+            #         ax.set_facecolor((1, 1, 1, 1))
+            #         surf = ax.plot_surface(Xg, Yg, learned_value, cmap=RdWhBl_vscaled, alpha=0.8) #cmap='bwr_r')
+            #         # surf = ax.plot_surface(self.dataset.X1g, self.dataset.X2g, Vgt, cmap=RdWhBl_vscaled, alpha=0.8) #cmap='bwr_r')
+                    
+            #         # divider = make_axes_locatable(ax_set)
+            #         # cax = divider.append_axes("right", size="5%", pad=0.05)
+            #         # fig_set.colorbar(s, cax=cax)
+            #         cbar = fig.colorbar(surf, ax=ax, fraction=0.02, pad=0.0)
+
+            #         # cbar.ax.yaxis.set_ticks_position('left')
+            #         # cbar.ax.yaxis.set_label_position('left')
+
+            #         # ax.set_zlim(-max(ax.get_zlim()[1]/5, 0.5))
+            #         # ax.set_zlim(-max(learned_value.max()/5, 0.5), max(learned_value.max(), 2.5))
+            #         ax.set_zlim(learned_value.min() - (learned_value.max() - learned_value.min())/5)
+            #         # ax.contour(Xg, Yg, learned_value, zdir='z', offset=ax.get_zlim()[0], cmap=RdWh, levels=[0.]) #cmap='bwr_r')
+
+            #         ax.contour(Xg, Yg, learned_value, zdir='z', offset=ax.get_zlim()[0], colors='k', levels=[0.]) #cmap='bwr_r')
+            #         # ax.contour(self.dataset.X1g, self.dataset.X2g, Vgt, zdir='z', offset=ax.get_zlim()[0], colors='k', levels=[0.]) #cmap='bwr_r')
+
+            #         ax.set_facecolor((1, 1, 1, 1))
+            #         # ax_val.grid(False)
+
+        # fig_set.savefig(save_path)
+        # if plot_value: fig_val.savefig(save_path.split('_epoch')[0] + '_Vfn' + save_path.split('_epoch')[1])
+        # if self.use_wandb:
+        #     log_dict_plot = {'step': epoch,
+        #                 'val_plot': wandb.Image(fig_set),} # (silly) legacy name
+        #     if plot_value: log_dict_plot['val_fn_plot'] = wandb.Image(fig_val)
+        #     wandb.log(log_dict_plot)
+        # plt.close()
+
+        fig.savefig(save_path)
+        if self.use_wandb:
+            log_dict_plot = {'step': epoch,
+                        'val_plot': wandb.Image(fig),} # (silly) legacy name
+            wandb.log(log_dict_plot)
+        plt.close()
+
+        # if self.dataset.record_gt_metrics:
+        #     self.plot_set_metrics_eachtime(epoch, times)
+        #     if self.use_wandb:
+        #         wandb.log({'Time vs. Epoch vs. Set Accuracy compared to DP': wandb.Image(self.t_ep_acc_fig),})
+        #     plt.close()
+
+        if was_training:
+            self.model.train()
             self.model.requires_grad_(True)            
 
     def compute_gt_metrics(self):
@@ -1166,12 +1509,17 @@ class DeepReachHopf(Experiment):
             n_overlap = values_grid_sub0_ixs.size()[0] + self.dataset.values_DP_grid_sub0_ixs.size()[0] - n_intersect
             
             if values_grid_sub0_ixs.size()[0] > 0:
-                FIp = (values_grid_sub0_ixs.size()[0] - n_intersect) / values_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
+                FIp = (values_grid_sub0_ixs.size()[0] - n_intersect) / values_grid_sub0_ixs.size()[0] # <- wrt learned set, wrt grid
             else:
-                FIp = 1.
-            FEp = (self.dataset.values_DP_grid_sub0_ixs.size()[0] - n_intersect) / self.dataset.values_DP_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
+                FIp = 0.
+            
+            if self.dataset.values_DP_grid_sub0_ixs.size()[0] > 0:
+                FEp = (self.dataset.values_DP_grid_sub0_ixs.size()[0] - n_intersect) / self.dataset.values_DP_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid
+            else:
+                FEp = 0.
+
             JIp = n_intersect / n_overlap
-            ## FIXME: still wondering if there is a bug in FIp and JIp... they look slightly off sometimes 
+            ## NOTE: still wondering if there is a bug in FIp and JIp... they look slightly off sometimes... I've to think they're right but just very nonlinear metrics (maybe bad).
         
         del values_grid
         del values_grid_sub0_ixs

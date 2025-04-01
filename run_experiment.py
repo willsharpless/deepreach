@@ -30,11 +30,8 @@ if __name__ == '__main__':
     ## Hopf options
     p.add_argument('--hopf_loss', type=str, default='none', choices=['none', 'lin_val_diff', 'lin_val_grad_diff'], help='Method for using Hopf data')
     p.add_argument('--hopf_loss_divisor', default=5, required=False, type=float, help='What to divide the hopf loss by for loss reweighting')
-    p.add_argument('--solve_grad', action='store_true', default=False, required=False, help='Compute gradient of linear guide (forced true if grad loss), but slower')
     p.add_argument('--hopf_grad_loss_divisor', default=25, required=False, type=float, help='What to divide the hopf grad loss by for loss reweighting')
-    p.add_argument('--hopf_pretrain', action='store_true', default=True, required=False, help='Pretrain hopf conditions')
-    p.add_argument('--hopf_pretrain_iters', type=int, default=10000, required=False, help='Number of pretrain iterations with Hopf loss')
-    
+
     p.add_argument('--hopf_loss_decay', action='store_true', default=False, required=False, help='Hopf loss weight decay')
     p.add_argument('--hopf_loss_decay_type', type=str, default='linear', choices=['exponential', 'linear', 'negative_exponential'], help='Type of decay for hopf loss term')
     p.add_argument('--hopf_loss_decay_w', default=1., required=False, type=float, help='Hopf loss decay rate weight')
@@ -66,7 +63,7 @@ if __name__ == '__main__':
     p.add_argument('--hopf_warm_start', action='store_true', default=False, required=False, help='Passes estimated gradients from DeepReach to the Hopf solvers to warm-start them')
     p.add_argument('--load_hopf_model', action='store_true', default=False, required=False, help='Model to load for the supervision')
     p.add_argument('--load_hopf_model_name', type=str, default='./runs/capacity_linear', help='Supervision model name')
-    p.add_argument('--load_model_type', type=str, default='learned', choices=['learned', 'DP'], help='Type of loaded model') # FIXME someday actually use DP option
+    # p.add_argument('--load_model_type', type=str, default='learned', choices=['learned', 'DP'], help='Type of loaded model') # FIXME someday actually use DP option
 
     ## Finite Differencing Options
     p.add_argument('--fin_diff', action='store_true', default=False, required=False, help='Finite Difference Learning: Uses finite diffs for grads and adds dissipation')
@@ -74,12 +71,32 @@ if __name__ == '__main__':
     p.add_argument('--fd_dxs', type=float, nargs='+', default=[0.7, 0.5, 0.3, 0.1], help="Define the spatial step size for fin diff iters")
     p.add_argument('--fd_dts', type=float, nargs='+', default=[0.05, 0.03, 0.02, 0.01], help="Define the time step size for fin diff iters")
 
+    ## Multi-Objective Options
+    p.add_argument('--mulob_type', type=str, default='BRAAT', choices=['BRAT', 'BRAAT', 'BRRT'], help='Type of multiobjective value combination')
+    p.add_argument('--mulob_loss_type', type=str, default='vanilla', choices=['vanilla', 'augment', 'deform', 'augment-deform'], help='Type of multiobjective loss')
+    p.add_argument('--load_decomposed_models', action='store_true', default=False, required=False, help='Will load models corresponding to the decomposed game values.')
+    p.add_argument('--load_decomposed_model_name_1', type=str, default='./runs/mulob/ConveyorND/Conveyor2D/reach_only', help='Decomposed value 1 model name')
+    p.add_argument('--load_decomposed_model_name_2', type=str, default='./runs/mulob/ConveyorND/Conveyor2D/avoid_only', help='Decomposed value 2 model name')
+    p.add_argument('--super_pretrain', action='store_true', default=False, required=False, help='Pretrain with supervision losses')
+    p.add_argument('--super_pretrain_iters', type=int, default=10000, required=False, help='Number of pretrain iterations with supervision losses')
+    p.add_argument('--solve_grad', action='store_true', default=False, required=False, help='Compute gradients (forced true if gradient supervision), slower')
+    p.add_argument('--grad_super', action='store_true', default=False, required=False, help='Supervision of not only value but gradient')
+    p.add_argument('--lam_slice_super', action='store_true', default=False, required=False, help='Limits supervision losses to data slices with fixed lambda values.')
+
+    ## Multi-Objective Loss Weights
+    p.add_argument('--dss_value_loss_1_divisor', default=10., required=False, type=float, help='What to divide the mulob decomposed semi-supervision loss by for loss reweighting')
+    p.add_argument('--dss_value_loss_2_divisor', default=10., required=False, type=float, help='What to divide the mulob decomposed semi-supervision loss by for loss reweighting')    
+    p.add_argument('--dss_grad_loss_1_divisor', default=100., required=False, type=float, help='What to divide the mulob decomposed grad semi-supervision loss by for loss reweighting')
+    p.add_argument('--dss_grad_loss_2_divisor', default=100., required=False, type=float, help='What to divide the mulob decomposed grad semi-supervision loss by for loss reweighting')
+    p.add_argument('--lbss_value_loss_divisor', default=10., required=False, type=float, help='What to divide the mulob lower-bound supervision loss by for loss reweighting')
+    p.add_argument('--lbss_grad_loss_divisor', default=100., required=False, type=float, help='What to divide the mulob lower-bound supervision loss by for loss reweighting')
+                                                        
     use_wandb = p.parse_known_args()[0].use_wandb
-    if use_wandb:
-        p.add_argument('--wandb_project', type=str, default='deepreach_hopf_oct20', required=False, help='wandb project')
-        p.add_argument('--wandb_entity', type=str, default='sas-lab', required=False, help='wandb entity')
-        p.add_argument('--wandb_group', type=str, default='LessLinearND', required=False, help='wandb group')
-        p.add_argument('--wandb_name', type=str, default='test_run', required=False, help='name of wandb run')
+    # if use_wandb:
+    p.add_argument('--wandb_project', type=str, default='test', required=False, help='wandb project')
+    p.add_argument('--wandb_entity', type=str, default='sas-lab', required=False, help='wandb entity')
+    p.add_argument('--wandb_group', type=str, default='test_run', required=False, help='wandb group')
+    p.add_argument('--wandb_name', type=str, default='test_run', required=False, help='name of wandb run')
 
     mode = p.parse_known_args()[0].mode
 
@@ -119,7 +136,7 @@ if __name__ == '__main__':
         p.add_argument('--epochs_til_ckpt', type=int, default=1000, help='Time interval in seconds until checkpoint is saved.')
         p.add_argument('--steps_til_summary', type=int, default=100, help='Time interval in seconds until tensorboard summary is saved.')
         p.add_argument('--batch_size', type=int, default=1, help='Batch size used during training (irrelevant, since len(dataset) == 1).')
-        p.add_argument('--lr_std', type=float, default=1e-5, help='learning rate. default=2e-6')
+        p.add_argument('--lr_std', type=float, default=2e-5, help='learning rate. default=2e-6')
         p.add_argument('--lr_decay_w', default=1., type=float, help='LR Exponential Decay Rate') # 1 or 0.9999
         p.add_argument('--num_epochs', type=int, default=30000, help='Number of epochs to train for.')
         p.add_argument('--clip_grad', default=0.0, type=float, help='Clip gradient.')
@@ -174,14 +191,14 @@ if __name__ == '__main__':
 
     if opt.debug_params:
         opt.pretrain_iters = 2
-        opt.hopf_pretrain_iters = 2
+        opt.super_pretrain_iters = 0
         opt.num_epochs = 20
         opt.epochs_til_ckpt = 10
         opt.use_bank = False
 
     if opt.capacity_test:
         opt.pretrain_iters = 1
-        opt.hopf_pretrain_iters = opt.num_epochs
+        opt.super_pretrain_iters = opt.num_epochs
         opt.hopf_loss = 'lin_val_grad_diff'
         opt.solve_grad = True
         opt.solve_hopf = False
@@ -194,7 +211,10 @@ if __name__ == '__main__':
         # opt.solve_grad = True # force this for warm-starting?
 
     if opt.hopf_loss == 'lin_val_grad_diff':
-        opt.solve_grad = True # need to solve grad to be able to score it
+        opt.solve_grad = True # need to solve grad to use it
+
+    if opt.grad_super:
+        opt.solve_grad = True # need to solve grad to use it
 
     if opt.hopf_loss == 'none':
         opt.diff_con_loss_incr = False
@@ -204,42 +224,6 @@ if __name__ == '__main__':
         opt.temporal_loss = False ## bug
         # opt.numpoints, opt.lr, opt.lr_decay_w = 60000, 1e-5, 1.
 
-    ## Clarity Prints for Wills Sanity
-    print(f"\n\nTraining DeepReach on {opt.dynamics_class},\n")
-    if opt.capacity_test: print(" - using supervised learning of ground truth (capacity test)")
-    elif opt.hopf_loss != 'none': 
-        print(f" - with hopf loss {opt.hopf_loss}")
-        print("  - linear data will be,")
-        if opt.use_bank:
-            if opt.solve_hopf:
-                print("   - made by a pool of hopf-julia workers, and stored in a dynamic, shared bank.")
-                if opt.hopf_warm_start:
-                    print("      (and DeepReach gradients will be passed to the hopf solvers to warm-start them.)")
-            else:
-                if opt.use_bank and opt.bank_name == 'none': print("   - made by interpolation of 2D DP, and stored in a static bank.")
-                else: print(f"   - loaded from a static bank file, {opt.bank_name}.")
-        elif opt.load_hopf_model:
-            print(f"   - sampled each iteration from a learned linear model")
-        else:
-            print(f"   - sampled each iteration from a DP linear model")
-        if opt.solve_grad:
-            print( "  - linear gradients will be solved")
-        if opt.hopf_loss_decay:
-            if opt.diff_con_loss_incr:
-                print(f"  - decayed in a(n) {opt.hopf_loss_decay_type} fashion, and similarly PDE introduction")
-            else:
-                print(f"  - decayed in a(n) {opt.hopf_loss_decay_type} fashion")
-        if opt.nl_scale:
-            print(f"  - nonlinearly transitioned by {100 * (opt.nl_scale_epoch_step/(opt.num_epochs-(opt.pretrain_iters+opt.hopf_pretrain_iters+opt.nl_scale_epoch_post))):2.1f} % per {opt.nl_scale_epoch_step} epochs")
-    elif opt.fin_diff:
-        print(f" - with the finite difference loss (decreasing viscosity in {len(opt.fd_as)} steps)")
-        print(f"   - FD alpha's: {opt.fd_as}")
-        print(f"   - FD d_x's:   {opt.fd_dxs}")
-        print(f"   - FD d_t's:   {opt.fd_dts}")
-    else: 
-        print(" - via the original method (baseline).")
-    print("")
-        
     ## Start WandB and Save Configuration Parameters
     if use_wandb:
         wandb.init(
@@ -329,6 +313,47 @@ if __name__ == '__main__':
         loaded_model = None
         loaded_dynamics_inst = None
 
+    ## Load Learned Models Corresponding to Decomposed Values
+    if orig_opt.load_decomposed_models:
+        load_dir_1, load_dir_2 = opt.load_decomposed_model_name_1, opt.load_decomposed_model_name_2 
+        with open(os.path.join(load_dir_1, 'orig_opt.pickle'), 'rb') as opt_file:
+            loaded_opt_1 = pickle.load(opt_file)
+        with open(os.path.join(load_dir_2, 'orig_opt.pickle'), 'rb') as opt_file:
+            loaded_opt_2 = pickle.load(opt_file)
+
+        if not orig_opt.dynamics_class.endswith("lambda"):
+            loaded_model_1 = modules.SingleBVPNet(in_features=dynamics_inst.input_dim, out_features=1, type=loaded_opt.model, mode=loaded_opt.model_mode,
+                                        final_layer_factor=1., hidden_features=loaded_opt.num_nl, num_hidden_layers=loaded_opt.num_hl)
+            loaded_model_2 = modules.SingleBVPNet(in_features=dynamics_inst.input_dim, out_features=1, type=loaded_opt.model, mode=loaded_opt.model_mode,
+                                        final_layer_factor=1., hidden_features=loaded_opt.num_nl, num_hidden_layers=loaded_opt.num_hl)
+        else:
+            loaded_model_1 = modules.SingleBVPNet(in_features=dynamics_inst.input_dim-1, out_features=1, type=loaded_opt.model, mode=loaded_opt.model_mode,
+                                        final_layer_factor=1., hidden_features=loaded_opt.num_nl, num_hidden_layers=loaded_opt.num_hl)
+            loaded_model_2 = modules.SingleBVPNet(in_features=dynamics_inst.input_dim-1, out_features=1, type=loaded_opt.model, mode=loaded_opt.model_mode,
+                                        final_layer_factor=1., hidden_features=loaded_opt.num_nl, num_hidden_layers=loaded_opt.num_hl)
+        loaded_model_1.cuda()
+        loaded_model_2.cuda()
+        
+        model_path_1 = os.path.join(load_dir_1, 'training', 'checkpoints', 'model_final.pth')
+        model_path_2 = os.path.join(load_dir_2, 'training', 'checkpoints', 'model_final.pth')
+        loaded_model_1.load_state_dict(torch.load(model_path_1)['model']) # FIXME, key only needed for chkpts
+        loaded_model_2.load_state_dict(torch.load(model_path_2)['model']) # FIXME, key only needed for chkpts
+        loaded_model_1.eval()
+        loaded_model_2.eval()
+
+        ## Loading non-lambda dynamics for gradient # TODO do I need two of these?
+        if "ss" in opt.decomposed_loss_type and orig_opt.dynamics_class.endswith("lambda"):
+            loaded_dynamics_class = getattr(dynamics, orig_opt.dynamics_class.split("lambda")[0]) # non-lambda version of dynamics
+            loaded_dynamics_inst = loaded_dynamics_class(**{argname: getattr(orig_opt, argname) for argname in inspect.signature(loaded_dynamics_class).parameters.keys() if argname != 'self'})
+            loaded_dynamics_inst.deepreach_model=orig_opt.deepreach_model
+            loaded_dynamics_inst.loss_type = 'brt_hjivi_hopf'
+        else:
+            loaded_dynamics_inst = None
+        
+    else:
+        loaded_model_1, loaded_model_2 = None, None
+        loaded_dynamics_inst = None
+
     dataset = dataio.ReachabilityDataset(
         dynamics=dynamics_inst, numpoints=orig_opt.numpoints, 
         pretrain=orig_opt.pretrain, pretrain_iters=orig_opt.pretrain_iters, 
@@ -336,13 +361,17 @@ if __name__ == '__main__':
         counter_start=orig_opt.counter_start, counter_end=orig_opt.counter_end, 
         num_src_samples=orig_opt.num_src_samples, num_target_samples=orig_opt.num_target_samples,
         use_hopf=(orig_opt.hopf_loss != 'none'),
-        hopf_pretrain=orig_opt.hopf_pretrain, hopf_pretrain_iters=orig_opt.hopf_pretrain_iters,
+        super_pretrain=orig_opt.super_pretrain, super_pretrain_iters=orig_opt.super_pretrain_iters,
         no_curriculum=orig_opt.no_curr, record_gt_metrics=orig_opt.gt_metrics,
         use_bank=orig_opt.use_bank, bank_name=orig_opt.bank_name, capacity_test=orig_opt.capacity_test,
         solve_hopf=orig_opt.solve_hopf, solve_grad=orig_opt.solve_grad, hopf_warm_start=orig_opt.hopf_warm_start,
         just_make_hopf_bank=orig_opt.just_make_hopf_bank, refine_bank=orig_opt.refine_bank,
         loaded_model=loaded_model, lambda_var=orig_opt.dynamics_class.endswith("lambda"), zerolambda_LS=orig_opt.zerolambda_LS,
-        LS_w_time_curr=orig_opt.LS_w_time_curr, loaded_dynamics=loaded_dynamics_inst)
+        LS_w_time_curr=orig_opt.LS_w_time_curr, loaded_dynamics=loaded_dynamics_inst,
+        
+        loaded_model_1=loaded_model_1, loaded_model_2=loaded_model_2,
+        lam_slice_super=orig_opt.lam_slice_super,
+        )
 
     model = modules.SingleBVPNet(in_features=dynamics_inst.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
                                 final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl)
@@ -352,15 +381,67 @@ if __name__ == '__main__':
     experiment = experiment_class(model=model, dataset=dataset, experiment_dir=experiment_dir, use_wandb=use_wandb)
     experiment.init_special(**{argname: getattr(orig_opt, argname) for argname in inspect.signature(experiment_class.init_special).parameters.keys() if argname != 'self'})
 
+    ## Clarity Prints for Will's Sanity
+    print(f"\n\nTraining DeepReach on {opt.dynamics_class} ({dynamics_inst.loss_type}),\n")
+    if opt.capacity_test: print(" - using supervised learning of ground truth (capacity test)")
+    elif opt.hopf_loss != 'none': 
+        print(f" - with hopf loss {opt.hopf_loss}")
+        print("  - linear data will be,")
+        if opt.use_bank:
+            if opt.solve_hopf:
+                print("   - made by a pool of hopf-julia workers, and stored in a dynamic, shared bank.")
+                if opt.hopf_warm_start:
+                    print("      (and DeepReach gradients will be passed to the hopf solvers to warm-start them.)")
+            else:
+                if opt.use_bank and opt.bank_name == 'none': print("   - made by interpolation of 2D DP, and stored in a static bank.")
+                else: print(f"   - loaded from a static bank file, {opt.bank_name}.")
+        elif opt.load_hopf_model:
+            print(f"   - sampled each iteration from a learned linear model")
+        else:
+            print(f"   - sampled each iteration from a DP linear model")
+        if opt.solve_grad:
+            print( "  - gradients will be solved")
+        if opt.hopf_loss_decay:
+            if opt.diff_con_loss_incr:
+                print(f"  - decayed in a(n) {opt.hopf_loss_decay_type} fashion, and similarly PDE introduction")
+            else:
+                print(f"  - decayed in a(n) {opt.hopf_loss_decay_type} fashion")
+        if opt.nl_scale:
+            print(f"  - nonlinearly transitioned by {100 * (opt.nl_scale_epoch_step/(opt.num_epochs-(opt.pretrain_iters+opt.super_pretrain_iters+opt.nl_scale_epoch_post))):2.1f} % per {opt.nl_scale_epoch_step} epochs")
+    elif opt.fin_diff:
+        print(f" - with the finite difference loss (decreasing viscosity in {len(opt.fd_as)} steps)")
+        print(f"   - FD alpha's: {opt.fd_as}")
+        print(f"   - FD d_x's:   {opt.fd_dxs}")
+        print(f"   - FD d_t's:   {opt.fd_dts}")
+    else: 
+        print(" - via the original method (baseline).")
+    print("")
+        
     if (mode == 'all') or (mode == 'train'):
         if dynamics_inst.loss_type == 'brt_hjivi':
             loss_fn = losses.init_brt_hjivi_loss(dynamics_inst, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
             loss_fn_baseline = losses.init_brt_hjivi_loss(dynamics_inst, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
         elif dynamics_inst.loss_type == 'brat_hjivi':
             loss_fn = losses.init_brat_hjivi_loss(dynamics_inst, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
+            loss_fn_baseline = losses.init_brat_hjivi_loss(dynamics_inst, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
         elif dynamics_inst.loss_type == 'brt_hjivi_hopf':
             loss_fn = losses.init_brt_hjivi_hopf_loss(experiment, orig_opt.minWith, orig_opt.dirichlet_loss_divisor, orig_opt.hopf_loss_divisor, orig_opt.hopf_grad_loss_divisor, orig_opt.hopf_loss, orig_opt.temporal_weighting)
             loss_fn_baseline = losses.init_brt_hjivi_loss(dynamics_inst, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
+
+        ## TODO: add BRAAT & BRRT losses
+        elif dynamics_inst.loss_type == 'mulob_hjivi':
+            loss_fn = losses.init_mulob_hjivi_loss(experiment, orig_opt.minWith, orig_opt.dirichlet_loss_divisor, 
+                                                        mulob_type=orig_opt.mulob_type, loss_type=orig_opt.mulob_loss_type, 
+                                                        dss_value_loss_1_divisor=orig_opt.dss_value_loss_1_divisor, 
+                                                        dss_value_loss_2_divisor=orig_opt.dss_value_loss_2_divisor,
+                                                        dss_grad_loss_1_divisor=orig_opt.dss_grad_loss_1_divisor, 
+                                                        dss_grad_loss_2_divisor=orig_opt.dss_grad_loss_2_divisor, 
+                                                        lbss_value_loss_divisor=orig_opt.lbss_value_loss_divisor, 
+                                                        lbss_grad_loss_divisor=orig_opt.lbss_grad_loss_divisor,
+                                                        grad_super=orig_opt.grad_super,
+            )
+            loss_fn_baseline = losses.init_brt_hjivi_loss(dynamics_inst, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
+
         else:
             raise NotImplementedError
         experiment.train(

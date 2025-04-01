@@ -13,14 +13,14 @@ import warnings
 warnings.filterwarnings("ignore",message="torch was imported before juliacall. This may cause a segfault.*",category=UserWarning,module="juliacall")
 from juliacall import Main as jl, convert as jlconvert
 
-import matplotlib.pyplot as plt ## TODO: remove later
-import matplotlib as mpl ## TODO: remove later
+import matplotlib.pyplot as plt
+import matplotlib as mpl
 import hj_reachability as hj
 
 # uses model input and real boundary fn
 class ReachabilityDataset(Dataset):
     def __init__(self, dynamics, numpoints, pretrain, pretrain_iters, tMin, tMax, counter_start, counter_end, num_src_samples, num_target_samples, 
-                 use_hopf=False, hopf_pretrain=False, hopf_pretrain_iters=0, record_gt_metrics=False, solve_grad=False,
+                 use_hopf=False, super_pretrain=False, super_pretrain_iters=0, record_gt_metrics=False, solve_grad=False,
                  dp_manual_load=False, load_packet=None, no_curriculum=False, use_bank=False, bank_name=None, capacity_test=False,
                  solve_hopf=False, hopf_warm_start=False, hopf_time_step=5e-2, num_hopf_workers=5, hopf_starter_numsplits=1000, hopf_deposit_numsplits=100,
                  hopf_opt_p = {"vh":0.01, "stepsz":1, "tol":1e-3, "decay_stepsz":100, "conv_runs_rqd":1, "max_runs":1, "max_its":100},
@@ -29,12 +29,16 @@ class ReachabilityDataset(Dataset):
                  loaded_model=None, loaded_dynamics=None,
                  lambda_var=False, zerolambda_LS=False, LS_w_time_curr=False,
                  memory_tracking=False, make_benchmark_gts=False,
+
+                 loaded_model_1=None, loaded_model_2=None,
+                 lam_slice_super=False,
                  ):
 
         self.dynamics = dynamics
         self.loaded_dynamics = loaded_dynamics
         self.numpoints = numpoints
         self.pretrain = pretrain
+        self.pretrained = False
         self.pretrain_counter = 0
         self.pretrain_iters = pretrain_iters
         self.tMin = tMin 
@@ -44,12 +48,15 @@ class ReachabilityDataset(Dataset):
         self.num_src_samples = num_src_samples
         self.num_target_samples = num_target_samples
 
-        self.use_hopf = use_hopf # FIXME: old name, means use linear data (not necessarily solve hopf formula)
+        self.lam_slice_super = lam_slice_super
+
+        # self.use_hopf = use_hopf # FIXME: old name, means use linear data (not necessarily solve hopf formula)
+        self.use_hopf = False
         self.solve_grad = solve_grad
-        self.hopf_pretrain = use_hopf and hopf_pretrain
-        self.hopf_pretrained = False
-        self.hopf_pretrain_counter = 0
-        self.hopf_pretrain_iters = hopf_pretrain_iters
+        self.super_pretrain = super_pretrain
+        self.super_pretrained = False
+        self.super_pretrain_counter = 0
+        self.super_pretrain_iters = super_pretrain_iters
         self.record_gt_metrics = record_gt_metrics
         self.no_curriculum = no_curriculum
         self.N = dynamics.N
@@ -102,6 +109,13 @@ class ReachabilityDataset(Dataset):
         self.loaded_model = loaded_model
         if loaded_model: self.loaded_model = loaded_model.cuda()
         self.load_hopf_model = loaded_model is not None
+
+        # Load pretrained models for decomposed supervision
+        self.loaded_model_1 = loaded_model_1
+        self.loaded_model_2 = loaded_model_2
+        if loaded_model_1: self.loaded_model_1 = loaded_model_1.cuda()
+        if loaded_model_2: self.loaded_model_1 = loaded_model_2.cuda()
+        self.load_decomposed_models = loaded_model_1 is not None and loaded_model_2 is not None
 
         # Lambda Variation Options
         self.lambda_var = lambda_var
@@ -160,18 +174,17 @@ class ReachabilityDataset(Dataset):
     def __getitem__(self, idx):
         
         if self.memory_tracking:
-            print(f"getitem-start, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
-            print(f"getitem-start, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+            print(f"getitem - start, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+            print(f"getitem - start, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
             print()
     
         ## Sample Points and Evaluate
-        if False: #self.hopf_pretrain and self.lambda_var: #skipping for now
+        if False: #self.super_pretrain and self.lambda_var: #skipping for now
             model_states_nolam = torch.zeros(self.numpoints, self.dynamics.state_dim-1).uniform_(-1, 1)
             model_states = torch.cat((model_states_nolam, torch.zeros(self.numpoints, 1)), dim=1) # force lambda=0 for linear pretraining
             # TODO could also skip this and train the linear solution everywhere (after fixing loaded lam)
         else:
             model_states = torch.zeros(self.numpoints, self.dynamics.state_dim).uniform_(-1, 1)
-        # TODO could also gradually add lambda scale (nonlinear curr)
 
         if self.num_target_samples > 0:
             target_state_samples = self.dynamics.sample_target_state(self.num_target_samples)
@@ -181,7 +194,7 @@ class ReachabilityDataset(Dataset):
             times = torch.full((self.numpoints, 1), self.tMin)
 
         else:
-            if self.hopf_pretrain or self.no_curriculum or (self.hopf_pretrained and not self.LS_w_time_curr):
+            if self.super_pretrain or self.no_curriculum or (self.super_pretrained and not self.LS_w_time_curr):
                 times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin)) # during hopf pt, sample across all time?
             else:
                 times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * (self.counter/self.counter_end))
@@ -192,8 +205,8 @@ class ReachabilityDataset(Dataset):
             model_coords = torch.cat((model_coords, torch.zeros(self.numpoints, self.dynamics.input_dim - self.dynamics.state_dim - 1)), dim=1)
 
         if self.memory_tracking:
-            print(f"getitem-0, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
-            print(f"getitem-0, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+            print(f"getitem - after model_coords, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+            print(f"getitem - after model_coords, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
             print() 
 
         ## Get Hopf value
@@ -204,7 +217,7 @@ class ReachabilityDataset(Dataset):
                 if self.solve_grad:
                     hopf_grads = torch.zeros(self.numpoints, self.dynamics.state_dim)
 
-                if self.zerolambda_LS and not self.pretrain and not self.hopf_pretrain: # only when model loading and out of pretraining
+                if self.zerolambda_LS and not self.pretrain and not self.super_pretrain: # only when model loading and out of pretraining
                     model_states_nolam = torch.zeros(self.numpoints, self.dynamics.state_dim-1).uniform_(-1, 1)
                     model_states_lam0 = torch.cat((model_states_nolam, torch.zeros(self.numpoints, 1)), dim=1) # force lambda=0 for linear pretraining
                     model_coords_hopf = torch.cat((times, model_states_lam0), dim=1)
@@ -252,12 +265,53 @@ class ReachabilityDataset(Dataset):
                         hopf_values = self.V_hopf(0.999 * self.dynamics.input_to_coord(model_coords).t()) # rare itp-lim fp issue
         
         coords_io = self.dynamics.input_to_coord(model_coords)
-        states_io, times_io = coords_io[..., 1:], coords_io[..., 0]
+        states_io, times_io = coords_io[..., 1:], coords_io[..., 0:1]
         
         boundary_values = self.dynamics.boundary_fn(states_io, times_io)
+
+        ## Reach-Avoif Data
         if self.dynamics.loss_type == 'brat_hjivi':
             reach_values = self.dynamics.reach_fn(states_io, times_io)
             avoid_values = self.dynamics.avoid_fn(states_io, times_io)
+
+        ## Multi-Objective Data
+        if self.dynamics.loss_type == 'mulob_hjivi':
+
+            if hasattr(self.dynamics, 'reach_fn') and hasattr(self.dynamics, 'avoid_fn'):
+                bc_values_1 = self.dynamics.reach_fn(states_io, times_io)
+                bc_values_2 = self.dynamics.avoid_fn(states_io, times_io)
+                
+            elif hasattr(self.dynamics, 'reach_fn_1') and hasattr(self.dynamics, 'reach_fn_2'):
+                bc_values_1 = self.dynamics.reach_fn_1(states_io, times_io)
+                bc_values_2 = self.dynamics.reach_fn_2(states_io, times_io)
+
+            if not self.lambda_var:
+                if self.solve_grad:
+                    gt_decomposed_values_1, gt_decomposed_grads_1 = self.V_DP_1(model_coords.t())
+                    gt_decomposed_values_2, gt_decomposed_grads_2 = self.V_DP_2(model_coords.t())
+                else:
+                    gt_decomposed_values_1 = self.V_DP_1(model_coords.t())
+                    gt_decomposed_values_2 = self.V_DP_2(model_coords.t())
+                    gt_decomposed_grads_1, gt_decomposed_grads_2 = torch.empty(0), torch.empty(0)
+
+            else: # remove lambda (same coords)
+                if self.solve_grad:
+                    gt_decomposed_values_1, gt_decomposed_grads_1 = self.V_DP_1(model_coords[..., :-1].t())
+                    gt_decomposed_values_2, gt_decomposed_grads_2 = self.V_DP_2(model_coords[..., :-1].t())
+                else:
+                    gt_decomposed_values_1 = self.V_DP_1(model_coords[..., :-1].t())
+                    gt_decomposed_values_2 = self.V_DP_2(model_coords[..., :-1].t())
+                    gt_decomposed_grads_1, gt_decomposed_grads_2 = torch.empty(0), torch.empty(0)
+                    
+                # FIXME: for BRAT decomp, need V_DP_2 == avoid_fn (NOT avoid_value)
+
+            if self.lam_slice_super and self.lambda_var:
+                lambda_hi = self.dynamics.lambda_center + self.dynamics.lambda_range/2
+                lambda_lo = self.dynamics.lambda_center - self.dynamics.lambda_range/2
+                model_coords_poslam = torch.cat((model_coords[..., :-1], lambda_hi + 0*model_coords[..., -1]), -1) 
+                model_coords_neglam = torch.cat((model_coords[..., :-1], lambda_lo + 0*model_coords[..., -1]), -1) 
+            else:
+                model_coords_poslam, model_coords_neglam = model_coords, model_coords
 
         if self.pretrain:
             dirichlet_masks = torch.ones(model_coords.shape[0]) > 0
@@ -267,40 +321,50 @@ class ReachabilityDataset(Dataset):
 
         if self.pretrain:
             self.pretrain_counter += 1
-        elif self.hopf_pretrain:
-            self.hopf_pretrain_counter += 1
+        elif self.super_pretrain:
+            self.super_pretrain_counter += 1
         elif self.counter < self.counter_end:
             self.counter += 1
 
         if self.memory_tracking:
-            print(f"getitem-1, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
-            print(f"getitem-1, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
+            print(f"getitem - end, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
+            print(f"getitem - end, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
             print()    
 
         if self.pretrain and self.pretrain_counter == self.pretrain_iters:
             self.pretrain = False
+            self.pretrained = True
             print("\n\n ----------------  FINISHED BC PRETRAINING  ------------------- \n")
 
-        if self.hopf_pretrain and self.hopf_pretrain_counter == self.hopf_pretrain_iters:
-            self.hopf_pretrain = False
-            self.hopf_pretrained = True
-            print("\n\n ---------------- FINISHED HOPF PRETRAINING ------------------- \n")
+        if self.super_pretrain and self.super_pretrain_counter == self.super_pretrain_iters:
+            self.super_pretrain = False
+            self.super_pretrained = True
+            print("\n\n ---------------- FINISHED SUPERVISOR PRETRAINING ------------------- \n")
 
 
         if self.dynamics.loss_type == 'brt_hjivi':
             return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks}
+        
         elif self.dynamics.loss_type == 'brt_hjivi_hopf':
             ## UGLY
-            if (not(self.use_bank) or self.hopf_pretrain_counter == 0) and not self.solve_grad:
+            if (not(self.use_bank) or self.super_pretrain_counter == 0) and not self.solve_grad:
                 return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks, 'hopf_values': hopf_values}
-            elif (not self.use_bank or self.hopf_pretrain_counter == 0) and (not self.zerolambda_LS or self.pretrain or self.hopf_pretrain or self.hopf_pretrain_counter == self.hopf_pretrain_iters):
+            elif (not self.use_bank or self.super_pretrain_counter == 0) and (not self.zerolambda_LS or self.pretrain or self.super_pretrain or self.super_pretrain_counter == self.super_pretrain_iters):
                 return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks, 'hopf_values': hopf_values, 'hopf_grads': hopf_grads}
             elif not self.solve_grad:
                 return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks, 'hopf_values': hopf_values, 'model_coords_hopf': model_coords_hopf}
             else:
                 return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'dirichlet_masks': dirichlet_masks, 'hopf_values': hopf_values, 'model_coords_hopf': model_coords_hopf, 'hopf_grads': hopf_grads}
+        
         elif self.dynamics.loss_type == 'brat_hjivi':
             return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'reach_values': reach_values, 'avoid_values': avoid_values, 'dirichlet_masks': dirichlet_masks}
+        
+        elif self.dynamics.loss_type == 'mulob_hjivi':
+            return {'model_coords': model_coords}, {'boundary_values': boundary_values, 'bc_values_1': bc_values_1, 'bc_values_2': bc_values_2, 
+                                                    'gt_decomposed_values_1':gt_decomposed_values_1, 'gt_decomposed_values_2':gt_decomposed_values_2, 
+                                                    'gt_decomposed_grads_1':gt_decomposed_grads_1, 'gt_decomposed_grads_2':gt_decomposed_grads_2, 
+                                                    'model_coords_poslam':model_coords_poslam, 'model_coords_neglam':model_coords_neglam,
+                                                    'dirichlet_masks': dirichlet_masks}
         else:
             raise NotImplementedError
         
@@ -368,16 +432,14 @@ class ReachabilityDataset(Dataset):
     
     def init_groundtruth_tests(self, load_lambda_var=False, make_benchmark_gts=False, manual_load=False, make_gt_solutions=False, decomposed=True, fd_grad=False):
         
-        ## Manual load (WandB sweeps need this)
+        ## Manual load (WandB sweeps need this if using juliacall)
         if manual_load:
             pass
         
         ## Python Ground Truth Solutions
-        # elif python_gt:
         elif hasattr(self.dynamics, "name") and self.dynamics.name in ["Conveyor","Canoe"]:
             
-            # TODO: just for testing, remove later
-            # self.dynamics.name = "Conveyor"
+            # TODO: just for testing, make parsed arg later
             if self.dynamics.name == "Conveyor":
                 self.gt_key = "bounded/axes/Conveyor2D_BRAAT_bdbc_axes_lin"
             elif self.dynamics.name == "Canoe":
@@ -396,10 +458,6 @@ class ReachabilityDataset(Dataset):
                     [grid_params["grid_L"] for _ in range(2)])
 
                 solution_times = grid_params["times"]
-                state_scale = (grid_params["ubs"] - grid_params["lbs"])/2
-                state_center = (grid_params["ubs"] + grid_params["lbs"])/2
-                self.dynamics.state_scale = state_scale
-                self.dynamics.state_center = state_center # TODO move these?
 
                 self.V_DP_2d = np.load(f"value_fns/{self.dynamics.name}/solutions/{self.gt_key}_V.npz")["V"]
 
@@ -427,7 +485,9 @@ class ReachabilityDataset(Dataset):
                 
                 # V = 0 * tXg[0,:]
                 i = 1 # main diagonal only (any subsys i is equiv on diag)
-                state_key = [0, 1, 2]
+                state_key = [0, 1, 2] # time, first two states
+
+                tXg[[0], :] = -tXg[[0], :] # DR convention to use positive times
 
                 # if shared_x0:
                 #     base = [0, 1]
@@ -451,43 +511,48 @@ class ReachabilityDataset(Dataset):
                     return torch.from_numpy(values_itp.__array__().copy()), torch.from_numpy(grads_itp[:, 1:].__array__().copy())
                     # return torch.from_numpy(values_itp.__array__().copy()), torch.from_numpy(grads_itp.__array__().copy()) # TODO: ADD TEMPORAL GRADS!
                     
-
+            ## Define multiobjective and decomposed interpolation fns
             def V_N_DP_itp(tXg):
                 return V_N_DP_itp_combo(tXg, self.V_DP_2d, solution_grid, solution_times, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
             
-            self.V_DP = V_N_DP_itp
+            def V_N_DP_1_itp(tXg):
+                return V_N_DP_itp_combo(tXg, self.V_DP_2d_1, solution_grid, solution_times, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+
+            def V_N_DP_2_itp(tXg):
+                return V_N_DP_itp_combo(tXg, self.V_DP_2d_2, solution_grid, solution_times, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
             
-            if decomposed:
-
-                def V_N_DP_1_itp(tXg):
-                    return V_N_DP_itp_combo(tXg, self.V_DP_2d_1, solution_grid, solution_times, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
-
-                def V_N_DP_2_itp(tXg):
-                    return V_N_DP_itp_combo(tXg, self.V_DP_2d_2, solution_grid, solution_times, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
-
-                self.V_DP_1 = V_N_DP_1_itp
-                self.V_DP_2 = V_N_DP_2_itp
+            self.V_DP = V_N_DP_itp
+            self.V_DP_1 = V_N_DP_1_itp
+            self.V_DP_2 = V_N_DP_2_itp
 
             if self.solve_grad:
 
                 def V_N_DP_itp_grad(tXg):
                     return V_N_DP_itp_combo(tXg, self.V_DP_2d, solution_grid, solution_times, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
 
+                def V_N_DP_1_itp_grad(tXg):
+                    return V_N_DP_itp_combo(tXg, self.V_DP_2d_1, solution_grid, solution_times, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+
+                def V_N_DP_2_itp_grad(tXg):
+                    return V_N_DP_itp_combo(tXg, self.V_DP_2d_2, solution_grid, solution_times, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+
                 self.V_DP_grad = V_N_DP_itp_grad
-                
-                if decomposed:
-
-                    def V_N_DP_1_itp_grad(tXg):
-                        return V_N_DP_itp_combo(tXg, self.V_DP_2d_1, solution_grid, solution_times, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
-
-                    def V_N_DP_2_itp_grad(tXg):
-                        return V_N_DP_itp_combo(tXg, self.V_DP_2d_2, solution_grid, solution_times, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
-
-                    self.V_DP_1_grad = V_N_DP_1_itp_grad
-                    self.V_DP_2_grad = V_N_DP_2_itp_grad
+                self.V_DP_1_grad = V_N_DP_1_itp_grad
+                self.V_DP_2_grad = V_N_DP_2_itp_grad
             
+            # If decomposed learning, score correctly
+            if (hasattr(self.dynamics, 'reach_only') and self.dynamics.reach_only) or (hasattr(self.dynamics, 'reach_1_only') and self.dynamics.reach_1_only):
+                self.V_DP = self.V_DP_1
+                if self.solve_grad:
+                    self.V_DP_grad = self.V_DP_1_grad
+            
+            elif (hasattr(self.dynamics, 'avoid_only') and self.dynamics.avoid_only) or (hasattr(self.dynamics, 'reach_2_only') and self.dynamics.reach_2_only):
+                self.V_DP = self.V_DP_2
+                if self.solve_grad:
+                    self.V_DP_grad = self.V_DP_2_grad
 
-        else: ## Julia-Based Ground Truth Solutions (specific to "Linear Semi-Supervision" paper)
+        ## Julia-Based Ground Truth Solutions (specific to "Linear Semi-Supervision" paper)
+        else:
 
             jl.seval("using JLD, JLD2, Interpolations")
             fast_interp_exec = """
@@ -619,10 +684,7 @@ class ReachabilityDataset(Dataset):
 
         ## Define a fixed spatiotemporal grid to score Jaccard
 
-        xig_1, xig_2 = torch.arange(-0.99, 1.01, 0.02), torch.arange(-0.99, 1.01, 0.02) # 100 x 100
-        # if hasattr(self.dynamics,'state_scale'):
-        #     xig_1 = xig_1 * self.dynamics.state_scale[0] + self.dynamics.state_center[0]
-        #     xig_2 = xig_2 * self.dynamics.state_scale[1] + self.dynamics.state_center[1]            
+        xig_1, xig_2 = torch.arange(-0.99, 1.01, 0.02), torch.arange(-0.99, 1.01, 0.02) # 100 x 100      
         
         grid_L = xig_1.size()[0]
         self.X1g, self.X2g = torch.meshgrid(xig_1, xig_2)
@@ -646,8 +708,13 @@ class ReachabilityDataset(Dataset):
             #     new_coords = torch.cat((times, self.model_states_grid_2d), dim=1) 
             #     self.model_coords_grid_allt_hi = torch.cat((self.model_coords_grid_allt_hi, new_coords), dim=0) 
 
-            self.model_states_grid = self.model_states_grid_2d
             self.n_grid_pts = self.n_grid_pts_2d
+
+            if not self.lambda_var:
+                self.model_states_grid = self.model_states_grid_2d
+            else:
+                self.model_states_grid = torch.cat((self.model_states_grid_2d, self.dynamics.lambda_target * torch.ones_like(self.model_states_grid_2d[..., 0:1])),-1)
+                self.model_coords_grid_allt = torch.cat((self.model_coords_grid_allt, self.dynamics.lambda_target * torch.ones_like(self.model_coords_grid_allt[..., 0:1])),-1)
         
         ## In N dims, define 2D grid on the Main Diagonal (any subsys i is equiv on diag)
         elif self.N > 2:
@@ -659,13 +726,11 @@ class ReachabilityDataset(Dataset):
 
             ## (N-1)d Main Diagonal; x0 shared state and N-1 states repeated
             if not hasattr(self.dynamics, "shared_x0") or self.dynamics.shared_x0:
-
                 score_plane1[:, 0] = score_plane1[:, 0] + self.model_states_grid_2d[:, 0]
                 score_plane2[:, 0] = score_plane2[:, 0] + self.model_states_grid_2d[:, 0]
                 score_plane3[:, 0] = score_plane3[:, 0] + self.model_states_grid_2d[:, 0]
 
                 if not load_lambda_var:
-
                     xixj = (self.model_states_grid_2d[:, 1] * torch.ones(self.dynamics.state_dim-1, self.n_grid_pts_2d)).t()
                     
                     score_plane1[:, 1:] = score_plane1[:, 1:] + xixj
@@ -673,7 +738,6 @@ class ReachabilityDataset(Dataset):
                     score_plane3[:, 1:] = score_plane3[:, 1:] + xixj
 
                 else:
-
                     xixj = (self.model_states_grid_2d[:, 1] * torch.ones(self.dynamics.N-1, self.n_grid_pts_2d)).t()
                     
                     score_plane1[:, 1:] = score_plane1[:, 1:-1] + xixj
@@ -681,31 +745,28 @@ class ReachabilityDataset(Dataset):
                     score_plane3[:, 1:] = score_plane3[:, 1:-1] + xixj
 
                     # Scoring only on specific lambda slice at desired solution
-                    score_plane1[:, -1] = self.dynamics.lambda_base * torch.ones(self.n_grid_pts_2d) 
-                    score_plane2[:, -1] = self.dynamics.lambda_base * torch.ones(self.n_grid_pts_2d)
-                    score_plane3[:, -1] = self.dynamics.lambda_base * torch.ones(self.n_grid_pts_2d)
+                    score_plane1[:, -1] = self.dynamics.lambda_target * torch.ones(self.n_grid_pts_2d) 
+                    score_plane2[:, -1] = self.dynamics.lambda_target * torch.ones(self.n_grid_pts_2d)
+                    score_plane3[:, -1] = self.dynamics.lambda_target * torch.ones(self.n_grid_pts_2d)
             
             ## Nd Main Diagonal; Nh pairs of repeated states
             else:
-
                 xixj = self.model_states_grid_2d.repeat(1, self.dynamics.Nh)
             
                 if not load_lambda_var:
-                    
                     score_plane1 = score_plane1 + xixj
                     score_plane2 = score_plane2 + xixj
                     score_plane3 = score_plane3 + xixj
 
                 else:
-                    
                     score_plane1[:, :-1] = score_plane1[:, :-1] + xixj
                     score_plane2[:, :-1] = score_plane2[:, :-1] + xixj
                     score_plane3[:, :-1] = score_plane3[:, :-1] + xixj
 
                     # lambda = 1 (scoring only NL approx.)
-                    score_plane1[:, -1] = self.dynamics.lambda_base * torch.ones(self.n_grid_pts_2d) 
-                    score_plane2[:, -1] = self.dynamics.lambda_base * torch.ones(self.n_grid_pts_2d)
-                    score_plane3[:, -1] = self.dynamics.lambda_base * torch.ones(self.n_grid_pts_2d)
+                    score_plane1[:, -1] = self.dynamics.lambda_target * torch.ones(self.n_grid_pts_2d) 
+                    score_plane2[:, -1] = self.dynamics.lambda_target * torch.ones(self.n_grid_pts_2d)
+                    score_plane3[:, -1] = self.dynamics.lambda_target * torch.ones(self.n_grid_pts_2d)
 
             self.model_states_grid = torch.cat((score_plane1, score_plane2, score_plane3), dim=0)
             self.n_grid_pts = 3 * self.n_grid_pts_2d
@@ -733,11 +794,15 @@ class ReachabilityDataset(Dataset):
 
         self.values_DP_grid_sub0_ixs = torch.argwhere(self.values_DP_grid <= 0).flatten().cuda()
 
-        if load_lambda_var:
+        if self.lambda_var and self.dynamics.name == "LessLinear":
             self.values_DP_linear_grid = self.V_DP_linear(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
             self.values_DP_grid_inlam1 = self.V_DP_inlam1(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
             self.values_DP_grid_inlam2 = self.V_DP_inlam2(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
         
+        elif self.lambda_var and self.dynamics.name in ["Conveyor", "Canoe"]:
+            self.values_DP_1_grid = self.V_DP_1(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
+            self.values_DP_2_grid = self.V_DP_2(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
+
         # self.values_DP_grid_hi = self.V_DP(self.dynamics.input_to_coord(self.model_coords_grid_allt_hi).t()).cuda()
         # self.values_DP_grid_sub0_ixs_hi = torch.argwhere(self.values_DP_grid_hi <= 0).flatten().cuda()
 
@@ -746,16 +811,11 @@ class ReachabilityDataset(Dataset):
         self.model_states_grid = self.model_states_grid.cuda()
 
         # TODO: isolated loading test, remove this
-        test_times = torch.full((self.n_grid_pts_2d, 1), -2.) if self.dynamics.N>2 else torch.full((self.n_grid_pts_2d, 1), -2.)
+        test_times = torch.full((self.n_grid_pts_2d, 1), 2.) if self.dynamics.N>2 else torch.full((self.n_grid_pts_2d, 1), 2.)
         test_states_grid = score_plane1 if self.dynamics.N>2 else self.model_states_grid_2d
-        self.interp_bc_check(test_times, test_states_grid, grid_L, grid_params, solution_grid)
+        # self.interp_bc_check(test_times, test_states_grid, grid_L, grid_params, solution_grid)
 
-        del self.V_DP_2d
-        del self.V_DP_2d_1
-        del self.V_DP_2d_2
-        gc.collect()
-
-    def interp_bc_check(self, test_times, test_states_grid, grid_L, grid_params, solution_grid):
+    def interp_bc_check(self, test_times, test_states_grid, grid_L, grid_params, solution_grid, save_plot=False):
         
         if not hasattr(self.dynamics, "name") or self.dynamics.name not in ["Conveyor","Canoe"]:
             raise NotImplementedError
@@ -856,12 +916,14 @@ class ReachabilityDataset(Dataset):
             # TODO: then write supervision BRAAT & BRRT loss fn's, & test w/ vanilla
             # TODO: then implement various models, and test w/ DR
 
-        # plt.savefig(f"plots/mulob_tests/{self.dynamics.name}_test_ITP_plot.png")
-        plt.savefig(f"plots/mulob_tests/{self.dynamics.name}_test_bc_plot.png")
+        if save_plot:
+            # plt.savefig(f"plots/mulob_tests/{self.dynamics.name}_test_ITP_plot.png")
+            plt.savefig(f"plots/mulob_tests/{self.dynamics.name}_test_bc_plot_flippedtime.png")
 
         print(f"Mean Error for bc 1: {(plot_values_bc1_t0 - plot_values_V_DP_1).abs().mean():2.0e}")
         print(f"Mean Error for bc 2: {(plot_values_bc2_t0 - plot_values_V_DP_2).abs().mean():2.0e}")
         print(f"Mean Error for bc: {(plot_values_bc_t0 - plot_values_V_DP).abs().mean():2.0e}")
+        plt.close()
         return
     
     def make_DP_bank(self):
@@ -881,7 +943,7 @@ class ReachabilityDataset(Dataset):
                 
                 # Solve Boundary & Hopf Value 
                 coords_io = self.dynamics.input_to_coord(bank[i:i+step, 0:self.dynamics.state_dim+1])
-                states_io, times_io = coords_io[..., 1:], coords_io[..., 0]
+                states_io, times_io = coords_io[..., 1:], coords_io[..., 0:1]
                 bank[i:i+step, self.dynamics.state_dim+1] = self.dynamics.boundary_fn(states_io, times_io)
                 if self.solve_grad:
                     bank[i:i+step, self.dynamics.state_dim+2], bank[i:i+step, self.dynamics.state_dim+3:] = self.V_hopf_grad(self.dynamics.input_to_coord(bank[i:i+step, 0:self.dynamics.state_dim+1]).t())
