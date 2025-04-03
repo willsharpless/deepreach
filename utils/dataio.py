@@ -440,10 +440,12 @@ class ReachabilityDataset(Dataset):
         elif hasattr(self.dynamics, "name") and self.dynamics.name in ["Conveyor","Canoe"]:
             
             # TODO: just for testing, make parsed arg later
+            bd_tag = "bdbc" if self.dynamics.bounded_bc else "ubdbc"
             if self.dynamics.name == "Conveyor":
-                self.gt_key = "bounded/axes/Conveyor2D_BRAAT_bdbc_axes_lin"
+                # self.gt_key = "bounded/axes/Conveyor2D_BRAAT_bdbc_axes_lin"
+                self.gt_key = f"bounded/{self.dynamics.avoid_type}/Conveyor2D_BRAAT_{bd_tag}_{self.dynamics.avoid_type}_lin"
             elif self.dynamics.name == "Canoe":
-                self.gt_key = "bounded/Canoe2D_BRRT_bdbc_tv"
+                self.gt_key = f"bounded/Canoe2D_BRRT_{bd_tag}_tv"
 
             ## Load HJR solutions
             if not make_gt_solutions:
@@ -481,13 +483,14 @@ class ReachabilityDataset(Dataset):
                 raise NotImplementedError
 
             ## Ground Truth interpolated composition of values and gradients
-            def V_N_DP_itp_combo(tXg, V_DP_base, grid, time_grid, compute_grad=False, shared_x0=True, dim_sub=1):
+            def V_N_DP_itp_combo(tXg, V_DP_base, grid, time_grid, compute_grad=False, shared_x0=True, dim_sub=1, flip_sign=False):
                 
                 # V = 0 * tXg[0,:]
                 i = 1 # main diagonal only (any subsys i is equiv on diag)
                 state_key = [0, 1, 2] # time, first two states
 
                 tXg[[0], :] = -tXg[[0], :] # DR convention to use positive times
+                sign_mag = -1. if flip_sign else 1.
 
                 # if shared_x0:
                 #     base = [0, 1]
@@ -496,20 +499,23 @@ class ReachabilityDataset(Dataset):
                 #     base = [0]
                 #     sub_range = list(range(dim_sub*i, dim_sub*(i+1)+1))
                 # state_key = base + sub_range
-
-                ## TODO: N-sum test
+                # could try N-sum test for comp?
                                 
                 if not compute_grad:
                     values_itp = grid.interpolate_timespace_batch(V_DP_base, time_grid, tXg[state_key, :].t().numpy(), return_grad=False)
-                    return torch.from_numpy(values_itp.__array__().copy())
+                    values_itp_tensor = torch.from_numpy(values_itp.__array__().copy())
+                    
+                    return sign_mag * values_itp_tensor
                 
                 ## Interpolate Gradient
                 else:
                     # DV = 0 * tXg[1:,:].t()
                     values_itp, grads_itp = grid.interpolate_timespace_batch(V_DP_base, time_grid, tXg[state_key, :].t().numpy(), return_grad=True) 
+                
+                    values_itp_tensor = torch.from_numpy(values_itp.__array__().copy())
+                    grads_itp_tensor = torch.from_numpy(grads_itp.__array__().copy()) # NOTE: using time grads!
                     
-                    return torch.from_numpy(values_itp.__array__().copy()), torch.from_numpy(grads_itp[:, 1:].__array__().copy())
-                    # return torch.from_numpy(values_itp.__array__().copy()), torch.from_numpy(grads_itp.__array__().copy()) # TODO: ADD TEMPORAL GRADS!
+                    return sign_mag * values_itp_tensor, sign_mag * grads_itp_tensor
                     
             ## Define multiobjective and decomposed interpolation fns
             def V_N_DP_itp(tXg):
@@ -519,7 +525,8 @@ class ReachabilityDataset(Dataset):
                 return V_N_DP_itp_combo(tXg, self.V_DP_2d_1, solution_grid, solution_times, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
 
             def V_N_DP_2_itp(tXg):
-                return V_N_DP_itp_combo(tXg, self.V_DP_2d_2, solution_grid, solution_times, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+                flip_sign = hasattr(self.dynamics, 'avoid_only') and self.dynamics.avoid_only
+                return V_N_DP_itp_combo(tXg, self.V_DP_2d_2, solution_grid, solution_times, compute_grad=False, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, flip_sign=flip_sign)
             
             self.V_DP = V_N_DP_itp
             self.V_DP_1 = V_N_DP_1_itp
@@ -534,7 +541,8 @@ class ReachabilityDataset(Dataset):
                     return V_N_DP_itp_combo(tXg, self.V_DP_2d_1, solution_grid, solution_times, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
 
                 def V_N_DP_2_itp_grad(tXg):
-                    return V_N_DP_itp_combo(tXg, self.V_DP_2d_2, solution_grid, solution_times, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub)
+                    flip_sign = hasattr(self.dynamics, 'avoid_only') and self.dynamics.avoid_only
+                    return V_N_DP_itp_combo(tXg, self.V_DP_2d_2, solution_grid, solution_times, compute_grad=True, shared_x0=self.dynamics.shared_x0, dim_sub=self.dynamics.dim_sub, flip_sign=flip_sign)
 
                 self.V_DP_grad = V_N_DP_itp_grad
                 self.V_DP_1_grad = V_N_DP_1_itp_grad
@@ -719,7 +727,7 @@ class ReachabilityDataset(Dataset):
         ## In N dims, define 2D grid on the Main Diagonal (any subsys i is equiv on diag)
         elif self.N > 2:
             
-            # TODO: three planes is artifact, should just use one
+            # TODO: three planes is artifact, using one would be simpler
             score_plane1 = torch.zeros(self.n_grid_pts_2d, self.dynamics.state_dim)
             score_plane2 = torch.zeros(self.n_grid_pts_2d, self.dynamics.state_dim) + 1/300
             score_plane3 = torch.zeros(self.n_grid_pts_2d, self.dynamics.state_dim) + 2/300
@@ -810,10 +818,11 @@ class ReachabilityDataset(Dataset):
         # self.model_coords_grid_allt_hi = self.model_coords_grid_allt_hi.cuda()
         self.model_states_grid = self.model_states_grid.cuda()
 
-        # TODO: isolated loading test, remove this
-        test_times = torch.full((self.n_grid_pts_2d, 1), 2.) if self.dynamics.N>2 else torch.full((self.n_grid_pts_2d, 1), 2.)
-        test_states_grid = score_plane1 if self.dynamics.N>2 else self.model_states_grid_2d
-        # self.interp_bc_check(test_times, test_states_grid, grid_L, grid_params, solution_grid)
+        # TODO: isolated loading test, only turn on if testing
+        if not self.lambda_var:
+            test_times = torch.full((self.n_grid_pts_2d, 1), 2.) if self.dynamics.N>2 else torch.full((self.n_grid_pts_2d, 1), 2.)
+            test_states_grid = score_plane1 if self.dynamics.N>2 else self.model_states_grid_2d
+            self.interp_bc_check(test_times, test_states_grid, grid_L, grid_params, solution_grid)
 
     def interp_bc_check(self, test_times, test_states_grid, grid_L, grid_params, solution_grid, save_plot=False):
         
@@ -849,6 +858,7 @@ class ReachabilityDataset(Dataset):
         cmap_name = "RdBu_r"
         # vmin, vmax = -0.075, 0.075
         vmin, vmax = -0.5, 0.5
+        # vmin, vmax = -2., 2.
         levels = np.linspace(vmin, vmax)
         n_bins_high = round(256 * vmax/(vmax - vmin))
         scaled_colors = np.vstack((mpl.colormaps[cmap_name](np.linspace(0., 0.4, 256-n_bins_high)), mpl.colormaps[cmap_name](np.linspace(0.6, 1., n_bins_high))))
@@ -882,43 +892,41 @@ class ReachabilityDataset(Dataset):
             axes[0][k].set_ylim(ylims)
             axes[0][k].set_aspect('equal')
 
-            # Plot dynamics bc
-            axes[1][k].set_title(f"{names[k]} BC")
-            axes[1][k].contourf(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
-                            plot_values_bcs_t0[k],
-                            levels=levels,
-                            extend="both",
-                            cmap=RdWhBl_vscaled)
-            axes[1][k].contour(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
-                            plot_values_bcs_t0[k], levels=0, colors="black", linewidth=2, linestyle="dash")
-            axes[1][k].set_xlim(xlims)
-            axes[1][k].set_ylim(ylims)
-            axes[1][k].set_aspect('equal')
-
             # Plot interpolation
-            axes[2][k].set_title(f"{names[k]} itp")
-            axes[2][k].contourf(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
+            axes[1][k].set_title(f"{names[k]} itp")
+            axes[1][k].contourf(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
                             plot_values_itp[k],
                             levels=levels,
                             extend="both",
                             cmap=RdWhBl_vscaled)
-            axes[2][k].contour(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
+            axes[1][k].contour(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
                             plot_values_itp[k], levels=0, colors="black", linewidth=2)
+            axes[1][k].set_xlim(xlims)
+            axes[1][k].set_ylim(ylims)
+            axes[1][k].set_aspect('equal')
+
+            axes[1][k].contour(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
+                            plot_values_bcs_t0[k], levels=0, colors="magenta", linewidth=2, linestyle="dash")
+
+            # Plot dynamics bc
+            axes[2][k].set_title(f"{names[k]} BC")
+            axes[2][k].contourf(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
+                            plot_values_bcs_t2[k],
+                            levels=levels,
+                            extend="both",
+                            cmap=RdWhBl_vscaled)
+            axes[2][k].contour(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
+                            plot_values_bcs_t2[k], levels=0, colors="black", linewidth=2, linestyle="dash")
             axes[2][k].set_xlim(xlims)
             axes[2][k].set_ylim(ylims)
             axes[2][k].set_aspect('equal')
-
-            axes[2][k].contour(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
-                            plot_values_bcs_t0[k], levels=0, colors="magenta", linewidth=2, linestyle="dash")
 
             # TODO: test reach / avoid bc fns here, in N-dimensions (could also check N-dim itp combo works)
             # TODO: then write vanilla BRAAT & BRRT loss fn's, & test w/ vanilla
             # TODO: then write supervision BRAAT & BRRT loss fn's, & test w/ vanilla
             # TODO: then implement various models, and test w/ DR
 
-        if save_plot:
-            # plt.savefig(f"plots/mulob_tests/{self.dynamics.name}_test_ITP_plot.png")
-            plt.savefig(f"plots/mulob_tests/{self.dynamics.name}_test_bc_plot_flippedtime.png")
+        plt.savefig(f"plots/mulob_tests/{self.dynamics.name}_test_bc_plot_t2check.png")
 
         print(f"Mean Error for bc 1: {(plot_values_bc1_t0 - plot_values_V_DP_1).abs().mean():2.0e}")
         print(f"Mean Error for bc 2: {(plot_values_bc2_t0 - plot_values_V_DP_2).abs().mean():2.0e}")
