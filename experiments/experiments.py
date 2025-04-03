@@ -679,9 +679,12 @@ class DeepReachHopf(Experiment):
     def init_special(self, N=2, timing=False):
         self.N = N
         self.timing = timing
-        if N == 2 and not self.dataset.lambda_var:
+        if N == 2:
             if hasattr(self.dataset.dynamics, 'name') and self.dataset.dynamics.name in ["Conveyor","Canoe"]:
-                self.validate = self.validate2Dmulob
+                if not self.dataset.lambda_var:
+                    self.validate = self.validate2D_mulob
+                else:
+                    self.validate = self.validate2Dlambda_mulob
             else:
                 self.validate = self.validate2D
         elif N > 2:
@@ -689,7 +692,7 @@ class DeepReachHopf(Experiment):
             if self.dataset.lambda_var and self.dataset.dynamics.name == "LessLinear":
                 self.validate = self.validateNDlambda
             elif self.dataset.lambda_var and self.dataset.dynamics.name in ["Conveyor","Canoe"]:
-                self.validate = self.validateNDlambdaMulOb
+                self.validate = self.validateNDlambda_mulob
 
         pass        
     
@@ -751,23 +754,12 @@ class DeepReachHopf(Experiment):
             self.model.train()
             self.model.requires_grad_(True)
 
-    def validate2Dmulob(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution):
+    def validate2D_mulob(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution, testing=False):
         was_training = self.model.training
         self.model.eval()
         self.model.requires_grad_(False)
 
-        plot_config = self.dataset.dynamics.plot_config()
-
-        state_test_range = self.dataset.dynamics.state_test_range()
-        x_min, x_max = state_test_range[plot_config['x_axis_idx']]
-        y_min, y_max = state_test_range[plot_config['y_axis_idx']]
-        # z_min, z_max = state_test_range[plot_config['z_axis_idx']]
-
         solve_times = torch.linspace(0, self.dataset.tMax, time_resolution)
-        xs = torch.linspace(x_min, x_max, x_resolution)
-        ys = torch.linspace(y_min, y_max, y_resolution)
-        # zs = torch.linspace(z_min, z_max, z_resolution)
-        xys = torch.cartesian_prod(xs, ys)
         
         fig = plt.figure(figsize=(5*len(solve_times), 5*1))
         for i in range(len(solve_times)):
@@ -781,7 +773,17 @@ class DeepReachHopf(Experiment):
             values_gt = self.dataset.V_DP(self.dataset.dynamics.input_to_coord(coords).cpu().t()).reshape(n_grid_len, n_grid_len)
 
             states_scaled = self.dataset.dynamics.input_to_coord(coords)[:, 1:]
-            values_bc = self.dataset.dynamics.boundary_fn(states_scaled, times).reshape(n_grid_len, n_grid_len).cpu()
+
+            if self.dataset.dynamics.name == "Conveyor":
+                values_bc_1 = self.dataset.dynamics.reach_fn(states_scaled, times).reshape(n_grid_len, n_grid_len).cpu()
+                values_bc_2 = self.dataset.dynamics.avoid_fn(states_scaled, times).reshape(n_grid_len, n_grid_len).cpu()
+                values_bc_1_color = "blue"
+                values_bc_2_color = "red"
+            elif self.dataset.dynamics.name == "Canoe":
+                values_bc_1 = self.dataset.dynamics.reach_fn_1(states_scaled, times).reshape(n_grid_len, n_grid_len).cpu()
+                values_bc_2 = self.dataset.dynamics.reach_fn_2(states_scaled, times).reshape(n_grid_len, n_grid_len).cpu()
+                values_bc_1_color = "cyan"
+                values_bc_2_color = "blue"
 
             with torch.no_grad():
                 model_results = self.model({'coords': coords.cuda()})
@@ -792,42 +794,170 @@ class DeepReachHopf(Experiment):
             
             cmap_name = "RdBu_r"
             # vmin, vmax = -0.075, 0.075
-            vmin, vmax = -0.5, 0.5
+            # vmin, vmax = -0.5, 0.5
+            vmin, vmax = -self.dataset.dynamics.goalR_2d, 0.5
             levels = np.linspace(vmin, vmax)
             n_bins_high = round(256 * vmax/(vmax - vmin))
-            offset=2
+            offset=0
             scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0., 0.4, 256-n_bins_high+offset)), matplotlib.colormaps[cmap_name](np.linspace(0.6, 1., n_bins_high-offset))))
             RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
             
-            # ax.contourf(self.dataset.X1g * self.dataset.dynamics.state_var[0] + self.dataset.dynamics.state_mean[0], 
-            #             self.dataset.X2g * self.dataset.dynamics.state_var[1] + self.dataset.dynamics.state_mean[1],
-            #             values_gt,
-            #             levels=levels, extend="both", cmap=RdWhBl_vscaled)
-            
+            plot_values = values_learned if not testing else values_gt
+
             ax.contourf(self.dataset.X1g * self.dataset.dynamics.state_var[0] + self.dataset.dynamics.state_mean[0], 
-                        self.dataset.X2g * self.dataset.dynamics.state_var[1] + self.dataset.dynamics.state_mean[1],
-                        values_learned,
-                        levels=levels, extend="both", cmap=RdWhBl_vscaled)
+                    self.dataset.X2g * self.dataset.dynamics.state_var[1] + self.dataset.dynamics.state_mean[1],
+                    plot_values,
+                    levels=levels, extend="both", cmap=RdWhBl_vscaled)
             
-            ax.contour(self.dataset.X1g * self.dataset.dynamics.state_var[0] + self.dataset.dynamics.state_mean[0], 
-                        self.dataset.X2g * self.dataset.dynamics.state_var[1] + self.dataset.dynamics.state_mean[1],
-                        values_gt, 
-                        levels=0, colors="black", linewidths=3, alpha=0.7)
+            if values_gt.min() < 0. < values_gt.max():
+                ax.contour(self.dataset.X1g * self.dataset.dynamics.state_var[0] + self.dataset.dynamics.state_mean[0], 
+                            self.dataset.X2g * self.dataset.dynamics.state_var[1] + self.dataset.dynamics.state_mean[1],
+                            values_gt, 
+                            levels=0, colors="black", linewidths=3, alpha=0.7)
             
-            ax.contour(self.dataset.X1g * self.dataset.dynamics.state_var[0] + self.dataset.dynamics.state_mean[0], 
-                        self.dataset.X2g * self.dataset.dynamics.state_var[1] + self.dataset.dynamics.state_mean[1],
-                        values_bc, 
-                        levels=0, colors="gold", linewidths=3, alpha=0.7)
+            if values_bc_1.min() < 0. < values_bc_1.max():
+                ax.contour(self.dataset.X1g * self.dataset.dynamics.state_var[0] + self.dataset.dynamics.state_mean[0], 
+                            self.dataset.X2g * self.dataset.dynamics.state_var[1] + self.dataset.dynamics.state_mean[1],
+                            values_bc_1, 
+                            levels=0, colors=values_bc_1_color, linewidths=4, alpha=0.7)
+                
+            if values_bc_2.min() < 0. < values_bc_2.max():
+                ax.contour(self.dataset.X1g * self.dataset.dynamics.state_var[0] + self.dataset.dynamics.state_mean[0], 
+                            self.dataset.X2g * self.dataset.dynamics.state_var[1] + self.dataset.dynamics.state_mean[1],
+                            values_bc_2, 
+                            levels=0, colors=values_bc_2_color, linewidths=4, alpha=0.7)
             
+            means = self.dataset.dynamics.state_mean
+            vars = self.dataset.dynamics.state_var
+            ax.set_xlim((means[0] - vars[0], means[0] + vars[0]))    
+            ax.set_ylim((means[1] - vars[1], means[1] + vars[1]))
             ax.set_aspect('equal')
 
-        # plt.savefig(f"plots/mulob_tests/{self.dataset.dynamics.name}_test_training_plot_0.png")
-        fig.savefig(save_path)
-        if self.use_wandb:
-            wandb.log({
-                'step': epoch,
-                'val_plot': wandb.Image(fig),
-            })
+        if testing:
+            plt.savefig(f"plots/mulob_tests/{self.dataset.dynamics.name}_test_training_plot_gt.png")
+        
+        else:
+            fig.savefig(save_path)
+            if self.use_wandb:
+                wandb.log({
+                    'step': epoch,
+                    'val_plot': wandb.Image(fig),
+                })
+        plt.close()
+
+        # if self.dataset.record_gt_metrics:
+        #     self.plot_set_metrics_eachtime(epoch, times)
+        #     if self.use_wandb:
+        #         wandb.log({'Time vs. Epoch vs. Set Accuracy compared to DP': wandb.Image(self.t_ep_acc_fig),})
+        #     plt.close()
+
+        if was_training:
+            self.model.train()
+            self.model.requires_grad_(True)
+
+    def validate2Dlambda_mulob(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution, testing=True):
+        was_training = self.model.training
+        self.model.eval()
+        self.model.requires_grad_(False)
+
+        solve_times = torch.linspace(0, self.dataset.tMax, time_resolution)
+        if self.dataset.dynamics.name == "Conveyor":
+            if self.dataset.dynamics.avoid_type == "ball":
+                lambda_vals = torch.tensor([1., 0.1, 0., -0.2, -1.])
+            else:
+                lambda_vals = torch.tensor([1., 0.05, 0., -0.2, -1.])
+        else:
+            lambda_vals = torch.tensor([1., 0.2, 0., -0.2, -1.])
+        
+        cmap_name = "RdBu_r"
+        vmax = 0.5
+        vmin = -0.5 if self.dataset.dynamics.name == "Conveyor" else -self.dataset.dynamics.goalR_2d
+        levels = np.linspace(vmin, vmax)
+        n_bins_high = round(256 * vmax/(vmax - vmin))
+        offset = 0
+        scaled_colors = np.vstack((matplotlib.colormaps[cmap_name](np.linspace(0., 0.4, 256-n_bins_high+offset)), matplotlib.colormaps[cmap_name](np.linspace(0.6, 1., n_bins_high-offset))))
+        RdWhBl_vscaled = matplotlib.colors.LinearSegmentedColormap.from_list('RdWhBl_vscaled', scaled_colors)
+        
+        fig = plt.figure(figsize=(5*len(solve_times), 5*len(lambda_vals)))
+        for i in range(len(solve_times)):
+            for j in range(len(lambda_vals)):
+
+                states_input = self.dataset.model_states_grid
+                times = torch.full((self.dataset.n_grid_pts_2d, 1), solve_times[i]).cuda()
+                input = torch.cat((times, states_input), dim=1) 
+                
+                coords = self.dataset.dynamics.input_to_coord(input)
+                coords[..., -1] = lambda_vals[j] + 0*coords[..., -1] # certain lambda
+                states = coords[:, 1:]
+                n_grid_len = self.dataset.X1g.size()[0]
+                
+                if lambda_vals[j] == 1.:
+                    values_gt = self.dataset.V_DP_1(coords[..., :-1].cpu().t()).reshape(n_grid_len, n_grid_len)
+                elif lambda_vals[j] == -1.:
+                    values_gt = self.dataset.V_DP_2(coords[..., :-1].cpu().t()).reshape(n_grid_len, n_grid_len)
+                elif lambda_vals[j] == 0.:
+                    values_gt = self.dataset.V_DP(coords[..., :-1].cpu().t()).reshape(n_grid_len, n_grid_len)
+
+                if self.dataset.dynamics.name == "Conveyor":
+                    values_bc_1 = self.dataset.dynamics.reach_fn(states, times).reshape(n_grid_len, n_grid_len).cpu()
+                    values_bc_2 = self.dataset.dynamics.avoid_fn(states, times).reshape(n_grid_len, n_grid_len).cpu()
+                    values_bc_1_color = "blue"
+                    values_bc_2_color = "red"
+                    xlims, ylims = (-2.5, 0.5), (-1.5, 1.5)
+
+                elif self.dataset.dynamics.name == "Canoe":
+                    values_bc_1 = self.dataset.dynamics.reach_fn_1(states, times).reshape(n_grid_len, n_grid_len).cpu()
+                    values_bc_2 = self.dataset.dynamics.reach_fn_2(states, times).reshape(n_grid_len, n_grid_len).cpu()
+                    values_bc_1_color = "cyan"
+                    values_bc_2_color = "blue"
+                    xlims, ylims = (-1.25, 1.25), (-0.5, 2.)
+
+                with torch.no_grad():
+                    model_results = self.model({'coords': input.cuda()})
+                    values_learned = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach()).reshape(n_grid_len, n_grid_len).cpu()
+                
+                ax = fig.add_subplot(len(lambda_vals), len(solve_times), j*len(lambda_vals) + i + 1)
+                ax.set_title(f"t = {solve_times[i]:0.1f}, lambda = {lambda_vals[j]:1.1f}")
+                
+                plot_values = values_learned if not testing else values_gt
+
+                ax.contourf(self.dataset.X1g * self.dataset.dynamics.state_var[0] + self.dataset.dynamics.state_mean[0], 
+                        self.dataset.X2g * self.dataset.dynamics.state_var[1] + self.dataset.dynamics.state_mean[1],
+                        plot_values,
+                        levels=levels, extend="both", cmap=RdWhBl_vscaled)
+                
+                if values_gt.min() < 0. < values_gt.max() and (abs(lambda_vals[j]) in [0., 1.]):
+                    ax.contour(self.dataset.X1g * self.dataset.dynamics.state_var[0] + self.dataset.dynamics.state_mean[0], 
+                                self.dataset.X2g * self.dataset.dynamics.state_var[1] + self.dataset.dynamics.state_mean[1],
+                                values_gt, 
+                                levels=0, colors="black", linewidths=3, alpha=0.7)
+                
+                if values_bc_1.min() < 0. < values_bc_1.max():
+                    ax.contour(self.dataset.X1g * self.dataset.dynamics.state_var[0] + self.dataset.dynamics.state_mean[0], 
+                                self.dataset.X2g * self.dataset.dynamics.state_var[1] + self.dataset.dynamics.state_mean[1],
+                                values_bc_1, 
+                                levels=0, colors=values_bc_1_color, linewidths=4, alpha=0.7)
+                    
+                if values_bc_2.min() < 0. < values_bc_2.max():
+                    ax.contour(self.dataset.X1g * self.dataset.dynamics.state_var[0] + self.dataset.dynamics.state_mean[0], 
+                                self.dataset.X2g * self.dataset.dynamics.state_var[1] + self.dataset.dynamics.state_mean[1],
+                                values_bc_2, 
+                                levels=0, colors=values_bc_2_color, linewidths=4, alpha=0.7)
+                
+                ax.set_xlim(xlims)    
+                ax.set_ylim(ylims)
+                ax.set_aspect('equal')
+
+        if testing:
+            plt.savefig(f"plots/mulob_tests/{self.dataset.dynamics.name}_{self.dataset.dynamics.avoid_type}_lambda_test_training_plot_gt.png")
+        
+        else:
+            fig.savefig(save_path)
+            if self.use_wandb:
+                wandb.log({
+                    'step': epoch,
+                    'val_plot': wandb.Image(fig),
+                })
         plt.close()
 
         # if self.dataset.record_gt_metrics:
