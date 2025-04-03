@@ -175,9 +175,13 @@ if __name__ == '__main__':
         for param in dynamics_params.keys():
             # if param == 'N': continue
             if dynamics_params[param].annotation is bool:
-                p.add_argument('--' + param, type=dynamics_params[param].annotation, default=False, help='special dynamics_class argument')
+                default_value = dynamics_params[param].default if dynamics_params[param].default is not inspect.Parameter.empty else False
+                p.add_argument('--' + param, type=dynamics_params[param].annotation, default=default_value, help='special dynamics_class argument')
             else:
-                p.add_argument('--' + param, type=dynamics_params[param].annotation, required=True, help='special dynamics_class argument')
+                if dynamics_params[param].default is not inspect.Parameter.empty:
+                    p.add_argument('--' + param, type=dynamics_params[param].annotation, default=dynamics_params[param].default, required=False, help='special dynamics_class argument')
+                else:
+                    p.add_argument('--' + param, type=dynamics_params[param].annotation, required=True, help='special dynamics_class argument')
 
     if (mode == 'all') or (mode == 'test'):
         p.add_argument('--dt', type=float, default=0.0025, help='The dt used in testing simulations')

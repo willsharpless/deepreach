@@ -764,7 +764,7 @@ class LessLinearNDlambda(Dynamics):
         }
 
 class ConveyorND(Dynamics):
-    def __init__(self, N:int, bounded_bc:bool=True, reach_only:bool=False, avoid_only:bool=False):
+    def __init__(self, N:int, bounded_bc:bool=True, reach_only:bool=False, avoid_only:bool=False, avoid_type:str="ball"):
     # def __init__(self, N:int):
         self.name = "Conveyor"
         self.bounded_bc, self.bc_alpha = bounded_bc, 0.5
@@ -781,6 +781,14 @@ class ConveyorND(Dynamics):
         else:
             loss_type, set_mode = 'mulob_hjivi', 'reach'
             self.reach_only, self.avoid_only = False, False
+
+        self.avoid_type = avoid_type
+        if avoid_type == "axes":
+            self.avoid_fn = self.avoid_fn_axes
+        elif avoid_type == "ball":
+            self.avoid_fn = self.avoid_fn_ball
+        else:
+            raise NotImplementedError("Avoid type must be axes or ball")
 
         self.N = N # num dims, = num sub sys + 1
         self.u_max, self.d_max = u_max, d_max
@@ -801,7 +809,7 @@ class ConveyorND(Dynamics):
         self.goalR_2d = goalR
         self.goalR = self.goalR_2d # artifact
 
-        self.state_scale = 1.5
+        self.state_scale = 2.0 # actual is 1.5
         self.state_center_2d = [-1., 0.]
 
         self.u_max, self.d_max = u_max, d_max
@@ -857,7 +865,7 @@ class ConveyorND(Dynamics):
 
         return self.bc_alpha * values / (self.N-1)
 
-    def avoid_fn(self, state, time):
+    def avoid_fn_axes(self, state, time): # AXES
 
         time = -time # DR convention
 
@@ -881,6 +889,25 @@ class ConveyorND(Dynamics):
                 values += torch.tanh(values_i_axes)
             else:
                 values += values_i_axes
+
+        return self.bc_alpha * values / (self.N-1)
+
+    def avoid_fn_ball(self, state, time): # BALL
+
+        time = -time # DR convention
+
+        c = torch.cat((-1. + 0*time, 0*time), dim=-1)
+
+        values = 0. * state[..., 0]
+        for i in range(self.N-1):
+
+            tf_state = state[..., [0, 1+i]]
+            values_i = torch.norm(tf_state - c, dim=-1) - self.goalR
+
+            if self.bounded_bc:
+                values += torch.tanh(values_i)
+            else:
+                values += values_i
 
         return self.bc_alpha * values / (self.N-1)
 
@@ -913,22 +940,16 @@ class ConveyorND(Dynamics):
         elif self.set_mode == 'avoid':
             return pfx + pBumax - pCdmax
 
-    ## FIXME?
     def optimal_control(self, state, dvds):
         if self.set_mode == 'reach':
-            # return torch.cat((-self.u_max * torch.sign(dvds[..., 0]), -self.u_max * torch.sign(dvds[..., 1])), dim=-1)
             return -self.u_max * torch.sign(dvds[..., 1:])
         elif self.set_mode == 'avoid':
-            # return torch.cat((self.u_max * torch.sign(dvds[..., 0]), self.u_max * torch.sign(dvds[..., 1])), dim=-1)
             return self.u_max * torch.sign(dvds[..., 1:])
 
-    ## FIXME?
     def optimal_disturbance(self, state, dvds):
         if self.set_mode == 'reach':
-            # return torch.cat((self.d_max * torch.sign(dvds[..., 0]), self.d_max * torch.sign(dvds[..., 1])), dim=-1)
             return self.d_max * torch.sign(dvds[..., 1:])
         elif self.set_mode == 'avoid':
-            # return torch.cat((-self.d_max * torch.sign(dvds[..., 0]), -self.d_max * torch.sign(dvds[..., 1])), dim=-1)
             return -self.d_max * torch.sign(dvds[..., 1:])
     
     def plot_config(self):
@@ -941,7 +962,7 @@ class ConveyorND(Dynamics):
         }
 
 class ConveyorNDlambda(Dynamics):
-    def __init__(self, N:int, bounded_bc:bool=True, reach_only:bool=False, avoid_only:bool=False):
+    def __init__(self, N:int, bounded_bc:bool=True, reach_only:bool=False, avoid_only:bool=False, avoid_type:str="ball"):
     # def __init__(self, N:int):
         self.name = "Conveyor"
         self.bounded_bc, self.bc_alpha = bounded_bc, 0.5
@@ -957,8 +978,16 @@ class ConveyorNDlambda(Dynamics):
             loss_type, set_mode = 'brt_hjivi', 'avoid'
             self.reach_only, self.avoid_only = False, True
         else:
-            loss_type, set_mode = 'brat_hjivi', 'reach'
+            loss_type, set_mode = 'mulob_hjivi', 'reach'
             self.reach_only, self.avoid_only = False, False
+
+        self.avoid_type = avoid_type
+        if avoid_type == "axes":
+            self.avoid_fn = self.avoid_fn_axes
+        elif avoid_type == "ball":
+            self.avoid_fn = self.avoid_fn_ball
+        else:
+            raise NotImplementedError("Avoid type must be axes or ball")
 
         self.N = N # num dims, = num sub sys + 1 (w/o lambda)
         self.u_max, self.d_max = u_max, d_max
@@ -979,13 +1008,13 @@ class ConveyorNDlambda(Dynamics):
         self.goalR_2d = goalR
         self.goalR = self.goalR_2d # artifact
 
-        self.state_scale = 1.5
+        self.state_scale = 2.0 # 1.5
         self.state_center_2d = [-1, 0.]
 
         self.bounded_bc = True
         self.bc_alpha = 0.5
-        self.lambda_center = 0. if self.bounded_bc else -1.        
-        self.lambda_range = 2. if self.bounded_bc else 4.        
+        self.lambda_center = 0.
+        self.lambda_range = 3. if self.bounded_bc else 4.        
 
         self.u_max, self.d_max = u_max, d_max
         super().__init__(
@@ -1044,7 +1073,7 @@ class ConveyorNDlambda(Dynamics):
 
         return (self.bc_alpha * values / (self.N-1)) - F.relu(-state[..., -1]) # NOTE now bc_val - F.relu(-lam) s.t. lam >> 0 -> bc = reach_fn
     
-    def avoid_fn(self, state, time):
+    def avoid_fn_axes(self, state, time): # AXES
 
         time = -time # DR convention
 
@@ -1071,6 +1100,25 @@ class ConveyorNDlambda(Dynamics):
 
         # return self.bc_alpha * values / (self.N-1) + torch.maximum(state[..., -1], 0.) # NOTE now lambda correction term, sign flipped for DR
         return (self.bc_alpha * values / (self.N-1)) + F.relu(state[..., -1]) # NOTE now bc_val - F.relu(lam) s.t. lam << 0 -> bc = avoid_fn (sign flipped for DR)
+
+    def avoid_fn_ball(self, state, time): # BALL
+
+        time = -time # DR convention
+
+        c = torch.cat((-1. + 0*time, 0*time), dim=-1)
+
+        values = 0. * state[..., 0]
+        for i in range(self.N-1):
+
+            tf_state = state[..., [0, 1+i]]
+            values_i = torch.norm(tf_state - c, dim=-1) - self.goalR
+
+            if self.bounded_bc:
+                values += torch.tanh(values_i)
+            else:
+                values += values_i
+
+        return self.bc_alpha * values / (self.N-1) + F.relu(state[..., -1]) # NOTE now bc_val - F.relu(lam) s.t. lam << 0 -> bc = avoid_fn (sign flipped for DR)
 
     def boundary_fn(self, state, time):
         if self.reach_only:
@@ -1101,21 +1149,16 @@ class ConveyorNDlambda(Dynamics):
         elif self.set_mode == 'avoid':
             return pfx + pBumax - pCdmax
 
-    # NOTE untested
     def optimal_control(self, state, dvds):
         if self.set_mode == 'reach':
-            # return torch.cat((-self.u_max * torch.sign(dvds[..., 0]), -self.u_max * torch.sign(dvds[..., 1])), dim=-1)
             return -self.u_max * torch.sign(dvds[..., 1:-1])
         elif self.set_mode == 'avoid':
-            # return torch.cat((self.u_max * torch.sign(dvds[..., 0]), self.u_max * torch.sign(dvds[..., 1])), dim=-1)
             return self.u_max * torch.sign(dvds[..., 1:-1])
 
     def optimal_disturbance(self, state, dvds):
         if self.set_mode == 'reach':
-            # return torch.cat((self.d_max * torch.sign(dvds[..., 0]), self.d_max * torch.sign(dvds[..., 1])), dim=-1)
             return self.d_max * torch.sign(dvds[..., 1:-1])
         elif self.set_mode == 'avoid':
-            # return torch.cat((-self.d_max * torch.sign(dvds[..., 0]), -self.d_max * torch.sign(dvds[..., 1])), dim=-1)
             return -self.d_max * torch.sign(dvds[..., 1:-1])
     
     def plot_config(self):
@@ -1158,9 +1201,9 @@ class CanoeND(Dynamics):
         self.dim_sub = 2 # dim of ea. subsystem
         
         self.B = torch.eye(self.N)
-        self.Bumax = u_max * torch.matmul(self.B, torch.ones(self.N)).unsqueeze(0).unsqueeze(0).cuda()
         self.C = torch.eye(self.N)
-        self.Cdmax = d_max * torch.matmul(self.C, torch.ones(self.N)).unsqueeze(0).unsqueeze(0).cuda()
+
+        self.game_mag = -(self.u_max - self.d_max) if set_mode == 'reach' else (self.u_max - self.d_max)
         
         self.alpha = alpha
         self.alpha_orig = alpha
@@ -1171,7 +1214,7 @@ class CanoeND(Dynamics):
         self.current_h = 0.25
         self.current_v = 0.25
 
-        self.state_scale = 1.25
+        self.state_scale = 2.0 # 1.25
         self.state_center_2d = [0., 0.75]
 
         self.u_max, self.d_max = u_max, d_max
@@ -1202,14 +1245,12 @@ class CanoeND(Dynamics):
     # \dot xi_2 = current_v + ui_2 + di_2
     def dsdt(self, state, control, disturbance):
 
-        dsdt = torch.zeros_like(state)
-
-        x_1_ix = torch.ones_like(state) * torch.tile(torch.tensor([0., 1.], device=state.device), (self.Nh,))
-        x_2_ix = torch.ones_like(state) * torch.tile(torch.tensor([1., 0.], device=state.device), (self.Nh,))
+        x_1_ix = torch.ones_like(state) * torch.tile(torch.tensor([1., 0.], device=state.device), (self.Nh,))
+        x_2_ix = torch.ones_like(state) * torch.tile(torch.tensor([0., 1.], device=state.device), (self.Nh,))
 
         drift = -(self.current_h + self.alpha * torch.abs(state).pow(3)) * x_1_ix * (state < torch.zeros_like(state)) + self.current_v * x_2_ix
         
-        dsdt[..., :] = drift + torch.matmul(self.B, control[..., :]) + torch.matmul(self.C, disturbance[..., :])
+        dsdt = drift + torch.matmul(self.B, control) + torch.matmul(self.C, disturbance)
         
         return dsdt
 
@@ -1274,35 +1315,30 @@ class CanoeND(Dynamics):
     
     def hamiltonian(self, state, dvds):
 
-        x_1_ix = torch.ones_like(state) * torch.tile(torch.tensor([0., 1.], device=state.device), (self.Nh,))
-        x_2_ix = torch.ones_like(state) * torch.tile(torch.tensor([1., 0.], device=state.device), (self.Nh,))
+        x_1_ix = torch.ones_like(state) * torch.tile(torch.tensor([1., 0.], device=state.device), (self.Nh,))
+        x_2_ix = torch.ones_like(state) * torch.tile(torch.tensor([0., 1.], device=state.device), (self.Nh,))
 
         drift = -(self.current_h + self.alpha * torch.abs(state).pow(3)) * x_1_ix * (state < torch.zeros_like(state)) + self.current_v * x_2_ix
-        
         pfx = (dvds * drift).sum(2)
-        pBumax = (torch.abs(dvds) * self.Bumax).sum(2)
-        pCdmax = (torch.abs(dvds) * self.Cdmax).sum(2)
 
-        if self.set_mode == 'reach':
-            return pfx - pBumax + pCdmax
-        elif self.set_mode == 'avoid':
-            return pfx + pBumax - pCdmax
+        ud_opt = self.game_mag * F.normalize(dvds, dim=-1, p=2)
+        pud = (dvds * ud_opt).sum(2)
+        
+        return pfx + pud
 
     def optimal_control(self, state, dvds):
+        dvds_normal = F.normalize(dvds, dim=-1, p=2)
         if self.set_mode == 'reach':
-            # return torch.cat((-self.u_max * torch.sign(dvds[..., 0]), -self.u_max * torch.sign(dvds[..., 1])), dim=-1)
-            return -self.u_max * torch.sign(dvds)
+            return -self.u_max * dvds_normal
         elif self.set_mode == 'avoid':
-            # return torch.cat((self.u_max * torch.sign(dvds[..., 0]), self.u_max * torch.sign(dvds[..., 1])), dim=-1)
-            return self.u_max * torch.sign(dvds)
+            return self.u_max * dvds_normal
 
     def optimal_disturbance(self, state, dvds):
+        dvds_normal = F.normalize(dvds, dim=-1, p=2)
         if self.set_mode == 'reach':
-            # return torch.cat((self.d_max * torch.sign(dvds[..., 0]), self.d_max * torch.sign(dvds[..., 1])), dim=-1)
-            return self.d_max * torch.sign(dvds)
+            return self.d_max * dvds_normal
         elif self.set_mode == 'avoid':
-            # return torch.cat((-self.d_max * torch.sign(dvds[..., 0]), -self.d_max * torch.sign(dvds[..., 1])), dim=-1)
-            return -self.d_max * torch.sign(dvds)
+            return -self.d_max * dvds_normal
     
     def plot_config(self):
         return {
@@ -1343,10 +1379,7 @@ class CanoeNDlambda(Dynamics):
         self.shared_x0 = False
         self.dim_sub = 2 # dim of ea. subsystem
         
-        self.B = torch.eye(self.N)
-        self.Bumax = u_max * torch.matmul(self.B, torch.ones(self.N)).unsqueeze(0).unsqueeze(0).cuda()
-        self.C = torch.eye(self.N)
-        self.Cdmax = d_max * torch.matmul(self.C, torch.ones(self.N)).unsqueeze(0).unsqueeze(0).cuda()
+        self.game_mag = -(self.u_max - self.d_max) if set_mode == 'reach' else (self.u_max - self.d_max)
         
         self.alpha = alpha
         self.alpha_orig = alpha
@@ -1357,13 +1390,13 @@ class CanoeNDlambda(Dynamics):
         self.current_h = 0.25
         self.current_v = 0.25
 
-        self.state_scale = 1.25
+        self.state_scale = 2.0 # 1.25
         self.state_center_2d = torch.tensor([0., 0.75])
         
         self.bounded_bc = True
         self.bc_alpha = 0.5
-        self.lambda_center = 0. if self.bounded_bc else -1.        
-        self.lambda_range = 2. if self.bounded_bc else 4.        
+        self.lambda_center = 0.        
+        self.lambda_range = 3. if self.bounded_bc else 5.        
 
         self.u_max, self.d_max = u_max, d_max
         super().__init__(
@@ -1395,8 +1428,8 @@ class CanoeNDlambda(Dynamics):
 
         dsdt = torch.zeros_like(state)
 
-        x_1_ix = torch.ones_like(state) * torch.tile(torch.tensor([0., 1.], device=state.device), (self.Nh,))
-        x_2_ix = torch.ones_like(state) * torch.tile(torch.tensor([1., 0.], device=state.device), (self.Nh,))
+        x_1_ix = torch.ones_like(state) * torch.tile(torch.tensor([1., 0.], device=state.device), (self.Nh,))
+        x_2_ix = torch.ones_like(state) * torch.tile(torch.tensor([0., 1.], device=state.device), (self.Nh,))
 
         drift = -(self.current_h + self.alpha * torch.abs(state[..., :-1]).pow(3)) * x_1_ix * (state[..., :-1] < torch.zeros_like(state[..., :-1])) + self.current_v * x_2_ix
         
@@ -1464,35 +1497,29 @@ class CanoeNDlambda(Dynamics):
     
     def hamiltonian(self, state, dvds):
 
-        x_1_ix = torch.ones_like(state[..., :-1]) * torch.tile(torch.tensor([0., 1.], device=state.device), (self.Nh,))
-        x_2_ix = torch.ones_like(state[..., :-1]) * torch.tile(torch.tensor([1., 0.], device=state.device), (self.Nh,))
+        x_1_ix = torch.ones_like(state[..., :-1]) * torch.tile(torch.tensor([1., 0.], device=state.device), (self.Nh,))
+        x_2_ix = torch.ones_like(state[..., :-1]) * torch.tile(torch.tensor([0., 1.], device=state.device), (self.Nh,))
 
         drift = -(self.current_h + self.alpha * torch.abs(state[..., :-1]).pow(3)) * x_1_ix * (state[..., :-1] < torch.zeros_like(state[..., :-1])) + self.current_v * x_2_ix
-        
         pfx = (dvds[..., :-1] * drift).sum(2)
-        pBumax = (torch.abs(dvds[..., :-1]) * self.Bumax).sum(2)
-        pCdmax = (torch.abs(dvds[..., :-1]) * self.Cdmax).sum(2)
 
-        if self.set_mode == 'reach':
-            return pfx - pBumax + pCdmax
-        elif self.set_mode == 'avoid':
-            return pfx + pBumax - pCdmax
+        pud = (self.game_mag * F.normalize(dvds[..., :-1], dim=-1, p=2)).sum(2)
+        
+        return pfx + pud
 
     def optimal_control(self, state, dvds):
+        dvds_normal = F.normalize(dvds[..., :-1], dim=-1, p=2)
         if self.set_mode == 'reach':
-            # return torch.cat((-self.u_max * torch.sign(dvds[..., 0]), -self.u_max * torch.sign(dvds[..., 1])), dim=-1)
-            return -self.u_max * torch.sign(dvds[..., :-1])
+            return -self.u_max * dvds_normal
         elif self.set_mode == 'avoid':
-            # return torch.cat((self.u_max * torch.sign(dvds[..., 0]), self.u_max * torch.sign(dvds[..., 1])), dim=-1)
-            return self.u_max * torch.sign(dvds[..., :-1])
+            return self.u_max * dvds_normal
 
     def optimal_disturbance(self, state, dvds):
+        dvds_normal = F.normalize(dvds[..., :-1], dim=-1, p=2)
         if self.set_mode == 'reach':
-            # return torch.cat((self.d_max * torch.sign(dvds[..., 0]), self.d_max * torch.sign(dvds[..., 1])), dim=-1)
-            return self.d_max * torch.sign(dvds[..., :-1])
+            return self.d_max * dvds_normal
         elif self.set_mode == 'avoid':
-            # return torch.cat((-self.d_max * torch.sign(dvds[..., 0]), -self.d_max * torch.sign(dvds[..., 1])), dim=-1)
-            return -self.d_max * torch.sign(dvds[..., :-1])
+            return -self.d_max * dvds_normal
     
     def plot_config(self):
         return {
