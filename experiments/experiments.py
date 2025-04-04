@@ -623,8 +623,8 @@ class Experiment(ABC):
                     np.savetxt(os.path.join(checkpoints_dir, 'train_losses_epoch_%04d.txt' % (epoch+1)),
                         np.array(train_losses))
                     self.validate(
-                        epoch=epoch+1, save_path=os.path.join(checkpoints_dir, 'BRS_validation_plot_epoch_%04d.png' % (epoch+1)),
-                        # epoch=epoch+1, save_path=os.path.join(checkpoints_dir, 'BRS_validation_plot.png'), # overwriting to save data
+                        # epoch=epoch+1, save_path=os.path.join(checkpoints_dir, 'BRS_validation_plot_epoch_%04d.png' % (epoch+1)),
+                        epoch=epoch+1, save_path=os.path.join(checkpoints_dir, 'BRS_validation_plot.png'), # overwriting to save data
                         x_resolution = val_x_resolution, y_resolution = val_y_resolution, z_resolution=val_z_resolution, time_resolution=val_time_resolution)
                 if self.timing: print("Checkpointing took:", time.time() - start_time_2)
 
@@ -754,7 +754,7 @@ class DeepReachHopf(Experiment):
             self.model.train()
             self.model.requires_grad_(True)
 
-    def validate2D_mulob(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution, testing=False):
+    def validate2D_mulob(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution, testing=True):
         was_training = self.model.training
         self.model.eval()
         self.model.requires_grad_(False)
@@ -779,11 +779,13 @@ class DeepReachHopf(Experiment):
                 values_bc_2 = self.dataset.dynamics.avoid_fn(states_scaled, times).reshape(n_grid_len, n_grid_len).cpu()
                 values_bc_1_color = "blue"
                 values_bc_2_color = "red"
+                xlims, ylims = (-2.5, 0.5), (-1.5, 1.5)
             elif self.dataset.dynamics.name == "Canoe":
                 values_bc_1 = self.dataset.dynamics.reach_fn_1(states_scaled, times).reshape(n_grid_len, n_grid_len).cpu()
                 values_bc_2 = self.dataset.dynamics.reach_fn_2(states_scaled, times).reshape(n_grid_len, n_grid_len).cpu()
                 values_bc_1_color = "cyan"
                 values_bc_2_color = "blue"
+                xlims, ylims = (-1.25, 1.25), (-0.5, 2.)
 
             with torch.no_grad():
                 model_results = self.model({'coords': coords.cuda()})
@@ -795,7 +797,8 @@ class DeepReachHopf(Experiment):
             cmap_name = "RdBu_r"
             # vmin, vmax = -0.075, 0.075
             # vmin, vmax = -0.5, 0.5
-            vmin, vmax = -self.dataset.dynamics.goalR_2d, 0.5
+            vmax = 0.5
+            vmin = -0.5 if self.dataset.dynamics.name == "Conveyor" else -self.dataset.dynamics.goalR_2d
             levels = np.linspace(vmin, vmax)
             n_bins_high = round(256 * vmax/(vmax - vmin))
             offset=0
@@ -827,10 +830,8 @@ class DeepReachHopf(Experiment):
                             values_bc_2, 
                             levels=0, colors=values_bc_2_color, linewidths=4, alpha=0.7)
             
-            means = self.dataset.dynamics.state_mean
-            vars = self.dataset.dynamics.state_var
-            ax.set_xlim((means[0] - vars[0], means[0] + vars[0]))    
-            ax.set_ylim((means[1] - vars[1], means[1] + vars[1]))
+            ax.set_xlim(xlims)    
+            ax.set_ylim(ylims)
             ax.set_aspect('equal')
 
         if testing:
@@ -838,6 +839,7 @@ class DeepReachHopf(Experiment):
         
         else:
             fig.savefig(save_path)
+            # if was_training: fig.savefig('BRS_final_'+ '_'.join(save_path.split('_')[1:-1]) + '.png')
             if self.use_wandb:
                 wandb.log({
                     'step': epoch,
@@ -855,7 +857,7 @@ class DeepReachHopf(Experiment):
             self.model.train()
             self.model.requires_grad_(True)
 
-    def validate2Dlambda_mulob(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution, testing=True):
+    def validate2Dlambda_mulob(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution, testing=False):
         was_training = self.model.training
         self.model.eval()
         self.model.requires_grad_(False)
@@ -953,6 +955,7 @@ class DeepReachHopf(Experiment):
         
         else:
             fig.savefig(save_path)
+            if was_training: fig.savefig('BRS_final_'+ '_'.join(save_path.split('_')[1:-1]) + '.png')
             if self.use_wandb:
                 wandb.log({
                     'step': epoch,

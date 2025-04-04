@@ -809,7 +809,8 @@ class ConveyorND(Dynamics):
         self.goalR_2d = goalR
         self.goalR = self.goalR_2d # artifact
 
-        self.state_scale = 2.0 # actual is 1.5
+        self.state_scale = 2.0 # for sampling
+        self.state_scale_score = 1.5 # for scoring
         self.state_center_2d = [-1., 0.]
 
         self.u_max, self.d_max = u_max, d_max
@@ -1008,7 +1009,8 @@ class ConveyorNDlambda(Dynamics):
         self.goalR_2d = goalR
         self.goalR = self.goalR_2d # artifact
 
-        self.state_scale = 2.0 # 1.5
+        self.state_scale = 2.0 # for sampling
+        self.state_scale_score = 1.5 # for scoring
         self.state_center_2d = [-1, 0.]
 
         self.bounded_bc = True
@@ -1214,7 +1216,8 @@ class CanoeND(Dynamics):
         self.current_h = 0.25
         self.current_v = 0.25
 
-        self.state_scale = 2.0 # 1.25
+        self.state_scale = 2.0 # for sampling
+        self.state_scale_score = 1.25 # for scoring
         self.state_center_2d = [0., 0.75]
 
         self.u_max, self.d_max = u_max, d_max
@@ -1390,7 +1393,8 @@ class CanoeNDlambda(Dynamics):
         self.current_h = 0.25
         self.current_v = 0.25
 
-        self.state_scale = 2.0 # 1.25
+        self.state_scale = 2.0 # for sampling
+        self.state_scale_score = 1.25 # for scoring
         self.state_center_2d = torch.tensor([0., 0.75])
         
         self.bounded_bc = True

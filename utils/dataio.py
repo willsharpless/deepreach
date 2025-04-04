@@ -690,9 +690,13 @@ class ReachabilityDataset(Dataset):
                     self.V_DP_grad_b3_julia = V_N_DP_b3_itp_grad_combo_julia
                     self.V_DP_grad_b4_julia = V_N_DP_b4_itp_grad_combo_julia
 
-        ## Define a fixed spatiotemporal grid to score Jaccard
-
-        xig_1, xig_2 = torch.arange(-0.99, 1.01, 0.02), torch.arange(-0.99, 1.01, 0.02) # 100 x 100      
+        ## Define a fixed spatiotemporal grid to score MSE & Jaccard
+        
+        # xig_1, xig_2 = torch.arange(-0.99, 1.01, 0.02), torch.arange(-0.99, 1.01, 0.02) # 100 x 100  
+        xig_1, xig_2 = torch.arange(-1., 1.02, 0.02), torch.arange(-1., 1.02, 0.02) # 101 x 101, this breaks old (bad) hopf validateND 
+        if hasattr(self.dynamics, 'state_scale_score'):
+            xig_1 = xig_1 * (self.dynamics.state_scale_score / self.dynamics.state_scale)
+            xig_2 = xig_2 * (self.dynamics.state_scale_score / self.dynamics.state_scale)
         
         grid_L = xig_1.size()[0]
         self.X1g, self.X2g = torch.meshgrid(xig_1, xig_2)
