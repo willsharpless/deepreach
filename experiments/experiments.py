@@ -38,7 +38,7 @@ class Experiment(ABC):
     def _load_checkpoint(self, epoch):
         if epoch == -1:
             model_path = os.path.join(self.experiment_dir, 'training', 'checkpoints', 'model_final.pth')
-            self.model.load_state_dict(torch.load(model_path))
+            self.model.load_state_dict(torch.load(model_path)['model'])
         else:
             model_path = os.path.join(self.experiment_dir, 'training', 'checkpoints', 'model_epoch_%04d.pth' % epoch)
             self.model.load_state_dict(torch.load(model_path)['model'])
@@ -323,12 +323,12 @@ class Experiment(ABC):
                                     loaded_model_results_1 = self.dataset.loaded_model_1({'coords': model_input['model_coords'][..., :-1]})
                                     loaded_model_results_2 = self.dataset.loaded_model_2({'coords': model_input['model_coords'][..., :-1]})
 
-                                decomposed_values_1 = self.dataset.dynamics.io_to_value(loaded_model_results_1['model_in'], loaded_model_results_1['model_out'].squeeze(dim=-1)).detach()
-                                decomposed_values_2 = self.dataset.dynamics.io_to_value(loaded_model_results_2['model_in'], loaded_model_results_2['model_out'].squeeze(dim=-1)).detach()
+                                decomposed_values_1 = self.dataset.loaded_dynamics_1.io_to_value(loaded_model_results_1['model_in'], loaded_model_results_1['model_out'].squeeze(dim=-1)).detach()
+                                decomposed_values_2 = self.dataset.loaded_dynamics_2.io_to_value(loaded_model_results_2['model_in'], loaded_model_results_2['model_out'].squeeze(dim=-1)).detach()
 
                                 if self.dataset.solve_grad:
-                                    decomposed_grads_1 = self.dataset.loaded_dynamics.io_to_dv(loaded_model_results_1['model_in'], loaded_model_results_1['model_out'].squeeze(dim=-1)).detach() # NOTE: keeping time grad too now, add [..., 1:] otherwise
-                                    decomposed_grads_2 = self.dataset.loaded_dynamics.io_to_dv(loaded_model_results_2['model_in'], loaded_model_results_2['model_out'].squeeze(dim=-1)).detach()
+                                    decomposed_grads_1 = self.dataset.loaded_dynamics_1.io_to_dv(loaded_model_results_1['model_in'], loaded_model_results_1['model_out'].squeeze(dim=-1)).detach() # NOTE: keeping time grad too now, add [..., 1:] otherwise
+                                    decomposed_grads_2 = self.dataset.loaded_dynamics_2.io_to_dv(loaded_model_results_2['model_in'], loaded_model_results_2['model_out'].squeeze(dim=-1)).detach()
                                 else:
                                     decomposed_grads_1, decomposed_values_2 = None, None
 
@@ -350,8 +350,8 @@ class Experiment(ABC):
                         # For fixed lambda slice supervision, infer model values on slices
                         if self.dataset.lam_slice_super:
                             
-                            model_results_poslam = self.model({'coords': model_input['model_coords_poslam']})
-                            model_results_neglam = self.model({'coords': model_input['model_coords_neglam']})
+                            model_results_poslam = self.model({'coords': gt['model_coords_poslam']})
+                            model_results_neglam = self.model({'coords': gt['model_coords_neglam']})
 
                             values_poslam = self.dataset.dynamics.io_to_value(model_results_poslam['model_in'].detach(), model_results_poslam['model_out'].squeeze(dim=-1))
                             values_neglam = self.dataset.dynamics.io_to_value(model_results_neglam['model_in'].detach(), model_results_neglam['model_out'].squeeze(dim=-1))
@@ -636,7 +636,7 @@ class Experiment(ABC):
             self.model.eval()
             self.model.requires_grad_(False)
 
-    def test(self, current_time, last_checkpoint, checkpoint_dt, dt, num_scenarios, num_violations, set_type, control_type, data_step, checkpoint_toload=None):
+    def test(self, current_time, last_checkpoint, checkpoint_dt, dt, num_scenarios, num_violations, set_type, control_type, data_step, val_x_resolution=None, val_y_resolution=None, val_z_resolution=None, val_time_resolution=None, checkpoint_toload=None):
         was_training = self.model.training
         self.model.eval()
         self.model.requires_grad_(False)
@@ -662,10 +662,14 @@ class Experiment(ABC):
             print('running specific-checkpoint testing')
             self._load_checkpoint(checkpoint_toload)
 
-            model = self.model
-            dataset = self.dataset
-            dynamics = dataset.dynamics
-            raise NotImplementedError
+            # model = self.model
+            # dataset = self.dataset
+            # dynamics = dataset.dynamics
+            # raise NotImplementedError
+
+            checkpoint = str(checkpoint_toload) if not checkpoint_toload == -1 else 'final'
+            self.validate(epoch=0, save_path=os.path.join(testing_dir, f'BRS_validation_plot_epoch_{checkpoint}.png'), # overwriting to save data
+                        x_resolution = val_x_resolution, y_resolution = val_y_resolution, z_resolution=val_z_resolution, time_resolution=val_time_resolution)
 
         if was_training:
             self.model.train()
@@ -754,7 +758,7 @@ class DeepReachHopf(Experiment):
             self.model.train()
             self.model.requires_grad_(True)
 
-    def validate2D_mulob(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution, testing=True):
+    def validate2D_mulob(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution, testing=False):
         was_training = self.model.training
         self.model.eval()
         self.model.requires_grad_(False)
@@ -955,7 +959,7 @@ class DeepReachHopf(Experiment):
         
         else:
             fig.savefig(save_path)
-            if was_training: fig.savefig('BRS_final_'+ '_'.join(save_path.split('_')[1:-1]) + '.png')
+            # if was_training: fig.savefig('BRS_final_'+ '_'.join(save_path.split('_')[1:-1]) + '.png')
             if self.use_wandb:
                 wandb.log({
                     'step': epoch,

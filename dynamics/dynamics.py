@@ -764,7 +764,7 @@ class LessLinearNDlambda(Dynamics):
         }
 
 class ConveyorND(Dynamics):
-    def __init__(self, N:int, bounded_bc:bool=True, reach_only:bool=False, avoid_only:bool=False, avoid_type:str="ball"):
+    def __init__(self, N:int, bounded_bc:bool=True, reach_only:bool=False, avoid_only:bool=False, avoid_type:str="ball", old_brat:bool=False):
     # def __init__(self, N:int):
         self.name = "Conveyor"
         self.bounded_bc, self.bc_alpha = bounded_bc, 0.5
@@ -779,7 +779,10 @@ class ConveyorND(Dynamics):
             loss_type, set_mode = 'brt_hjivi', 'avoid'
             self.reach_only, self.avoid_only = False, True
         else:
-            loss_type, set_mode = 'mulob_hjivi', 'reach'
+            if old_brat:
+                loss_type, set_mode = 'brat_hjivi', 'reach'
+            else:
+                loss_type, set_mode = 'mulob_hjivi', 'reach'
             self.reach_only, self.avoid_only = False, False
 
         self.avoid_type = avoid_type
@@ -963,7 +966,7 @@ class ConveyorND(Dynamics):
         }
 
 class ConveyorNDlambda(Dynamics):
-    def __init__(self, N:int, bounded_bc:bool=True, reach_only:bool=False, avoid_only:bool=False, avoid_type:str="ball"):
+    def __init__(self, N:int, bounded_bc:bool=True, reach_only:bool=False, avoid_only:bool=False, avoid_type:str="ball", old_brat:bool=False):
     # def __init__(self, N:int):
         self.name = "Conveyor"
         self.bounded_bc, self.bc_alpha = bounded_bc, 0.5
@@ -971,6 +974,8 @@ class ConveyorNDlambda(Dynamics):
         goalR = 0.3
         alpha = 0. # = 0 -> linear dynamics
         self.lambda_target = 0. # -> RA solution
+        self.lambda_target_hi = 1. # -> R solution
+        self.lambda_target_lo = -1. # -> A solution
 
         if reach_only:
             loss_type, set_mode = 'brt_hjivi', 'reach'
@@ -979,7 +984,10 @@ class ConveyorNDlambda(Dynamics):
             loss_type, set_mode = 'brt_hjivi', 'avoid'
             self.reach_only, self.avoid_only = False, True
         else:
-            loss_type, set_mode = 'mulob_hjivi', 'reach'
+            if old_brat:
+                loss_type, set_mode = 'brat_hjivi', 'reach'
+            else:
+                loss_type, set_mode = 'mulob_hjivi', 'reach'
             self.reach_only, self.avoid_only = False, False
 
         self.avoid_type = avoid_type
