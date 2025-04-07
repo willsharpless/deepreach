@@ -237,12 +237,12 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
                     dss_grad_1_weight = torch.nn.functional.relu(state[..., -1]) / dss_grad_loss_1_divisor
                     dss_grad_2_weight = torch.nn.functional.relu(-state[..., -1]) / dss_grad_loss_2_divisor
 
-                loss_dict['dss_value_1_loss'] = dss_value_1_weight * torch.abs(decomposed_value_1_loss).sum()
-                loss_dict['dss_value_2_loss'] = dss_value_2_weight * torch.abs(decomposed_value_2_loss).sum()
+                loss_dict['dss_value_1_loss'] = (dss_value_1_weight * torch.abs(decomposed_value_1_loss)).sum()
+                loss_dict['dss_value_2_loss'] = (dss_value_2_weight * torch.abs(decomposed_value_2_loss)).sum()
                 
                 if grad_super:
-                    loss_dict['dss_grad_1_loss'] = dss_grad_1_weight * torch.abs(decomposed_grad_1_loss).sum()
-                    loss_dict['dss_grad_2_loss'] = dss_grad_2_weight * torch.abs(decomposed_grad_2_loss).sum()
+                    loss_dict['dss_grad_1_loss'] = (dss_grad_1_weight * torch.abs(decomposed_grad_1_loss)).sum()
+                    loss_dict['dss_grad_2_loss'] = (dss_grad_2_weight * torch.abs(decomposed_grad_2_loss)).sum()
             
             if 'deform' in loss_type:
 
@@ -280,11 +280,12 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
             if mulob_type == 'BRAT':
 
                 diff_constraint_hom = torch.min(torch.max(dvdt - ham, value - bc_value_1), value + bc_value_2)
+                # TODO BRAT decomp
 
             elif mulob_type == 'BRAAT':
 
-                diff_constraint_hom = torch.min(torch.max(dvdt - ham, value - bc_value_2), 
-                                                torch.max(value - bc_value_1, value - decomposed_value_2)) # not min?
+                diff_constraint_hom = torch.min(torch.max(dvdt - ham, value + bc_value_2), 
+                                                torch.max(value - bc_value_1, value + decomposed_value_2))
                 
             elif mulob_type == 'BRRT':
 

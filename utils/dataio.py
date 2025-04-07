@@ -31,6 +31,7 @@ class ReachabilityDataset(Dataset):
                  memory_tracking=False, make_benchmark_gts=False,
 
                  loaded_model_1=None, loaded_model_2=None,
+                 loaded_dynamics_1=None, loaded_dynamics_2=None,
                  lam_slice_super=False,
                  ):
 
@@ -113,6 +114,8 @@ class ReachabilityDataset(Dataset):
         # Load pretrained models for decomposed supervision
         self.loaded_model_1 = loaded_model_1
         self.loaded_model_2 = loaded_model_2
+        self.loaded_dynamics_1 = loaded_dynamics_1
+        self.loaded_dynamics_2 = loaded_dynamics_2
         if loaded_model_1: self.loaded_model_1 = loaded_model_1.cuda()
         if loaded_model_2: self.loaded_model_1 = loaded_model_2.cuda()
         self.load_decomposed_models = loaded_model_1 is not None and loaded_model_2 is not None
@@ -285,31 +288,30 @@ class ReachabilityDataset(Dataset):
                 bc_values_1 = self.dynamics.reach_fn_1(states_io, times_io)
                 bc_values_2 = self.dynamics.reach_fn_2(states_io, times_io)
 
-            if not self.lambda_var:
-                if self.solve_grad:
-                    gt_decomposed_values_1, gt_decomposed_grads_1 = self.V_DP_1(model_coords.t())
-                    gt_decomposed_values_2, gt_decomposed_grads_2 = self.V_DP_2(model_coords.t())
-                else:
-                    gt_decomposed_values_1 = self.V_DP_1(model_coords.t())
-                    gt_decomposed_values_2 = self.V_DP_2(model_coords.t())
-                    gt_decomposed_grads_1, gt_decomposed_grads_2 = torch.empty(0), torch.empty(0)
+            if not self.dataset.load_decomposed_models:
+                if not self.lambda_var:
+                    if self.solve_grad:
+                        gt_decomposed_values_1, gt_decomposed_grads_1 = self.V_DP_1(model_coords.t())
+                        gt_decomposed_values_2, gt_decomposed_grads_2 = self.V_DP_2(model_coords.t())
+                    else:
+                        gt_decomposed_values_1 = self.V_DP_1(model_coords.t())
+                        gt_decomposed_values_2 = self.V_DP_2(model_coords.t())
+                        gt_decomposed_grads_1, gt_decomposed_grads_2 = torch.empty(0), torch.empty(0)
 
-            else: # remove lambda (same coords)
-                if self.solve_grad:
-                    gt_decomposed_values_1, gt_decomposed_grads_1 = self.V_DP_1(model_coords[..., :-1].t())
-                    gt_decomposed_values_2, gt_decomposed_grads_2 = self.V_DP_2(model_coords[..., :-1].t())
-                else:
-                    gt_decomposed_values_1 = self.V_DP_1(model_coords[..., :-1].t())
-                    gt_decomposed_values_2 = self.V_DP_2(model_coords[..., :-1].t())
-                    gt_decomposed_grads_1, gt_decomposed_grads_2 = torch.empty(0), torch.empty(0)
+                else: # remove lambda (same coords)
+                    if self.solve_grad:
+                        gt_decomposed_values_1, gt_decomposed_grads_1 = self.V_DP_1(model_coords[..., :-1].t())
+                        gt_decomposed_values_2, gt_decomposed_grads_2 = self.V_DP_2(model_coords[..., :-1].t())
+                    else:
+                        gt_decomposed_values_1 = self.V_DP_1(model_coords[..., :-1].t())
+                        gt_decomposed_values_2 = self.V_DP_2(model_coords[..., :-1].t())
+                        gt_decomposed_grads_1, gt_decomposed_grads_2 = torch.empty(0), torch.empty(0)
                     
                 # FIXME: for BRAT decomp, need V_DP_2 == avoid_fn (NOT avoid_value)
 
             if self.lam_slice_super and self.lambda_var:
-                lambda_hi = self.dynamics.lambda_center + self.dynamics.lambda_range/2
-                lambda_lo = self.dynamics.lambda_center - self.dynamics.lambda_range/2
-                model_coords_poslam = torch.cat((model_coords[..., :-1], lambda_hi + 0*model_coords[..., -1]), -1) 
-                model_coords_neglam = torch.cat((model_coords[..., :-1], lambda_lo + 0*model_coords[..., -1]), -1) 
+                model_coords_poslam = torch.cat((model_coords[..., :-1], self.dynamics.lambda_target_hi + 0*model_coords[..., -2:-1]), -1) 
+                model_coords_neglam = torch.cat((model_coords[..., :-1], self.dynamics.lambda_target_lo + 0*model_coords[..., -2:-1]), -1) 
             else:
                 model_coords_poslam, model_coords_neglam = model_coords, model_coords
 
@@ -891,7 +893,7 @@ class ReachabilityDataset(Dataset):
                             extend="both",
                             cmap=RdWhBl_vscaled)
             axes[0][k].contour(solution_grid.coordinate_vectors[0], solution_grid.coordinate_vectors[1],
-                            plot_values_raw[k], levels=0, colors="black", linewidth=2)
+                            plot_values_raw[k], levels=0, colors="black", linewidths=2)
             axes[0][k].set_xlim(xlims)
             axes[0][k].set_ylim(ylims)
             axes[0][k].set_aspect('equal')
@@ -904,13 +906,13 @@ class ReachabilityDataset(Dataset):
                             extend="both",
                             cmap=RdWhBl_vscaled)
             axes[1][k].contour(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
-                            plot_values_itp[k], levels=0, colors="black", linewidth=2)
+                            plot_values_itp[k], levels=0, colors="black", linewidths=2)
             axes[1][k].set_xlim(xlims)
             axes[1][k].set_ylim(ylims)
             axes[1][k].set_aspect('equal')
 
             axes[1][k].contour(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
-                            plot_values_bcs_t0[k], levels=0, colors="magenta", linewidth=2, linestyle="dash")
+                            plot_values_bcs_t0[k], levels=0, colors="magenta", linewidths=2)
 
             # Plot dynamics bc
             axes[2][k].set_title(f"{names[k]} BC")
@@ -920,7 +922,7 @@ class ReachabilityDataset(Dataset):
                             extend="both",
                             cmap=RdWhBl_vscaled)
             axes[2][k].contour(self.X1g * self.dynamics.state_var[0] + self.dynamics.state_mean[0], self.X2g * self.dynamics.state_var[1] + self.dynamics.state_mean[1],
-                            plot_values_bcs_t2[k], levels=0, colors="black", linewidth=2, linestyle="dash")
+                            plot_values_bcs_t2[k], levels=0, colors="black", linewidths=2)
             axes[2][k].set_xlim(xlims)
             axes[2][k].set_ylim(ylims)
             axes[2][k].set_aspect('equal')
