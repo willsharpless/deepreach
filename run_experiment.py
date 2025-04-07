@@ -15,6 +15,30 @@ from utils import modules, dataio, losses
 
 import multiprocessing as mp
 
+import sys
+print("PYTHON EXECUTABLE:", sys.executable)
+
+## Uncomment on first run
+# from juliacall import Main
+
+# Main.seval("""
+# import Pkg
+# Pkg.activate(Base.load_path_expand("@v#.#"))
+# Pkg.add([
+#     "LinearAlgebra",
+#     "Interpolations",
+#     "StatsBase",
+#     "TickTock",
+#     "Suppressor",
+#     "JLD",
+#     "JLD2",
+#     "Plots",
+#     "ScatteredInterpolation",
+#     "Contour"
+# ])
+# Pkg.precompile()
+# """)
+
 if __name__ == '__main__':
     mp.set_start_method('spawn', force=True)
         
