@@ -47,7 +47,6 @@ if __name__ == '__main__':
     p.add_argument('--reset_loss_w', action='store_true', default=False, required=False, help='Resets the loss weights to their values at the beginning of training (pre-decay)')
     p.add_argument('--reset_loss_period', type=int, default=500, required=False, help='The loss weight reset period')
     p.add_argument('--zerolambda_LS', action='store_true', default=False, required=False, help='Will limit linear supervision to loss on lambda = 0 data (for lambda-variation models only AND loaded models)')
-    p.add_argument('--LS_w_time_curr', action='store_true', default=False, required=False, help='Do linear supervision with a temporal curriculum')
 
     p.add_argument('--gt_metrics', action='store_true', default=True, required=False, help='Compute and score the learned value and set (needs ground truth)')
     p.add_argument('--temporal_loss', action='store_true', default=False, required=False, help='Compute the loss over time chunks (slower)')
@@ -76,12 +75,13 @@ if __name__ == '__main__':
     p.add_argument('--mulob_loss_type', type=str, default='vanilla', choices=['vanilla', 'augment', 'deform', 'augment-deform'], help='Type of multiobjective loss')
     p.add_argument('--load_decomposed_models', action='store_true', default=False, required=False, help='Will load models corresponding to the decomposed game values.')
     p.add_argument('--load_decomposed_model_name_1', type=str, default='./runs/mulob/ConveyorND/Conveyor2D/reach_only_2D', help='Decomposed value 1 model name')
-    p.add_argument('--load_decomposed_model_name_2', type=str, default='./runs/mulob/ConveyorND/Conveyor2D/avoid_only_2D_ball', help='Decomposed value 2 model name')
+    p.add_argument('--load_decomposed_model_name_2', type=str, default='./runs/mulob/ConveyorND/Conveyor2D/avoid_only_2D_fast2', help='Decomposed value 2 model name')
     p.add_argument('--super_pretrain', action='store_true', default=False, required=False, help='Pretrain with supervision losses')
     p.add_argument('--super_pretrain_iters', type=int, default=10000, required=False, help='Number of pretrain iterations with supervision losses')
     p.add_argument('--solve_grad', action='store_true', default=False, required=False, help='Compute gradients (forced true if gradient supervision), slower')
     p.add_argument('--grad_super', action='store_true', default=False, required=False, help='Supervision of not only value but gradient')
     p.add_argument('--lam_slice_super', action='store_true', default=False, required=False, help='Limits supervision losses to data slices with fixed lambda values.')
+    p.add_argument('--LS_w_time_curr', action='store_true', default=False, required=False, help='Do supervision with a temporal curriculum')
     p.add_argument('--baseline', action='store_true', default=False, required=False, help='Baseline DeepReach method (no Hopf)')
 
     ## Multi-Objective Loss Weights
@@ -209,10 +209,13 @@ if __name__ == '__main__':
     #     opt = loaded_opt
         
     if opt.debug_params:
-        opt.pretrain_iters = 2
-        opt.super_pretrain_iters = 0
-        opt.num_epochs = 20
-        opt.epochs_til_ckpt = 10
+        opt.pretrain_iters = 500
+        # opt.super_pretrain_iters = 2
+        # opt.num_epochs = 20
+        # opt.epochs_til_ckpt = 10
+        # opt.super_pretrain_iters = 2000
+        opt.num_epochs = 10000
+        opt.epochs_til_ckpt = 500
         opt.use_bank = False
 
     if opt.capacity_test:
@@ -334,46 +337,37 @@ if __name__ == '__main__':
         loaded_dynamics_inst = None
 
     ## Load Learned Models Corresponding to Decomposed Values
+    loaded_model_1, loaded_model_2 = None, None
+    loaded_dynamics_inst_1, loaded_dynamics_inst_2 = None, None
+
     if orig_opt.load_decomposed_models:
-        load_dir_1, load_dir_2 = opt.load_decomposed_model_name_1, opt.load_decomposed_model_name_2 
-        with open(os.path.join(load_dir_1, 'orig_opt.pickle'), 'rb') as opt_file:
-            loaded_opt_1 = pickle.load(opt_file)
-        with open(os.path.join(load_dir_2, 'orig_opt.pickle'), 'rb') as opt_file:
-            loaded_opt_2 = pickle.load(opt_file)
 
-        if not orig_opt.dynamics_class.endswith("lambda"):
-            loaded_model_1 = modules.SingleBVPNet(in_features=dynamics_inst.input_dim, out_features=1, type=loaded_opt_1.model, mode=loaded_opt_1.model_mode,
-                                        final_layer_factor=1., hidden_features=loaded_opt_1.num_nl, num_hidden_layers=loaded_opt_1.num_hl)
-            loaded_model_2 = modules.SingleBVPNet(in_features=dynamics_inst.input_dim, out_features=1, type=loaded_opt_2.model, mode=loaded_opt_2.model_mode,
-                                        final_layer_factor=1., hidden_features=loaded_opt_2.num_nl, num_hidden_layers=loaded_opt_2.num_hl)
-        else:
-            loaded_model_1 = modules.SingleBVPNet(in_features=dynamics_inst.input_dim-1, out_features=1, type=loaded_opt_1.model, mode=loaded_opt_1.model_mode,
-                                        final_layer_factor=1., hidden_features=loaded_opt_1.num_nl, num_hidden_layers=loaded_opt_1.num_hl)
-            loaded_model_2 = modules.SingleBVPNet(in_features=dynamics_inst.input_dim-1, out_features=1, type=loaded_opt_2.model, mode=loaded_opt_2.model_mode,
-                                        final_layer_factor=1., hidden_features=loaded_opt_2.num_nl, num_hidden_layers=loaded_opt_2.num_hl)
-        loaded_model_1.cuda()
-        loaded_model_2.cuda()
-        
-        model_path_1 = os.path.join(load_dir_1, 'training', 'checkpoints', 'model_final.pth')
-        model_path_2 = os.path.join(load_dir_2, 'training', 'checkpoints', 'model_final.pth')
-        loaded_model_1.load_state_dict(torch.load(model_path_1)['model']) # FIXME, key only needed for chkpts
-        loaded_model_2.load_state_dict(torch.load(model_path_2)['model']) # FIXME, key only needed for chkpts
-        loaded_model_1.eval()
-        loaded_model_2.eval()
+        def load_model(load_decomposed_model_name_, dynamics_inst_, dynamics_class_):
 
-        ## Loading non-lambda dynamics class of decomposed (might have diff DR model/params)
-        dynamics_class_name = orig_opt.dynamics_class if not orig_opt.dynamics_class.endswith("lambda") else orig_opt.dynamics_class.split("lambda")[0]
-        loaded_dynamics_class = getattr(dynamics, dynamics_class_name) # non-lambda version of dynamics
+            dynamics_class_name_ = dynamics_class_ if not dynamics_class_.endswith("lambda") else dynamics_class_.split("lambda")[0]
+            with open(os.path.join(load_decomposed_model_name_, 'orig_opt.pickle'), 'rb') as opt_file_:
+                loaded_opt_ = pickle.load(opt_file_)
+            
+            if not dynamics_class_.endswith("lambda"):
+                loaded_model_ = modules.SingleBVPNet(in_features=dynamics_inst_.input_dim, out_features=1, type=loaded_opt_.model, mode=loaded_opt_.model_mode,
+                                        final_layer_factor=1., hidden_features=loaded_opt_.num_nl, num_hidden_layers=loaded_opt_.num_hl)
+            else:
+                loaded_model_ = modules.SingleBVPNet(in_features=dynamics_inst_.input_dim-1, out_features=1, type=loaded_opt_.model, mode=loaded_opt_.model_mode,
+                                        final_layer_factor=1., hidden_features=loaded_opt_.num_nl, num_hidden_layers=loaded_opt_.num_hl)
 
-        loaded_dynamics_inst_1 = loaded_dynamics_class(**{argname: getattr(loaded_opt_1, argname) for argname in inspect.signature(loaded_dynamics_class).parameters.keys() if argname != 'self'})
-        loaded_dynamics_inst_1.deepreach_model=loaded_opt_1.deepreach_model
+            loaded_model_.cuda()        
+            model_path_ = os.path.join(load_decomposed_model_name_, 'training', 'checkpoints', 'model_final.pth')
+            loaded_model_.load_state_dict(torch.load(model_path_, weights_only=True)['model'])
+            loaded_model_.eval()
 
-        loaded_dynamics_inst_2 = loaded_dynamics_class(**{argname: getattr(loaded_opt_2, argname) for argname in inspect.signature(loaded_dynamics_class).parameters.keys() if argname != 'self'})
-        loaded_dynamics_inst_2.deepreach_model=loaded_opt_2.deepreach_model
-        
-    else:
-        loaded_model_1, loaded_model_2 = None, None
-        loaded_dynamics_inst_1, loaded_dynamics_inst_2 = None, None
+            loaded_dynamics_class_ = getattr(dynamics, dynamics_class_name_) # non-lambda version of dynamics
+            loaded_dynamics_inst_ = loaded_dynamics_class_(**{argname: getattr(loaded_opt_, argname) for argname in inspect.signature(loaded_dynamics_class_).parameters.keys() if argname != 'self'})
+
+            return loaded_model_, loaded_dynamics_inst_
+
+        loaded_model_1, loaded_dynamics_inst_1 = load_model(opt.load_decomposed_model_name_1, dynamics_inst, orig_opt.dynamics_class)
+
+        loaded_model_2, loaded_dynamics_inst_2 = load_model(opt.load_decomposed_model_name_2, dynamics_inst, orig_opt.dynamics_class)
 
     dataset = dataio.ReachabilityDataset(
         dynamics=dynamics_inst, numpoints=orig_opt.numpoints, 

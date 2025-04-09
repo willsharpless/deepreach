@@ -46,7 +46,7 @@ class BatchLinear(nn.Linear):
 
 
 class Sine(nn.Module):
-    def __init(self):
+    def __init__(self):
         super().__init__()
 
     def forward(self, input):

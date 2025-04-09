@@ -38,10 +38,10 @@ class Experiment(ABC):
     def _load_checkpoint(self, epoch):
         if epoch == -1:
             model_path = os.path.join(self.experiment_dir, 'training', 'checkpoints', 'model_final.pth')
-            self.model.load_state_dict(torch.load(model_path)['model'])
+            self.model.load_state_dict(torch.load(model_path, weights_only=True)['model'])
         else:
             model_path = os.path.join(self.experiment_dir, 'training', 'checkpoints', 'model_epoch_%04d.pth' % epoch)
-            self.model.load_state_dict(torch.load(model_path)['model'])
+            self.model.load_state_dict(torch.load(model_path, weights_only=True)['model'])
 
     def validate(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution):
         was_training = self.model.training
@@ -315,22 +315,34 @@ class Experiment(ABC):
                         if self.dataset.load_decomposed_models:
                             # note, decomposed values inferred on data wo lambda, and appropriately shifted if augmented for pde loss (but not ss losses)
                             
-                            with torch.inference_mode():
-                                if not self.dataset.lambda_var:
-                                    loaded_model_results_1 = self.dataset.loaded_model_1({'coords': model_input['model_coords']})
-                                    loaded_model_results_2 = self.dataset.loaded_model_2({'coords': model_input['model_coords']})
-                                else: 
-                                    loaded_model_results_1 = self.dataset.loaded_model_1({'coords': model_input['model_coords'][..., :-1]})
-                                    loaded_model_results_2 = self.dataset.loaded_model_2({'coords': model_input['model_coords'][..., :-1]})
+                            if not self.dataset.solve_grad:
+                                decomposed_grads_1, decomposed_grads_2 = None, None
+                                
+                                with torch.inference_mode():
+                                    load_coords = model_input['model_coords'] if not self.dataset.lambda_var else model_input['model_coords'][..., :-1]
+
+                                    loaded_model_results_1 = self.dataset.loaded_model_1({'coords': load_coords})
+                                    loaded_model_results_2 = self.dataset.loaded_model_2({'coords': load_coords})
+
+                                    decomposed_values_1 = self.dataset.loaded_dynamics_1.io_to_value(loaded_model_results_1['model_in'], loaded_model_results_1['model_out'].squeeze(dim=-1)).detach()
+                                    decomposed_values_2 = self.dataset.loaded_dynamics_2.io_to_value(loaded_model_results_2['model_in'], loaded_model_results_2['model_out'].squeeze(dim=-1)).detach()
+                            
+                            else:
+                                load_coords = model_input['model_coords'] if not self.dataset.lambda_var else model_input['model_coords'][..., :-1]
+
+                                loaded_model_results_1 = self.dataset.loaded_model_1({'coords': load_coords})
+                                loaded_model_results_2 = self.dataset.loaded_model_2({'coords': load_coords})
 
                                 decomposed_values_1 = self.dataset.loaded_dynamics_1.io_to_value(loaded_model_results_1['model_in'], loaded_model_results_1['model_out'].squeeze(dim=-1)).detach()
                                 decomposed_values_2 = self.dataset.loaded_dynamics_2.io_to_value(loaded_model_results_2['model_in'], loaded_model_results_2['model_out'].squeeze(dim=-1)).detach()
+                        
+                                decomposed_grads_1 = self.dataset.loaded_dynamics_1.io_to_dv(loaded_model_results_1['model_in'], loaded_model_results_1['model_out'].squeeze(dim=-1)).detach() # NOTE: keeping time grad too now, add [..., 1:] otherwise
+                                decomposed_grads_2 = self.dataset.loaded_dynamics_2.io_to_dv(loaded_model_results_2['model_in'], loaded_model_results_2['model_out'].squeeze(dim=-1)).detach() 
 
+                            if hasattr(self.dataset.loaded_dynamics_2, 'avoid_only') and self.dataset.loaded_dynamics_2.avoid_only:
+                                decomposed_values_2 = -1 * decomposed_values_2 # avoid_only defined positively in DR, so flip
                                 if self.dataset.solve_grad:
-                                    decomposed_grads_1 = self.dataset.loaded_dynamics_1.io_to_dv(loaded_model_results_1['model_in'], loaded_model_results_1['model_out'].squeeze(dim=-1)).detach() # NOTE: keeping time grad too now, add [..., 1:] otherwise
-                                    decomposed_grads_2 = self.dataset.loaded_dynamics_2.io_to_dv(loaded_model_results_2['model_in'], loaded_model_results_2['model_out'].squeeze(dim=-1)).detach()
-                                else:
-                                    decomposed_grads_1, decomposed_values_2 = None, None
+                                    decomposed_grads_2[..., 1:] = -1 * decomposed_grads_2[..., 1:]
 
                         # elif self.dataset.use_gt_decomposed:
                         else:
@@ -341,7 +353,7 @@ class Experiment(ABC):
                             decomposed_values_1, decomposed_values_2 = gt['gt_decomposed_values_1'], gt['gt_decomposed_values_2']
 
                             if self.dataset.solve_grad:
-                                decomposed_grads_1, decomposed_grads_2 =  gt['gt_decomposed_grads_1'], gt['gt_decomposed_grads_2']
+                                decomposed_grads_1, decomposed_grads_2 = gt['gt_decomposed_grads_1'], gt['gt_decomposed_grads_2']
                             else:
                                 decomposed_grads_1, decomposed_grads_2 = None, None
 
@@ -623,8 +635,8 @@ class Experiment(ABC):
                     np.savetxt(os.path.join(checkpoints_dir, 'train_losses_epoch_%04d.txt' % (epoch+1)),
                         np.array(train_losses))
                     self.validate(
-                        # epoch=epoch+1, save_path=os.path.join(checkpoints_dir, 'BRS_validation_plot_epoch_%04d.png' % (epoch+1)),
-                        epoch=epoch+1, save_path=os.path.join(checkpoints_dir, 'BRS_validation_plot.png'), # overwriting to save data
+                        epoch=epoch+1, save_path=os.path.join(checkpoints_dir, 'BRS_validation_plot_epoch_%04d.png' % (epoch+1)),
+                        # epoch=epoch+1, save_path=os.path.join(checkpoints_dir, 'BRS_validation_plot.png'), # overwriting to save data
                         x_resolution = val_x_resolution, y_resolution = val_y_resolution, z_resolution=val_z_resolution, time_resolution=val_time_resolution)
                 if self.timing: print("Checkpointing took:", time.time() - start_time_2)
 
@@ -869,7 +881,7 @@ class DeepReachHopf(Experiment):
         solve_times = torch.linspace(0, self.dataset.tMax, time_resolution)
         if self.dataset.dynamics.name == "Conveyor":
             if self.dataset.dynamics.avoid_type == "ball":
-                lambda_vals = torch.tensor([1., 0.1, 0., -0.2, -1.])
+                lambda_vals = torch.tensor([1., 0.1, 0., -0.3, -1.])
             else:
                 lambda_vals = torch.tensor([1., 0.05, 0., -0.2, -1.])
         else:
@@ -891,9 +903,9 @@ class DeepReachHopf(Experiment):
                 states_input = self.dataset.model_states_grid
                 times = torch.full((self.dataset.n_grid_pts_2d, 1), solve_times[i]).cuda()
                 input = torch.cat((times, states_input), dim=1) 
+                input[..., -1] = lambda_vals[j]/self.dataset.dynamics.state_var[-1] + 0*input[..., -1] # certain lambda
                 
                 coords = self.dataset.dynamics.input_to_coord(input)
-                coords[..., -1] = lambda_vals[j] + 0*coords[..., -1] # certain lambda
                 states = coords[:, 1:]
                 n_grid_len = self.dataset.X1g.size()[0]
                 
@@ -919,9 +931,17 @@ class DeepReachHopf(Experiment):
                     xlims, ylims = (-1.25, 1.25), (-0.5, 2.)
 
                 with torch.no_grad():
-                    model_results = self.model({'coords': input.cuda()})
+                    model_results = self.model({'coords': input.clone().cuda()}).copy()
                     values_learned = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach()).reshape(n_grid_len, n_grid_len).cpu()
-                
+                    
+                    if testing:
+                        if j == 0:
+                            model_results_1 = self.dataset.loaded_model_1({'coords': input[..., :-1].clone().cuda()}).copy()
+                            values_learned = self.dataset.loaded_dynamics_1.io_to_value(model_results_1['model_in'].detach(), model_results_1['model_out'].squeeze(dim=-1).detach()).detach().reshape(n_grid_len, n_grid_len).cpu()
+                        elif j == 4:
+                            model_results_2 = self.dataset.loaded_model_2({'coords': input[..., :-1].cuda()}).copy()
+                            values_learned = self.dataset.loaded_dynamics_2.io_to_value(model_results_2['model_in'].detach(), model_results_2['model_out'].squeeze(dim=-1).detach()).detach().reshape(n_grid_len, n_grid_len).cpu()
+                    
                 ax = fig.add_subplot(len(lambda_vals), len(solve_times), j*len(lambda_vals) + i + 1)
                 ax.set_title(f"t = {solve_times[i]:0.1f}, lambda = {lambda_vals[j]:1.1f}")
                 
@@ -932,7 +952,7 @@ class DeepReachHopf(Experiment):
                         plot_values,
                         levels=levels, extend="both", cmap=RdWhBl_vscaled)
                 
-                if values_gt.min() < 0. < values_gt.max() and (abs(lambda_vals[j]) in [0., 1.]):
+                if (abs(lambda_vals[j]) in [0., 1.]) and values_gt.min() < 0. < values_gt.max():
                     ax.contour(self.dataset.X1g * self.dataset.dynamics.state_var[0] + self.dataset.dynamics.state_mean[0], 
                                 self.dataset.X2g * self.dataset.dynamics.state_var[1] + self.dataset.dynamics.state_mean[1],
                                 values_gt, 

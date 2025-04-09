@@ -117,7 +117,7 @@ class ReachabilityDataset(Dataset):
         self.loaded_dynamics_1 = loaded_dynamics_1
         self.loaded_dynamics_2 = loaded_dynamics_2
         if loaded_model_1: self.loaded_model_1 = loaded_model_1.cuda()
-        if loaded_model_2: self.loaded_model_1 = loaded_model_2.cuda()
+        if loaded_model_2: self.loaded_model_2 = loaded_model_2.cuda()
         self.load_decomposed_models = loaded_model_1 is not None and loaded_model_2 is not None
 
         # Lambda Variation Options
@@ -126,7 +126,7 @@ class ReachabilityDataset(Dataset):
         self.lambda_int_2 = 0.2
         self.lambda_int_3 = 0.5
         self.zerolambda_LS = lambda_var and zerolambda_LS
-        self.LS_w_time_curr = LS_w_time_curr and use_hopf
+        self.LS_w_time_curr = LS_w_time_curr
 
         # Benchmark test only
         self.make_benchmark_gts = make_benchmark_gts
@@ -198,7 +198,7 @@ class ReachabilityDataset(Dataset):
 
         else:
             if self.super_pretrain or self.no_curriculum or (self.super_pretrained and not self.LS_w_time_curr):
-                times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin)) # during hopf pt, sample across all time?
+                times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin)) # during super pt, sample across all time?
             else:
                 times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * (self.counter/self.counter_end))
             times[-self.num_src_samples:, 0] = self.tMin # force include initial time samples
@@ -272,7 +272,7 @@ class ReachabilityDataset(Dataset):
         
         boundary_values = self.dynamics.boundary_fn(states_io, times_io)
 
-        ## Reach-Avoif Data
+        ## Reach-Avoid Data
         if self.dynamics.loss_type == 'brat_hjivi':
             reach_values = self.dynamics.reach_fn(states_io, times_io)
             avoid_values = self.dynamics.avoid_fn(states_io, times_io)
@@ -288,7 +288,7 @@ class ReachabilityDataset(Dataset):
                 bc_values_1 = self.dynamics.reach_fn_1(states_io, times_io)
                 bc_values_2 = self.dynamics.reach_fn_2(states_io, times_io)
 
-            if not self.dataset.load_decomposed_models:
+            if not self.load_decomposed_models:
                 if not self.lambda_var:
                     if self.solve_grad:
                         gt_decomposed_values_1, gt_decomposed_grads_1 = self.V_DP_1(model_coords.t())
@@ -306,12 +306,16 @@ class ReachabilityDataset(Dataset):
                         gt_decomposed_values_1 = self.V_DP_1(model_coords[..., :-1].t())
                         gt_decomposed_values_2 = self.V_DP_2(model_coords[..., :-1].t())
                         gt_decomposed_grads_1, gt_decomposed_grads_2 = torch.empty(0), torch.empty(0)
+            else:
+                gt_decomposed_values_1, gt_decomposed_values_2, gt_decomposed_grads_1, gt_decomposed_grads_2 = torch.empty(0), torch.empty(0), torch.empty(0), torch.empty(0)
                     
                 # FIXME: for BRAT decomp, need V_DP_2 == avoid_fn (NOT avoid_value)
 
             if self.lam_slice_super and self.lambda_var:
-                model_coords_poslam = torch.cat((model_coords[..., :-1], self.dynamics.lambda_target_hi + 0*model_coords[..., -2:-1]), -1) 
-                model_coords_neglam = torch.cat((model_coords[..., :-1], self.dynamics.lambda_target_lo + 0*model_coords[..., -2:-1]), -1) 
+                norm_lambda_target_hi = self.dynamics.lambda_target_hi / self.dynamics.state_var[-1]
+                norm_lambda_target_lo = self.dynamics.lambda_target_lo / self.dynamics.state_var[-1]
+                model_coords_poslam = torch.cat((model_coords[..., :-1], norm_lambda_target_hi + 0*model_coords[..., -2:-1]), -1) 
+                model_coords_neglam = torch.cat((model_coords[..., :-1], norm_lambda_target_lo + 0*model_coords[..., -2:-1]), -1) 
             else:
                 model_coords_poslam, model_coords_neglam = model_coords, model_coords
 
@@ -341,7 +345,7 @@ class ReachabilityDataset(Dataset):
         if self.super_pretrain and self.super_pretrain_counter == self.super_pretrain_iters:
             self.super_pretrain = False
             self.super_pretrained = True
-            print("\n\n ---------------- FINISHED SUPERVISOR PRETRAINING ------------------- \n")
+            print("\n\n ---------------- FINISHED SUPERVISION PRETRAINING ------------------- \n")
 
 
         if self.dynamics.loss_type == 'brt_hjivi':

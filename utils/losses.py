@@ -198,7 +198,7 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
                           dss_value_loss_1_divisor=10., dss_value_loss_2_divisor=10.,
                           dss_grad_loss_1_divisor=10., dss_grad_loss_2_divisor=10.,
                           lbss_value_loss_divisor=1., lbss_grad_loss_divisor=100.,
-                          grad_super=False):
+                          grad_super=False, grad_super_time=False):
     
     grad_super = grad_super and experiment.dataset.solve_grad # must solve to use
 
@@ -222,8 +222,12 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
                 decomposed_value_2_loss = values_neglam - decomposed_value_2
 
                 if grad_super:
-                    decomposed_grad_1_loss = grad_poslam[...,:-1] - decomposed_grad_1
-                    decomposed_grad_2_loss = grad_neglam[...,:-1] - decomposed_grad_2
+                    if grad_super_time:
+                        decomposed_grad_1_loss = grad_poslam[...,:-1] - decomposed_grad_1
+                        decomposed_grad_2_loss = grad_neglam[...,:-1] - decomposed_grad_2
+                    else:
+                        decomposed_grad_1_loss = grad_poslam[...,1:-1] - decomposed_grad_1[..., 1:]
+                        decomposed_grad_2_loss = grad_neglam[...,1:-1] - decomposed_grad_2[..., 1:]
 
                 if experiment.dataset.lam_slice_super:
                     dss_value_1_weight = 1 / dss_value_loss_1_divisor
@@ -250,12 +254,17 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
                 loss_dict['lbss_value_loss'] = lbss_value_loss / lbss_value_loss_divisor
 
                 if grad_super:
-
-                    if not experiment.dataset.lambda_var:
-                        lbss_grad_loss = grad - torch.cat((decomposed_grad_1, decomposed_grad_2), -1)[..., torch.argmax(decomposed_value_1, decomposed_value_2)] # debug
+                    if not experiment.dataset.lambda_var: #FIXME need to debug surely
+                        if grad_super_time:
+                            lbss_grad_loss = grad - torch.cat((decomposed_grad_1, decomposed_grad_2), -1)[..., torch.argmax(decomposed_value_1, decomposed_value_2)] # debug
+                        else:
+                            lbss_grad_loss = grad[..., 1:] - torch.cat((decomposed_grad_1, decomposed_grad_2), -1)[..., torch.argmax(decomposed_value_1, decomposed_value_2)][..., 1:] # debug
                     else:
-                        lbss_grad_loss = grad[...,:-1] - torch.cat((decomposed_grad_1, decomposed_grad_2), -1)[..., torch.argmax(decomposed_value_1, decomposed_value_2)] # debug
-
+                        if grad_super_time:
+                            lbss_grad_loss = grad[...,:-1] - torch.cat((decomposed_grad_1, decomposed_grad_2), -1)[..., torch.argmax(decomposed_value_1, decomposed_value_2)] # debug
+                        else:
+                            lbss_grad_loss = grad[...,1:-1] - torch.cat((decomposed_grad_1, decomposed_grad_2), -1)[..., torch.argmax(decomposed_value_1, decomposed_value_2)][..., 1:] # debug
+                            
                     loss_dict['lbss_grad_loss'] = lbss_grad_loss / lbss_grad_loss_divisor
 
                 # TODO?: for deformation, move dynamic weight multiplication in here for organization (scheduler can remain out)
@@ -270,7 +279,7 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
             # Lambda shift (non-lambda) decomposed values
             if experiment.dataset.lambda_var:
                 decomposed_value_1 = decomposed_value_1 - torch.nn.functional.relu(-state[..., -1])
-                decomposed_value_2 = decomposed_value_2 - torch.nn.functional.relu(state[..., -1])
+                decomposed_value_2 = decomposed_value_2 + torch.nn.functional.relu(state[..., -1])
 
             ## BRT
             if minWith == 'zero':
@@ -284,8 +293,14 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
 
             elif mulob_type == 'BRAAT':
 
-                diff_constraint_hom = torch.min(torch.max(dvdt - ham, value + bc_value_2), 
-                                                torch.max(value - bc_value_1, value + decomposed_value_2))
+                # diff_constraint_hom = torch.min(torch.max(dvdt - ham, value + bc_value_2), 
+                #                                 torch.max(value - bc_value_1, value + decomposed_value_2))
+                
+                diff_constraint_hom = torch.min(torch.max(dvdt - ham, value - bc_value_2), 
+                                                torch.max(value + bc_value_1, value - decomposed_value_2))
+                
+                # diff_constraint_hom = torch.min(torch.max(dvdt - ham, value + bc_value_2), 
+                #                                 torch.max(value - bc_value_1, -(value + decomposed_value_2)))
                 
             elif mulob_type == 'BRRT':
 

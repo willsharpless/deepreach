@@ -9,7 +9,7 @@ readonly canoe_lam_dyn="--dynamics_class CanoeNDlambda $base_params"
 
 readonly use_wandb="--use_wandb"
 # readonly use_wandb=""
-readonly wandb_project="mulob_decomposed_models"
+readonly wandb_project="mulob_BRAAT_tests"
 readonly wandb_parms="$use_wandb --wandb_project $wandb_project"
 
 readonly exp_dir_test="--experiments_dir ./runs/mulob/test"
@@ -17,20 +17,28 @@ readonly exp_dir_convr="--experiments_dir ./runs/mulob/ConveyorND/Conveyor2D/"
 readonly exp_dir_canoe="--experiments_dir ./runs/mulob/CanoeND/Canoe2D"
 
 # readonly gt_args="--num_epochs 10000 --counter_end 20000" #TODO: gt supervision
-readonly learn_params_fast="--num_epochs 5000 --counter_end 2000" # fast
-readonly learn_params="--num_epochs 20000 --counter_end 2000" # mid
-readonly learn_params_slow="--num_epochs 100000 --counter_end 20000" # mid
-readonly learn_params_long="--num_epochs 300000 --counter_end 40000" # long
+readonly learn_params_fast="--pretrain_iters 500 --num_epochs 5000 --counter_end 500" # fast
+readonly learn_params="--pretrain_iters 1000 --num_epochs 22000 --counter_end 1000" # mid
+readonly learn_params_slow="--pretrain_iters 2000 --num_epochs 100000 --counter_end 5000" # mid
+readonly learn_params_long="--pretrain_iters 2000 --num_epochs 300000 --counter_end 40000" # long
 
-## Conveyor
+readonly load_params="--load_decomposed_models --load_decomposed_model_name_1 ./runs/mulob/ConveyorND/Conveyor2D/reach_only_2D --load_decomposed_model_name_2 ./runs/mulob/ConveyorND/Conveyor2D/avoid_only_2D_fast2"
+readonly super_params="$load_params --super_pretrain --super_pretrain_iters 10000"
+# readonly super_params="$load_params --super_pretrain --super_pretrain_iters 10000 --solve_grad --grad_super"
 
-python run_experiment.py $convr_dyn --reach_only True $learn_params $exp_dir_convr --experiment_name reach_only_2D --wandb_name reach_only $wandb_parms
+### Conveyor
 
-# python run_experiment.py $convr_dyn --avoid_only True $learn_params_fast $exp_dir_convr --experiment_name avoid_only_2D_fast --wandb_name avoid_only $wandb_parms
+## Decomposed
+
+# python run_experiment.py $convr_dyn --reach_only True $learn_params_fast $exp_dir_convr --experiment_name reach_only_2D_fast2 --wandb_name reach_only $wandb_parms
 
 # python run_experiment.py $convr_dyn --reach_only True $learn_params $exp_dir_convr --experiment_name reach_only_2D --wandb_name reach_only $wandb_parms
 
+# python run_experiment.py $convr_dyn --avoid_only True $learn_params_fast $exp_dir_convr --experiment_name avoid_only_2D_fast2 --wandb_name avoid_only $wandb_parms
+
 # python run_experiment.py $convr_dyn --avoid_only True $learn_params $exp_dir_convr --experiment_name avoid_only_2D --wandb_name avoid_only $wandb_parms
+
+## Avoid only - axes
 
 # python run_experiment.py $convr_dyn --deepreach_model vanilla --avoid_only True --avoid_type axes $learn_params $exp_dir_convr --experiment_name avoid_only_2D_axes_vanilla #--wandb_name avoid_only $wandb_parms
 
@@ -40,17 +48,27 @@ python run_experiment.py $convr_dyn --reach_only True $learn_params $exp_dir_con
 
 # python run_experiment.py $convr_dyn --deepreach_model exact --avoid_only True --avoid_type axes $learn_params_long $exp_dir_convr --experiment_name avoid_only_2D_axes_long_exact --wandb_name avoid_only_exact $wandb_parms
 
+## BRAAT
+
 # python run_experiment.py $convr_dyn --old_brat True --deepreach_model exact $learn_params_slow $exp_dir_convr --experiment_name BRAT_slow_exact --wandb_name BRAT_slow_exact $wandb_parms
 
 # python run_experiment.py $convr_dyn --mulob_type BRAT --deepreach_model exact $learn_params_slow $exp_dir_convr --experiment_name BRAT_mulob_slow_exact --wandb_name BRAT_mulob_slow_exact $wandb_parms
 
-# python run_experiment.py $convr_dyn --mulob_type BRAAT --deepreach_model exact $learn_params_slow $exp_dir_convr --experiment_name BRAAT_slow_exact --wandb_name BRAAT_slow_exact $wandb_parms
+python run_experiment.py $convr_dyn $load_params --mulob_type BRAAT --deepreach_model exact $learn_params_slow $exp_dir_convr --experiment_name BRAAT_realdecomp_flipDV2 --wandb_name BRAAT_realdecomp_flipDV2 $wandb_parms
 
-# python run_experiment.py $convr_lam_dyn --mulob_type BRAAT --mulob_loss_type augment --lam_slice_supervision --deepreach_model exact $learn_params_slow $exp_dir_convr --experiment_name BRAAT_slow_exact_lam_lss --wandb_name BRAAT_slow_exact_lam_lss $wandb_parms
+# python run_experiment.py $convr_dyn --mulob_type BRAAT --deepreach_model exact $learn_params_slow $exp_dir_convr --experiment_name BRAAT_gtdecomp --wandb_name BRAAT_gtdecomp $wandb_parms
+
+# python run_experiment.py $convr_lam_dyn --mulob_type BRAAT --mulob_loss_type augment --lam_slice_super --deepreach_model exact $learn_params_slow $exp_dir_convr --experiment_name BRAAT_slow_exact_lam_lss --wandb_name BRAAT_slow_exact_lam_lss $wandb_parms
 
 # python run_experiment.py $convr_lam_dyn --mulob_type BRAAT --mulob_loss_type augment --deepreach_model exact $learn_params_slow $exp_dir_convr --experiment_name BRAAT_slow_exact_lam --wandb_name BRAAT_slow_exact_lam $wandb_parms
 
-## Canoe
+# super tests
+# python run_experiment.py $convr_lam_dyn $super_params --mulob_type BRAAT --mulob_loss_type augment --lam_slice_super --deepreach_model exact $learn_params $exp_dir_convr --experiment_name SUPER_TEST_BRAAT_lam_slice --wandb_name SUPER_TEST_BRAAT_lam_slice $wandb_parms
+
+# python run_experiment.py $convr_lam_dyn $super_params --mulob_type BRAAT --mulob_loss_type augment --deepreach_model exact $learn_params $exp_dir_convr --experiment_name SUPER_TEST_BRAAT_lam --wandb_name SUPER_TEST_BRAAT_lam $wandb_parms
+
+
+### Canoe
 
 # python run_experiment.py $canoe_dyn --reach_1_only True $learn_params_fast $exp_dir_canoe --experiment_name reach_1_only_2D_fast #--wandb_name reach_1_only $wandb_parms
 
