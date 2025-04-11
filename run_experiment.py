@@ -26,6 +26,7 @@ if __name__ == '__main__':
     p.add_argument('--experiments_dir', type=str, default='./runs', help='Where to save the experiment subdirectory.')
     p.add_argument('--experiment_name', type=str, default='test_run', help='Name of the experient subdirectory.') #FIXME: required=True instead of default
     p.add_argument('--use_wandb', default=False, action='store_true', help='use wandb for logging')
+    p.add_argument('--baseline', action='store_true', default=False, required=False, help='Baseline DeepReach method (no Hopf)')
 
     ## Hopf options
     p.add_argument('--hopf_loss', type=str, default='none', choices=['none', 'lin_val_diff', 'lin_val_grad_diff'], help='Method for using Hopf data')
@@ -82,7 +83,7 @@ if __name__ == '__main__':
     p.add_argument('--grad_super', action='store_true', default=False, required=False, help='Supervision of not only value but gradient')
     p.add_argument('--lam_slice_super', action='store_true', default=False, required=False, help='Limits supervision losses to data slices with fixed lambda values.')
     p.add_argument('--LS_w_time_curr', action='store_true', default=False, required=False, help='Do supervision with a temporal curriculum')
-    p.add_argument('--baseline', action='store_true', default=False, required=False, help='Baseline DeepReach method (no Hopf)')
+    p.add_argument('--gradual_pinn_loss', default=False, required=False, action='store_true', help='Flag to gradually introduce the HJ-PINN loss')
 
     ## Multi-Objective Loss Weights
     p.add_argument('--dss_value_loss_1_divisor', default=10., required=False, type=float, help='What to divide the mulob decomposed semi-supervision loss by for loss reweighting')
@@ -209,13 +210,13 @@ if __name__ == '__main__':
     #     opt = loaded_opt
         
     if opt.debug_params:
-        opt.pretrain_iters = 500
-        # opt.super_pretrain_iters = 2
+        opt.pretrain_iters = 1
+        opt.super_pretrain_iters = 2
         # opt.num_epochs = 20
         # opt.epochs_til_ckpt = 10
         # opt.super_pretrain_iters = 2000
         opt.num_epochs = 10000
-        opt.epochs_til_ckpt = 500
+        opt.epochs_til_ckpt = 5
         opt.use_bank = False
 
     if opt.capacity_test:
@@ -446,11 +447,14 @@ if __name__ == '__main__':
         print(f" - with the {orig_opt.mulob_loss_type} mulob loss")
         
         if orig_opt.lam_slice_super and dataset.lambda_var: 
-            print(f"   - with decomposed values being enforced only on lambda slices ({dynamics_inst.lambda_target_lo},{dynamics_inst.lambda_target_hi})")
+            print(f"   - with decomposed supervision being enforced only on lambda slices ({dynamics_inst.lambda_target_lo},{dynamics_inst.lambda_target_hi})")
         elif dataset.lambda_var:
-            print(f"   - with decomposed losses weighted by ReLU(+- lambda)")
+            print(f"   - with decomposed supervision losses weighted by ReLU(+- lambda)")
         if orig_opt.grad_super: 
             print(f"   - including gradients in supervision")
+        if orig_opt.gradual_pinn_loss:
+            print(f"   - gradually introducing the PINN loss")
+
     else: 
         print(" - via the original method (baseline).")
 
@@ -499,6 +503,7 @@ if __name__ == '__main__':
             nonlin_scale=orig_opt.nl_scale, nl_scale_epoch_step=orig_opt.nl_scale_epoch_step, nl_scale_epoch_post=orig_opt.nl_scale_epoch_post,
             record_temporal_loss=orig_opt.temporal_loss,
             fin_diff=orig_opt.fin_diff, fd_alpha_scale = orig_opt.fd_as, fd_delta_x_scale = orig_opt.fd_dxs, fd_delta_t_scale = orig_opt.fd_dts,
+            gradual_pinn_loss=orig_opt.gradual_pinn_loss,
             )
 
     if (mode == 'all') or (mode == 'test'):

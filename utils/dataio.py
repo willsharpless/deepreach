@@ -788,6 +788,7 @@ class ReachabilityDataset(Dataset):
 
             self.model_states_grid = torch.cat((score_plane1, score_plane2, score_plane3), dim=0)
             self.n_grid_pts = 3 * self.n_grid_pts_2d
+            self.model_states_grid_one_plane = score_plane1
 
             times = torch.full((self.n_grid_pts, 1), self.tMin) # TODO: remove first time-point if model='exact'
             self.model_coords_grid_allt = torch.cat((times, self.model_states_grid), dim=1) 
@@ -828,13 +829,13 @@ class ReachabilityDataset(Dataset):
         # self.model_coords_grid_allt_hi = self.model_coords_grid_allt_hi.cuda()
         self.model_states_grid = self.model_states_grid.cuda()
 
-        # TODO: isolated loading test, only turn on if testing
-        if not self.lambda_var:
-            test_times = torch.full((self.n_grid_pts_2d, 1), 2.) if self.dynamics.N>2 else torch.full((self.n_grid_pts_2d, 1), 2.)
-            test_states_grid = score_plane1 if self.dynamics.N>2 else self.model_states_grid_2d
-            self.interp_bc_check(test_times, test_states_grid, grid_L, grid_params, solution_grid)
+        ## Isolated loading test
+        # if not self.lambda_var:
+        #     test_times = torch.full((self.n_grid_pts_2d, 1), 2.) if self.dynamics.N>2 else torch.full((self.n_grid_pts_2d, 1), 2.)
+        #     test_states_grid = score_plane1 if self.dynamics.N>2 else self.model_states_grid_2d
+        #     self.interp_check(test_times, test_states_grid, grid_L, grid_params, solution_grid)
 
-    def interp_bc_check(self, test_times, test_states_grid, grid_L, grid_params, solution_grid, save_plot=False):
+    def interp_check(self, test_times, test_states_grid, grid_L, grid_params, solution_grid, save_plot=False):
         
         if not hasattr(self.dynamics, "name") or self.dynamics.name not in ["Conveyor","Canoe"]:
             raise NotImplementedError

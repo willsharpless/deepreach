@@ -108,6 +108,7 @@ class Experiment(ABC):
             deposit_blocking = True, deposit_blocking_period = 5000, # seg faults if nonblocking rn...,
             fin_diff = False, fd_alpha_scale = [2.5, 2., 1.5, 1.], 
             fd_delta_x_scale = [0.7, 0.5, 0.3, 0.1], fd_delta_t_scale = [0.05, 0.03, 0.02, 0.01],
+            gradual_pinn_loss = False
         ):
         was_eval = not self.model.training
         self.model.train()
@@ -155,7 +156,7 @@ class Experiment(ABC):
         ## Params
         total_steps = 0
         JIp_s_max, JIp_s = 0., 0.
-        total_pretrain_iters = self.dataset.pretrain_iters if hopf_loss=='none' else self.dataset.pretrain_iters + self.dataset.super_pretrain_iters
+        total_pretrain_iters = self.dataset.pretrain_iters if not self.dataset.super_pretrain else self.dataset.pretrain_iters + self.dataset.super_pretrain_iters
         self.total_pretrain_iters = total_pretrain_iters
         self.epochs = epochs
         nl_perc = 0.
@@ -163,10 +164,10 @@ class Experiment(ABC):
         ## Dynamic Weighting
         loss_weights = {'dirichlet': 1., 'hopf': 1., 'diff_constraint_hom': 1., 
                         'dss_value_1_loss': 1., 'dss_value_2_loss': 1., 
-                        'dss_grad_1_loss': 1., 'dss_vgrad_2_loss': 1., 
+                        'dss_grad_1_loss': 1., 'dss_grad_2_loss': 1., 
                         'lbss_value_loss': 1., 'lbss_grad_loss': 1.,
                         }
-        if diff_con_loss_incr:
+        if diff_con_loss_incr or gradual_pinn_loss:
             loss_weights['diff_constraint_hom'] = 0.
         if hopf_loss_decay_type == 'negative_exponential': 
             loss_weights['hopf'] = 1 - (hopf_loss_decay_w ** (epochs - 1 - total_pretrain_iters))
@@ -339,10 +340,10 @@ class Experiment(ABC):
                                 decomposed_grads_1 = self.dataset.loaded_dynamics_1.io_to_dv(loaded_model_results_1['model_in'], loaded_model_results_1['model_out'].squeeze(dim=-1)).detach() # NOTE: keeping time grad too now, add [..., 1:] otherwise
                                 decomposed_grads_2 = self.dataset.loaded_dynamics_2.io_to_dv(loaded_model_results_2['model_in'], loaded_model_results_2['model_out'].squeeze(dim=-1)).detach() 
 
-                            if hasattr(self.dataset.loaded_dynamics_2, 'avoid_only') and self.dataset.loaded_dynamics_2.avoid_only:
-                                decomposed_values_2 = -1 * decomposed_values_2 # avoid_only defined positively in DR, so flip
-                                if self.dataset.solve_grad:
-                                    decomposed_grads_2[..., 1:] = -1 * decomposed_grads_2[..., 1:]
+                            # if hasattr(self.dataset.loaded_dynamics_2, 'avoid_only') and self.dataset.loaded_dynamics_2.avoid_only:
+                            #     decomposed_values_2 = -1 * decomposed_values_2 # avoid_only defined positively in DR, so flip
+                            #     if self.dataset.solve_grad:
+                            #         decomposed_grads_2[..., 1:] = -1 * decomposed_grads_2[..., 1:]
 
                         # elif self.dataset.use_gt_decomposed:
                         else:
@@ -499,6 +500,9 @@ class Experiment(ABC):
                         if diff_con_loss_incr and epoch >= total_pretrain_iters:
                             loss_weights['diff_constraint_hom'] = 1 - loss_weights['hopf']
 
+                    if gradual_pinn_loss and epoch >= total_pretrain_iters:
+                        loss_weights['diff_constraint_hom'] = (epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters)
+
                     if self.dataset.memory_tracking:
                         print(f"Epoch {epoch} - after weight scheduler, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
                         print(f"Epoch {epoch} - after weight scheduler, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
@@ -596,6 +600,9 @@ class Experiment(ABC):
 
                             if hopf_loss_decay and epoch >= total_pretrain_iters:
                                 log_dict['hopf_weight'] = loss_weights['hopf']
+                                log_dict['pde_weight'] = loss_weights['diff_constraint_hom']
+
+                            if gradual_pinn_loss and epoch >= total_pretrain_iters:
                                 log_dict['pde_weight'] = loss_weights['diff_constraint_hom']
 
                             if self.dataset.solve_hopf and self.dataset.record_gt_metrics:
@@ -696,7 +703,7 @@ class DeepReachHopf(Experiment):
         self.N = N
         self.timing = timing
         if N == 2:
-            if hasattr(self.dataset.dynamics, 'name') and self.dataset.dynamics.name in ["Conveyor","Canoe"]:
+            if self.dataset.dynamics.name in ["Conveyor","Canoe"]:
                 if not self.dataset.lambda_var:
                     self.validate = self.validate2D_mulob
                 else:
@@ -708,7 +715,7 @@ class DeepReachHopf(Experiment):
             if self.dataset.lambda_var and self.dataset.dynamics.name == "LessLinear":
                 self.validate = self.validateNDlambda
             elif self.dataset.lambda_var and self.dataset.dynamics.name in ["Conveyor","Canoe"]:
-                self.validate = self.validateNDlambda_mulob
+                self.validate = self.validate2Dlambda_mulob
 
         pass        
     
@@ -900,7 +907,7 @@ class DeepReachHopf(Experiment):
         for i in range(len(solve_times)):
             for j in range(len(lambda_vals)):
 
-                states_input = self.dataset.model_states_grid
+                states_input = self.dataset.model_states_grid if not self.dataset.dynamics.N > 2 else self.model_states_grid_one_plane
                 times = torch.full((self.dataset.n_grid_pts_2d, 1), solve_times[i]).cuda()
                 input = torch.cat((times, states_input), dim=1) 
                 input[..., -1] = lambda_vals[j]/self.dataset.dynamics.state_var[-1] + 0*input[..., -1] # certain lambda

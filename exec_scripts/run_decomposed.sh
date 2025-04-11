@@ -9,7 +9,7 @@ readonly canoe_lam_dyn="--dynamics_class CanoeNDlambda $base_params"
 
 readonly use_wandb="--use_wandb"
 # readonly use_wandb=""
-readonly wandb_project="mulob_BRAAT_tests"
+readonly wandb_project="mulob_BRAAT_comp"
 readonly wandb_parms="$use_wandb --wandb_project $wandb_project"
 
 readonly exp_dir_test="--experiments_dir ./runs/mulob/test"
@@ -18,13 +18,13 @@ readonly exp_dir_canoe="--experiments_dir ./runs/mulob/CanoeND/Canoe2D"
 
 # readonly gt_args="--num_epochs 10000 --counter_end 20000" #TODO: gt supervision
 readonly learn_params_fast="--pretrain_iters 500 --num_epochs 5000 --counter_end 500" # fast
-readonly learn_params="--pretrain_iters 1000 --num_epochs 22000 --counter_end 1000" # mid
-readonly learn_params_slow="--pretrain_iters 2000 --num_epochs 100000 --counter_end 5000" # mid
+readonly learn_params="--pretrain_iters 500 --num_epochs 22000 --counter_end 1000" # mid
+readonly learn_params_slow="--pretrain_iters 2000 --num_epochs 50000 --counter_end 5000" # mid
 readonly learn_params_long="--pretrain_iters 2000 --num_epochs 300000 --counter_end 40000" # long
 
 readonly load_params="--load_decomposed_models --load_decomposed_model_name_1 ./runs/mulob/ConveyorND/Conveyor2D/reach_only_2D --load_decomposed_model_name_2 ./runs/mulob/ConveyorND/Conveyor2D/avoid_only_2D_fast2"
-readonly super_params="$load_params --super_pretrain --super_pretrain_iters 10000"
-# readonly super_params="$load_params --super_pretrain --super_pretrain_iters 10000 --solve_grad --grad_super"
+readonly super_pt_params="--super_pretrain --super_pretrain_iters 5000"
+# readonly super_params="--super_pretrain --super_pretrain_iters 10000 --solve_grad --grad_super"
 
 ### Conveyor
 
@@ -54,7 +54,7 @@ readonly super_params="$load_params --super_pretrain --super_pretrain_iters 1000
 
 # python run_experiment.py $convr_dyn --mulob_type BRAT --deepreach_model exact $learn_params_slow $exp_dir_convr --experiment_name BRAT_mulob_slow_exact --wandb_name BRAT_mulob_slow_exact $wandb_parms
 
-python run_experiment.py $convr_dyn $load_params --mulob_type BRAAT --deepreach_model exact $learn_params_slow $exp_dir_convr --experiment_name BRAAT_realdecomp_flipDV2 --wandb_name BRAAT_realdecomp_flipDV2 $wandb_parms
+# python run_experiment.py $convr_dyn $load_params --mulob_type BRAAT $learn_params_slow $exp_dir_convr --experiment_name BRAAT_std --wandb_name BRAAT_std $wandb_parms
 
 # python run_experiment.py $convr_dyn --mulob_type BRAAT --deepreach_model exact $learn_params_slow $exp_dir_convr --experiment_name BRAAT_gtdecomp --wandb_name BRAAT_gtdecomp $wandb_parms
 
@@ -66,6 +66,30 @@ python run_experiment.py $convr_dyn $load_params --mulob_type BRAAT --deepreach_
 # python run_experiment.py $convr_lam_dyn $super_params --mulob_type BRAAT --mulob_loss_type augment --lam_slice_super --deepreach_model exact $learn_params $exp_dir_convr --experiment_name SUPER_TEST_BRAAT_lam_slice --wandb_name SUPER_TEST_BRAAT_lam_slice $wandb_parms
 
 # python run_experiment.py $convr_lam_dyn $super_params --mulob_type BRAAT --mulob_loss_type augment --deepreach_model exact $learn_params $exp_dir_convr --experiment_name SUPER_TEST_BRAAT_lam --wandb_name SUPER_TEST_BRAAT_lam $wandb_parms
+
+
+# # standard BRAT
+# python run_experiment.py $convr_dyn --old_brat True $learn_params_slow $exp_dir_convr --experiment_name BRAT --wandb_name BRAT $wandb_parms
+
+# # standard BRAAT
+# python run_experiment.py $convr_dyn $load_params --mulob_type BRAAT $learn_params_slow $exp_dir_convr --experiment_name BRAAT --wandb_name BRAAT $wandb_parms
+
+# # lambda-var BRAAT
+# python run_experiment.py $convr_lam_dyn $load_params --mulob_type BRAAT $learn_params_slow $exp_dir_convr --experiment_name BRAAT_lam --wandb_name BRAAT_lam $wandb_parms
+
+# lambda-var BRAAT + lambda super vision on slices (w/wo time-curriculum, gradual pinn intro)
+python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 5000 --solve_grad --grad_super --lam_slice_super --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_slice_noTcurr_grad --wandb_name BRAAT_lam_super_slice_noTcurr_grad $wandb_parms
+
+python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 500 --solve_grad --grad_super --lam_slice_super --LS_w_time_curr --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_slice_wTcurr_grad --wandb_name BRAAT_lam_super_slice_wTcurr_grad $wandb_parms
+
+python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 5000 --solve_grad --grad_super --lam_slice_super --gradual_pinn_loss --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_slice_noTcurr_easepinn_grad --wandb_name BRAAT_lam_super_slice_noTcurr_easepinn_grad $wandb_parms
+
+# lambda-var BRAAT + lambda super vision across lam (w/wo time-curriculum, gradual pinn intro)
+python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 5000 --solve_grad --grad_super --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_free_noTcurr_grad --wandb_name BRAAT_lam_super_free_noTcurr_grad $wandb_parms
+
+python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 500 --solve_grad --grad_super --LS_w_time_curr --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_free_wTcurr_grad --wandb_name BRAAT_lam_super_free_wTcurr_grad $wandb_parms
+
+python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 5000 --solve_grad --grad_super --gradual_pinn_loss --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_slice_wTcurr_easepinn_grad --wandb_name BRAAT_lam_super_slice_wTcurr_easepinn_grad $wandb_parms
 
 
 ### Canoe
