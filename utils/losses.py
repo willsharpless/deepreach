@@ -219,15 +219,15 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
                 if not experiment.dataset.lambda_var: raise AssertionError("Augmented loss requires lambda-varying system")
                 
                 decomposed_value_1_loss = values_poslam - decomposed_value_1
-                decomposed_value_2_loss = values_neglam - decomposed_value_2
+                decomposed_value_2_loss = values_neglam + decomposed_value_2 if hasattr(experiment.dataset.dynamics, "avoid_fn") else values_neglam - decomposed_value_2
 
                 if grad_super:
                     if grad_super_time:
                         decomposed_grad_1_loss = grad_poslam[...,:-1] - decomposed_grad_1
-                        decomposed_grad_2_loss = grad_neglam[...,:-1] - decomposed_grad_2
+                        decomposed_grad_2_loss = grad_neglam[...,:-1] + decomposed_grad_2 if hasattr(experiment.dataset.dynamics, "avoid_fn") else grad_neglam[...,:-1] - decomposed_grad_2
                     else:
                         decomposed_grad_1_loss = grad_poslam[...,1:-1] - decomposed_grad_1[..., 1:]
-                        decomposed_grad_2_loss = grad_neglam[...,1:-1] - decomposed_grad_2[..., 1:]
+                        decomposed_grad_2_loss = grad_neglam[...,1:-1] + decomposed_grad_2[..., 1:] if hasattr(experiment.dataset.dynamics, "avoid_fn") else grad_neglam[...,1:-1] - decomposed_grad_2[..., 1:]
 
                 if experiment.dataset.lam_slice_super:
                     dss_value_1_weight = 1 / dss_value_loss_1_divisor
@@ -269,7 +269,6 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
 
                 # TODO?: for deformation, move dynamic weight multiplication in here for organization (scheduler can remain out)
 
-
         ## Compute PDE Loss (if no longer pretraining)
         if experiment.dataset.pretrained and (experiment.dataset.super_pretrained or not experiment.dataset.super_pretrain):
             
@@ -281,10 +280,6 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
                 decomposed_value_1 = decomposed_value_1 - torch.nn.functional.relu(-state[..., -1])
                 decomposed_value_2 = decomposed_value_2 + torch.nn.functional.relu(state[..., -1])
 
-            ## BRT
-            if minWith == 'zero':
-                ham = torch.clamp(ham, max=0.0)
-
             ## MultiObjective Losses
             if mulob_type == 'BRAT':
 
@@ -293,20 +288,18 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
 
             elif mulob_type == 'BRAAT':
 
-                # diff_constraint_hom = torch.min(torch.max(dvdt - ham, value + bc_value_2), 
-                #                                 torch.max(value - bc_value_1, value + decomposed_value_2))
-                
-                diff_constraint_hom = torch.min(torch.max(dvdt - ham, value - bc_value_2), 
-                                                torch.max(value + bc_value_1, value - decomposed_value_2))
-                
-                # diff_constraint_hom = torch.min(torch.max(dvdt - ham, value + bc_value_2), 
-                #                                 torch.max(value - bc_value_1, -(value + decomposed_value_2)))
+                diff_constraint_hom = torch.max(torch.min(dvdt - ham, value + bc_value_2), 
+                                                torch.min(value - bc_value_1, value + decomposed_value_2))
                 
             elif mulob_type == 'BRRT':
 
-                diff_constraint_hom = torch.min(dvdt - ham, torch.min(
-                                                torch.max(value - bc_value_2, value - decomposed_value_1), 
-                                                torch.max(value - bc_value_1, value - decomposed_value_2)))
+                # diff_constraint_hom = torch.min(dvdt - ham, torch.min(
+                #                                 torch.max(value - bc_value_2, value - decomposed_value_1), 
+                #                                 torch.max(value - bc_value_1, value - decomposed_value_2)))
+                
+                diff_constraint_hom = torch.max(dvdt - ham, torch.max(
+                                                torch.min(value - bc_value_2, value - decomposed_value_1), 
+                                                torch.min(value - bc_value_1, value - decomposed_value_2)))
                 
             loss_dict['diff_constraint_hom'] = torch.abs(diff_constraint_hom).sum()
 
