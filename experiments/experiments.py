@@ -96,16 +96,16 @@ class Experiment(ABC):
     def train(
             self, batch_size, epochs, lr, 
             steps_til_summary, epochs_til_checkpoint, 
-            loss_fn, loss_fn_baseline, clip_grad, use_lbfgs, adjust_relative_grads, 
+            loss_fn, clip_grad, use_lbfgs, use_sgd, adjust_relative_grads, 
             val_x_resolution, val_y_resolution, val_z_resolution, val_time_resolution,
             use_CSL, CSL_lr, CSL_dt, epochs_til_CSL, num_CSL_samples, CSL_loss_frac_cutoff, max_CSL_epochs, CSL_loss_weight, CSL_batch_size,
-            dual_lr=False, lr_decay_w=1., lr_hopf=2e-5, lr_hopf_decay_w=1., smoothing_factor=0.8, 
-            hopf_loss='none', hopf_loss_decay_early = True, hopf_loss_decay=True, hopf_loss_decay_w=0.9998,
-            reset_loss_w=False, reset_loss_period=0, 
-            diff_con_loss_incr=False, hopf_loss_decay_type = 'exponential',
-            nonlin_scale=False, nl_scale_epoch_step=10000, nl_scale_epoch_post=10000, 
-            record_temporal_loss = False, use_sgd=False,
-            deposit_blocking = True, deposit_blocking_period = 5000, # seg faults if nonblocking rn...,
+            # dual_lr=False, 
+            lr_decay_w=1., 
+            # lr_hopf=2e-5, lr_hopf_decay_w=1., 
+            smoothing_factor=0.8, 
+            # hopf_loss='none', hopf_loss_decay_early = True, hopf_loss_decay=True, hopf_loss_decay_w=0.9998,
+            # diff_con_loss_incr=False, hopf_loss_decay_type = 'exponential',
+            # nonlin_scale=False, nl_scale_epoch_step=10000, nl_scale_epoch_post=10000, 
             fin_diff = False, fd_alpha_scale = [2.5, 2., 1.5, 1.], 
             fd_delta_x_scale = [0.7, 0.5, 0.3, 0.1], fd_delta_t_scale = [0.05, 0.03, 0.02, 0.01],
             gradual_pinn_loss = False
@@ -117,23 +117,23 @@ class Experiment(ABC):
         train_dataloader = DataLoader(self.dataset, shuffle=True, batch_size=batch_size, pin_memory=True, num_workers=0) # num_workers > 0 => faster loading
 
         ## Define Optimizers and Schedulers ## TODO, would SGD be better than Adam?
-        if dual_lr and self.dataset.super_pretrain:
-            if use_sgd:
-                optim_hopf = torch.optim.SGD(params=self.model.parameters(), lr=lr_hopf, momentum=0.2)
-                optim_std = torch.optim.SGD(params=self.model.parameters(), lr=lr, momentum=0.2)
-            else:
-                optim_hopf = torch.optim.Adam(params=self.model.parameters(), lr=lr_hopf)
-                optim_std = torch.optim.Adam(params=self.model.parameters(), lr=lr)
-            lr_scheduler_hopf = torch.optim.lr_scheduler.ExponentialLR(optimizer=optim_hopf, gamma=lr_hopf_decay_w)
-            lr_scheduler_std = torch.optim.lr_scheduler.ExponentialLR(optimizer=optim_std, gamma=lr_decay_w)
-            optim = optim_hopf
-            lr_scheduler = lr_scheduler_hopf
+        # if dual_lr and self.dataset.super_pretrain:
+        #     if use_sgd:
+        #         optim_hopf = torch.optim.SGD(params=self.model.parameters(), lr=lr_hopf, momentum=0.2)
+        #         optim_std = torch.optim.SGD(params=self.model.parameters(), lr=lr, momentum=0.2)
+        #     else:
+        #         optim_hopf = torch.optim.Adam(params=self.model.parameters(), lr=lr_hopf)
+        #         optim_std = torch.optim.Adam(params=self.model.parameters(), lr=lr)
+        #     lr_scheduler_hopf = torch.optim.lr_scheduler.ExponentialLR(optimizer=optim_hopf, gamma=lr_hopf_decay_w)
+        #     lr_scheduler_std = torch.optim.lr_scheduler.ExponentialLR(optimizer=optim_std, gamma=lr_decay_w)
+        #     optim = optim_hopf
+        #     lr_scheduler = lr_scheduler_hopf
+        # else:
+        if use_sgd:
+            optim = torch.optim.SGD(params=self.model.parameters(), lr=lr, momentum=0.2)
         else:
-            if use_sgd:
-                optim = torch.optim.SGD(params=self.model.parameters(), lr=lr, momentum=0.2)
-            else:
-                optim = torch.optim.Adam(params=self.model.parameters(), lr=lr)
-            lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer=optim, gamma=lr_decay_w)
+            optim = torch.optim.Adam(params=self.model.parameters(), lr=lr)
+        lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer=optim, gamma=lr_decay_w)
 
         # copy settings from Raissi et al. (2019) and here 
         # https://github.com/maziarraissi/PINNs
@@ -159,20 +159,22 @@ class Experiment(ABC):
         total_pretrain_iters = self.dataset.pretrain_iters if not self.dataset.super_pretrain else self.dataset.pretrain_iters + self.dataset.super_pretrain_iters
         self.total_pretrain_iters = total_pretrain_iters
         self.epochs = epochs
-        nl_perc = 0.
+        # nl_perc = 0.
 
         ## Dynamic Weighting
-        loss_weights = {'dirichlet': 1., 'hopf': 1., 'diff_constraint_hom': 1., 
+        loss_weights = {'dirichlet': 1., 
+                        # 'hopf': 1., 
+                        'diff_constraint_hom': 1., 
                         'dss_value_1_loss': 1., 'dss_value_2_loss': 1., 
                         'dss_grad_1_loss': 1., 'dss_grad_2_loss': 1., 
                         'lbss_value_loss': 1., 'lbss_grad_loss': 1.,
                         }
-        if diff_con_loss_incr or gradual_pinn_loss:
+        if gradual_pinn_loss: # or diff_con_loss_incr
             loss_weights['diff_constraint_hom'] = 0.
-        if hopf_loss_decay_type == 'negative_exponential': 
-            loss_weights['hopf'] = 1 - (hopf_loss_decay_w ** (epochs - 1 - total_pretrain_iters))
-        if hopf_loss == 'lin_val_grad_diff':
-            loss_weights['hopf_grad'] = loss_weights['hopf']
+        # if hopf_loss_decay_type == 'negative_exponential': 
+        #     loss_weights['hopf'] = 1 - (hopf_loss_decay_w ** (epochs - 1 - total_pretrain_iters))
+        # if hopf_loss == 'lin_val_grad_diff':
+        #     loss_weights['hopf_grad'] = loss_weights['hopf']
         og_loss_weights = loss_weights.copy()
 
         ## Finite Differencing Weights
@@ -193,40 +195,40 @@ class Experiment(ABC):
                 time_interval_length = (self.dataset.counter/self.dataset.counter_end)*(self.dataset.tMax-self.dataset.tMin)
                 CSL_tMax = self.dataset.tMin + int(time_interval_length/CSL_dt)*CSL_dt
 
-                ## Reset Weights
-                if reset_loss_w and epoch % reset_loss_period == 0 and not self.dataset.pretrain and not self.dataset.super_pretrain:
-                    loss_weights = og_loss_weights.copy()
+                # ## Reset Weights
+                # if reset_loss_w and epoch % reset_loss_period == 0 and not self.dataset.pretrain and not self.dataset.super_pretrain:
+                #     loss_weights = og_loss_weights.copy()
 
-                ## If hopf-solving, Bank Deposits
-                if self.dataset.solve_hopf and epoch > self.dataset.pretrain_iters and (loss_weights['hopf'] > 0. or reset_loss_w):
+                # ## If hopf-solving, Bank Deposits
+                # if self.dataset.solve_hopf and epoch > self.dataset.pretrain_iters and (loss_weights['hopf'] > 0. or reset_loss_w):
                     
-                    ## Check Deposit Jobs
-                    if not deposit_blocking and self.dataset.hjpool.jobs: # self.dataset.hjpool.jobs # FIXME: fix segf's
-                        self.dataset.hjpool.check_jobs()
+                #     ## Check Deposit Jobs
+                #     if not deposit_blocking and self.dataset.hjpool.jobs: # self.dataset.hjpool.jobs # FIXME: fix segf's
+                #         self.dataset.hjpool.check_jobs()
                     
-                    ## Reorder Deposit Jobs
-                    elif (not deposit_blocking and not self.dataset.hjpool.jobs) or (deposit_blocking and (epoch-self.dataset.pretrain_iters) % deposit_blocking_period == 0):
+                #     ## Reorder Deposit Jobs
+                #     elif (not deposit_blocking and not self.dataset.hjpool.jobs) or (deposit_blocking and (epoch-self.dataset.pretrain_iters) % deposit_blocking_period == 0):
 
-                        if self.dataset.hjpool.hopf_warm_start:
-                            self.dataset.hjpool.solve_bank_deposit(model=self.model, n_splits=self.dataset.hopf_deposit_numsplits, blocking=deposit_blocking)
-                        else:
-                            self.dataset.hjpool.solve_bank_deposit(model=None, n_splits=self.dataset.hopf_deposit_numsplits, blocking=deposit_blocking)
+                #         if self.dataset.hjpool.hopf_warm_start:
+                #             self.dataset.hjpool.solve_bank_deposit(model=self.model, n_splits=self.dataset.hopf_deposit_numsplits, blocking=deposit_blocking)
+                #         else:
+                #             self.dataset.hjpool.solve_bank_deposit(model=None, n_splits=self.dataset.hopf_deposit_numsplits, blocking=deposit_blocking)
 
-                        self.dataset.solved_hopf_pts += self.dataset.hopf_bank_params["n_deposit"]
-                        self.max_solved_ix = min(self.dataset.solved_hopf_pts, self.dataset.hopf_bank_params["n_total"])
-                        print(f"In total, {self.dataset.solved_hopf_pts} hopf pts have been solved.\n")
+                #         self.dataset.solved_hopf_pts += self.dataset.hopf_bank_params["n_deposit"]
+                #         self.max_solved_ix = min(self.dataset.solved_hopf_pts, self.dataset.hopf_bank_params["n_total"])
+                #         print(f"In total, {self.dataset.solved_hopf_pts} hopf pts have been solved.\n")
 
-                        # if reset_loss_w: #TODO
-                        #     reset grad steps
+                #         # if reset_loss_w: #TODO
+                #         #     reset grad steps
 
                 ## Parameter Scaling for Nonlinearity Curriculum
                 not_pretraining = not(self.dataset.pretrain) and not(self.dataset.super_pretrain)
-                if nonlin_scale:
-                    if not_pretraining and ((epoch-total_pretrain_iters) % nl_scale_epoch_step) == 0 and epoch <= (epochs-nl_scale_epoch_post):
-                        nl_perc = ((epoch - total_pretrain_iters)/((epochs - nl_scale_epoch_post) - total_pretrain_iters)) # instead of epoch/(epochs-post), this gives 1 step to switch from hopf to pde loss w/o changin dynamcis
-                    elif epoch == (epochs - nl_scale_epoch_post) + 1: # jic epoch / nl_scale_epoch_step is not an integer
-                        nl_perc = 1
-                    self.dataset.dynamics.vary_nonlinearity(nl_perc)
+                # if nonlin_scale:
+                #     if not_pretraining and ((epoch-total_pretrain_iters) % nl_scale_epoch_step) == 0 and epoch <= (epochs-nl_scale_epoch_post):
+                #         nl_perc = ((epoch - total_pretrain_iters)/((epochs - nl_scale_epoch_post) - total_pretrain_iters)) # instead of epoch/(epochs-post), this gives 1 step to switch from hopf to pde loss w/o changin dynamcis
+                #     elif epoch == (epochs - nl_scale_epoch_post) + 1: # jic epoch / nl_scale_epoch_step is not an integer
+                #         nl_perc = 1
+                #     self.dataset.dynamics.vary_nonlinearity(nl_perc)
 
                 ## Learn
                 for step, (model_input, gt) in enumerate(train_dataloader):
@@ -385,74 +387,7 @@ class Experiment(ABC):
                                         decomposed_values_1, decomposed_values_2, 
                                         decomposed_grads_1, decomposed_grads_2,
                                         values_poslam, dvs_poslam, values_neglam, dvs_neglam)
-
-                    ## Linear Supervision BRT (non-baseline)
-                    elif hopf_loss != 'none':
-                        hopf_values = gt['hopf_values']
-
-                        if hopf_loss == 'lin_val_grad_diff':
-                            hopf_grads = gt['hopf_grads']
-                                            
-                        ## Load from Reference Linear Model
-                        if self.dataset.load_hopf_model:
-                            with torch.inference_mode():
-                                if not self.dataset.lambda_var:
-                                    loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords']})
-                                    hopf_values = self.dataset.dynamics.io_to_value(loaded_model_results['model_in'], loaded_model_results['model_out'].squeeze(dim=-1)).detach()
-                                else:
-                                    if not self.dataset.zerolambda_LS or self.dataset.pretrain or self.dataset.super_pretrain or self.dataset.super_pretrain_counter == self.dataset.super_pretrain_iters:
-                                        loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords'][..., :-1]}) # remove lambda
-                                        hopf_values = self.dataset.dynamics.io_to_value(model_input['model_coords'], loaded_model_results['model_out'].squeeze(dim=-1)).detach() 
-                                    else: # use model coords with lambda=0 only for linear value
-                                        loaded_model_results = self.dataset.loaded_model({'coords': gt['model_coords_hopf'][..., :-1]}) # remove lambda
-                                        hopf_values = self.dataset.dynamics.io_to_value(gt['model_coords_hopf'], loaded_model_results['model_out'].squeeze(dim=-1)).detach() 
-
-                        if self.dataset.load_hopf_model and hopf_loss == 'lin_val_grad_diff':
-                            if not self.dataset.lambda_var:
-                                loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords']})
-                                hopf_grads = self.dataset.dynamics.io_to_dv(loaded_model_results['model_in'], loaded_model_results['model_out'].squeeze(dim=-1))[..., 1:].detach()
-                            
-                            # If we want grads from a loaded linear model that does not have same dim as current model (eg lambda variation), need to use loaded model dynamics class
-                            else:
-                                if not self.dataset.zerolambda_LS or self.dataset.pretrain or self.dataset.super_pretrain or self.dataset.super_pretrain_counter == self.dataset.super_pretrain_iters:
-                                    loaded_model_results = self.dataset.loaded_model({'coords': model_input['model_coords'][..., :-1]}) # remove lambda
-                                    # loaded_results_w_lambda = torch.cat((loaded_model_results['model_in'], torch.zeros(1, self.dataset.numpoints, 1).cuda()), dim=2) # put lambda back just for next line (removed b4 loss)
-                                    # hopf_grads = self.dataset.dynamics.io_to_dv(loaded_model_results['model_in'], loaded_model_results['model_out'].squeeze(dim=-1)).detach()
-                                    hopf_grads = self.dataset.loaded_dynamics.io_to_dv(loaded_model_results['model_in'], loaded_model_results['model_out'].squeeze(dim=-1))[..., 1:].detach()
-                                else:
-                                    loaded_model_results = self.dataset.loaded_model({'coords': gt['model_coords_hopf'][..., :-1]}) # remove lambda
-                                    hopf_grads = self.dataset.loaded_dynamics.io_to_dv(loaded_model_results['model_in'], loaded_model_results['model_out'].squeeze(dim=-1))[..., 1:].detach()    
-                            
-                        # if self.dataset.memory_tracking:
-                        #     print(f"Epoch {epoch} - w/ losses, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
-                        #     print(f"Epoch {epoch} - w/ losses, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
-                        #     print()
-
-                        ## Seperate Hopf Coords (for the hopf loss to allow unrestricted sampling for PDE loss OR supervision on lambda=0 data only)
-                        if (not self.dataset.use_bank or self.dataset.super_pretrain_counter == 0) and (not self.dataset.zerolambda_LS or (self.dataset.pretrain or self.dataset.super_pretrain or self.dataset.super_pretrain_counter == self.dataset.super_pretrain_iters)):
-                            
-                            learned_hopf_values = values
-                            if hopf_loss == 'lin_val_grad_diff':
-                                if not self.dataset.lambda_var:
-                                    learned_hopf_grads = dvdx
-                                else:
-                                    learned_hopf_grads = dvdx[..., :-1] # remove lambda grad
-                        else:
-                            model_results_hopf = self.model({'coords': gt['model_coords_hopf']})
-                            learned_hopf_values = self.dataset.dynamics.io_to_value(model_results_hopf['model_in'].detach(), model_results_hopf['model_out'].squeeze(dim=-1))
-                            
-                            if hopf_loss == 'lin_val_grad_diff':
-                                if not self.dataset.lambda_var:
-                                    learned_hopf_grads = self.dataset.dynamics.io_to_dv(model_results_hopf['model_in'], model_results_hopf['model_out'].squeeze(dim=-1))[..., 1:]
-                                else:
-                                    learned_hopf_grads = self.dataset.dynamics.io_to_dv(model_results_hopf['model_in'], model_results_hopf['model_out'].squeeze(dim=-1))[..., 1:-1] # remove lambda grad
-
-                        if hopf_loss == 'lin_val_grad_diff':
-                            losses = loss_fn(states, values, dvdt, dvdx, boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, learned_hopf_values, hopf_grads, learned_hopf_grads, epoch, state_times)
-                        else:
-                            losses = loss_fn(states, values, dvdt, dvdx, boundary_values, dirichlet_masks, model_results['model_out'], hopf_values, learned_hopf_values, epoch, state_times)
-                            # losses = loss_fn_baseline(states, values, dvdt, dvdx, boundary_values, dirichlet_masks, model_results['model_out'])
-                            # print("\nUsing the loaded hopf values")                    
+                                        
                     else:
                         raise NotImplementedError
                     
@@ -463,47 +398,32 @@ class Experiment(ABC):
 
                     if self.timing: torch.cuda.synchronize(); print("Loss Computation took:", time.time() - start_time_2)
 
-                    ## Compute & Record Temporal Loss Quartiles #FIXME doesn't work for baseline
-                    if record_temporal_loss:
-                        losses_t = {}
-                        temporal_loss_times = [0., 0.25, 0.5, 0.75, 1.] 
-                        for ti in range(len(temporal_loss_times)-1):
-                            tp, tm = temporal_loss_times[ti + 1], temporal_loss_times[ti]
-                            t_ix = (state_times < tp) * (state_times >= tm)
-                            state_times_t, states_t, values_t, dvs_t, boundary_values_t = state_times[t_ix, ...].unsqueeze(0), states[t_ix, ...].unsqueeze(0), values[t_ix].unsqueeze(0), dvs[t_ix, ...].unsqueeze(0), boundary_values[t_ix].unsqueeze(0)
-                            dirichlet_masks_t, model_results_t, hopf_values_t, learned_hopf_values_t = dirichlet_masks[t_ix].unsqueeze(0), model_results['model_out'][t_ix].unsqueeze(0), hopf_values[t_ix].unsqueeze(0), learned_hopf_values[t_ix].unsqueeze(0)
-                            if hopf_loss == 'lin_val_diff':
-                                losses_t[str(tp)] = loss_fn(states_t, values_t, dvs_t[..., 0], dvs_t[..., 1:], boundary_values_t, dirichlet_masks_t, model_results_t, hopf_values_t, learned_hopf_values_t, epoch, state_times_t)
-                            elif hopf_loss == 'lin_val_grad_diff':
-                                hopf_grads_t, learned_grads_t = hopf_grads[t_ix].unsqueeze(0), learned_hopf_grads[t_ix].unsqueeze(0)
-                                losses_t[str(tp)] = loss_fn(states_t, values_t, dvs_t[..., 0], dvs_t[..., 1:], boundary_values_t, dirichlet_masks_t, model_results_t, hopf_values_t, learned_hopf_values_t, hopf_grads_t, learned_grads_t, epoch, state_times_t)
-
-                    ## Switch Optimizers/Rates (after Hopf Pretraining)
-                    if self.timing: torch.cuda.synchronize(); start_time_2 = time.time()
-                    if dual_lr and not(self.dataset.super_pretrain) and self.dataset.super_pretrained:
-                        optim = optim_std
-                        lr_scheduler = lr_scheduler_std
-                    if self.timing: torch.cuda.synchronize(); print("Loss Scheduler took:", time.time() - start_time_2)
+                    # ## Switch Optimizers/Rates (after Hopf Pretraining)
+                    # if self.timing: torch.cuda.synchronize(); start_time_2 = time.time()
+                    # if dual_lr and not(self.dataset.super_pretrain) and self.dataset.super_pretrained:
+                    #     optim = optim_std
+                    #     lr_scheduler = lr_scheduler_std
+                    # if self.timing: torch.cuda.synchronize(); print("Loss Scheduler took:", time.time() - start_time_2)
                     
-                    ## Decay Hopf Loss(es)
-                    if hopf_loss_decay and hopf_loss != 'none': #                         
-                        if epoch >= total_pretrain_iters or hopf_loss_decay_early:
-                            if hopf_loss_decay_type == 'exponential' and epoch > total_pretrain_iters or hopf_loss_decay_early:
-                                loss_weights['hopf'] = hopf_loss_decay_w * loss_weights['hopf']
-                            elif hopf_loss_decay_type == 'linear':
-                                loss_weights['hopf'] = 1 - hopf_loss_decay_w * (epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters)
-                            elif hopf_loss_decay_type == 'negative_exponential' and epoch > total_pretrain_iters:
-                                loss_weights['hopf'] = 1 - ((1 - loss_weights['hopf']) / hopf_loss_decay_w)
-                            elif hopf_loss_decay_type not in ['exponential', 'linear', 'negative_exponential']:
-                                raise NotImplementedError
-                        loss_weights['hopf'] = min(max(loss_weights['hopf'], 0.), 1.)
+                    # ## Decay Loss(es)
+                    # if hopf_loss_decay and hopf_loss != 'none': #                         
+                    #     if epoch >= total_pretrain_iters or hopf_loss_decay_early:
+                    #         if hopf_loss_decay_type == 'exponential' and epoch > total_pretrain_iters or hopf_loss_decay_early:
+                    #             loss_weights['hopf'] = hopf_loss_decay_w * loss_weights['hopf']
+                    #         elif hopf_loss_decay_type == 'linear':
+                    #             loss_weights['hopf'] = 1 - hopf_loss_decay_w * (epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters)
+                    #         elif hopf_loss_decay_type == 'negative_exponential' and epoch > total_pretrain_iters:
+                    #             loss_weights['hopf'] = 1 - ((1 - loss_weights['hopf']) / hopf_loss_decay_w)
+                    #         elif hopf_loss_decay_type not in ['exponential', 'linear', 'negative_exponential']:
+                    #             raise NotImplementedError
+                    #     loss_weights['hopf'] = min(max(loss_weights['hopf'], 0.), 1.)
                         
-                        if hopf_loss == 'lin_val_grad_diff':
-                            loss_weights['hopf_grad'] = loss_weights['hopf'] 
+                    #     if hopf_loss == 'lin_val_grad_diff':
+                    #         loss_weights['hopf_grad'] = loss_weights['hopf'] 
 
-                        ## Incrementally Introduce Differential Constraint Loss (After All Pretraining)
-                        if diff_con_loss_incr and epoch >= total_pretrain_iters:
-                            loss_weights['diff_constraint_hom'] = 1 - loss_weights['hopf']
+                    #     ## Incrementally Introduce Differential Constraint Loss (After All Pretraining)
+                    #     if diff_con_loss_incr and epoch >= total_pretrain_iters:
+                    #         loss_weights['diff_constraint_hom'] = 1 - loss_weights['hopf']
 
                     if gradual_pinn_loss and epoch >= total_pretrain_iters:
                         loss_weights['diff_constraint_hom'] = (epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters)
@@ -517,7 +437,7 @@ class Experiment(ABC):
                     if self.timing: torch.cuda.synchronize(); start_time_2 = time.time()
                     train_loss = 0.
                     for loss_name, loss in losses.items():
-                        single_loss = loss.mean() ## TODO: why did the prev authors put this here?
+                        single_loss = loss.mean() ## TODO: why did prev authors put here?
                         writer.add_scalar(loss_name, single_loss, total_steps)
                         train_loss += loss_weights[loss_name] * single_loss
 
@@ -589,8 +509,8 @@ class Experiment(ABC):
                             for loss_name, loss in losses.items():
                                 log_dict[loss_name + "_loss"] = loss
 
-                            if nonlin_scale and not(self.dataset.pretrain) and not(self.dataset.super_pretrain):
-                                log_dict["Nonlinearity Scale"] = nl_perc
+                            # if nonlin_scale and not(self.dataset.pretrain) and not(self.dataset.super_pretrain):
+                            #     log_dict["Nonlinearity Scale"] = nl_perc
 
                             if self.dataset.record_gt_metrics:
 
@@ -604,23 +524,12 @@ class Experiment(ABC):
                                 if self.dataset.solve_grad:
                                     log_dict["Mean Squared Error of Spatial Gradient"] = DVXmse
 
-                            if hopf_loss_decay and epoch >= total_pretrain_iters:
-                                log_dict['hopf_weight'] = loss_weights['hopf']
-                                log_dict['pde_weight'] = loss_weights['diff_constraint_hom']
+                            # if hopf_loss_decay and epoch >= total_pretrain_iters:
+                            #     log_dict['hopf_weight'] = loss_weights['hopf']
+                            #     log_dict['pde_weight'] = loss_weights['diff_constraint_hom']
 
                             if gradual_pinn_loss and epoch >= total_pretrain_iters:
                                 log_dict['pde_weight'] = loss_weights['diff_constraint_hom']
-
-                            if self.dataset.solve_hopf and self.dataset.record_gt_metrics:
-                                log_dict['Hopf Value MSE'] = self.dataset.hjpool.alg_iter_MSE
-                                log_dict['Hopf Gradient MSE'] = self.dataset.hjpool.alg_iter_grad_MSE
-                                log_dict['Hopf Compute Time (ppt)'] = self.dataset.hjpool.alg_iter_comp_time
-
-                            if record_temporal_loss:
-                                for ti in range(len(temporal_loss_times)-1):
-                                    tps = str(temporal_loss_times[ti+1])
-                                    for loss_name, loss in losses_t[tps].items():
-                                        log_dict[loss_name + "_loss_t" + tps] = loss
 
                             wandb.log(log_dict)
 
@@ -704,7 +613,7 @@ class DeepReach(Experiment):
     def init_special(self):
         pass
 
-class DeepReachHopf(Experiment):
+class DeepReachMulob(Experiment):
     def init_special(self, N=2, timing=False):
         self.N = N
         self.timing = timing
@@ -1452,7 +1361,7 @@ class DeepReachHopf(Experiment):
             self.model.requires_grad_(True)   
 
     ## TODO
-    def validateNDlambdamulob(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution, plot_value=True):
+    def validateNDlambda_mulob(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution, plot_value=True):
         was_training = self.model.training
         self.model.eval()
         self.model.requires_grad_(False)
