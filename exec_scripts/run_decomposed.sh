@@ -77,19 +77,28 @@ readonly super_pt_params="--super_pretrain --super_pretrain_iters 5000"
 # # lambda-var BRAAT
 # python run_experiment.py $convr_lam_dyn $load_params --mulob_type BRAAT $learn_params_slow $exp_dir_convr --experiment_name BRAAT_lam --wandb_name BRAAT_lam $wandb_parms
 
-# lambda-var BRAAT + lambda super vision on slices (w/wo time-curriculum, gradual pinn intro)
-python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 5000 --solve_grad --grad_super --lam_slice_super --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_slice_noTcurr_grad --wandb_name BRAAT_lam_super_slice_noTcurr_grad $wandb_parms
+# # lambda-var BRAAT + lambda super vision on slices (w/wo time-curriculum, gradual pinn intro)
+# python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 5000 --solve_grad --grad_super --lam_slice_super --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_slice_noTcurr_grad --wandb_name BRAAT_lam_super_slice_noTcurr_grad $wandb_parms
 
-python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 500 --solve_grad --grad_super --lam_slice_super --LS_w_time_curr --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_slice_wTcurr_grad --wandb_name BRAAT_lam_super_slice_wTcurr_grad $wandb_parms
+# python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 500 --solve_grad --grad_super --lam_slice_super --LS_w_time_curr --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_slice_wTcurr_grad --wandb_name BRAAT_lam_super_slice_wTcurr_grad $wandb_parms
 
-python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 5000 --solve_grad --grad_super --lam_slice_super --gradual_pinn_loss --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_slice_noTcurr_easepinn_grad --wandb_name BRAAT_lam_super_slice_noTcurr_easepinn_grad $wandb_parms
+# python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 5000 --solve_grad --grad_super --lam_slice_super --gradual_pinn_loss --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_slice_noTcurr_easepinn_grad --wandb_name BRAAT_lam_super_slice_noTcurr_easepinn_grad $wandb_parms
 
-# lambda-var BRAAT + lambda super vision across lam (w/wo time-curriculum, gradual pinn intro)
-python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 5000 --solve_grad --grad_super --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_free_noTcurr_grad --wandb_name BRAAT_lam_super_free_noTcurr_grad $wandb_parms
+# # lambda-var BRAAT + lambda super vision across lam (w/wo time-curriculum, gradual pinn intro)
+# python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 5000 --solve_grad --grad_super --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_free_noTcurr_grad --wandb_name BRAAT_lam_super_free_noTcurr_grad $wandb_parms
 
-python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 500 --solve_grad --grad_super --LS_w_time_curr --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_free_wTcurr_grad --wandb_name BRAAT_lam_super_free_wTcurr_grad $wandb_parms
+# python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 500 --solve_grad --grad_super --LS_w_time_curr --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_free_wTcurr_grad --wandb_name BRAAT_lam_super_free_wTcurr_grad $wandb_parms
 
-python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 5000 --solve_grad --grad_super --gradual_pinn_loss --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_slice_wTcurr_easepinn_grad --wandb_name BRAAT_lam_super_slice_wTcurr_easepinn_grad $wandb_parms
+# python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 5000 --solve_grad --grad_super --gradual_pinn_loss --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_slice_wTcurr_easepinn_grad --wandb_name BRAAT_lam_super_slice_wTcurr_easepinn_grad $wandb_parms
+
+# speed check
+python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 5000 --lam_slice_super --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_slice_noTcurr_grad_faster --wandb_name BRAAT_lam_super_slice_noTcurr_faster $wandb_parms
+python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 5000 --solve_grad --grad_super --lam_slice_super --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_slice_noTcurr_grad_faster --wandb_name BRAAT_lam_super_slice_noTcurr_grad_faster $wandb_parms
+python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 5000 --solve_grad --grad_super_time --lam_slice_super --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_slice_noTcurr_gradtime_faster --wandb_name BRAAT_lam_super_slice_noTcurr_gradtime_faster $wandb_parms
+
+python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 5000  --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_free_noTcurr_grad_faster --wandb_name BRAAT_lam_super_free_noTcurr_faster $wandb_parms
+python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 5000 --solve_grad --grad_super --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_free_noTcurr_grad_faster --wandb_name BRAAT_lam_super_free_noTcurr_grad_faster $wandb_parms
+python run_experiment.py $convr_lam_dyn $load_params --super_pretrain --super_pretrain_iters 5000 --solve_grad --grad_super_time --mulob_type BRAAT --mulob_loss_type augment $learn_params $exp_dir_convr --experiment_name BRAAT_lam_super_free_noTcurr_gradtime_faster --wandb_name BRAAT_lam_super_free_noTcurr_gradtime_faster $wandb_parms
 
 
 ### Canoe

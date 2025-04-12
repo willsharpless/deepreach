@@ -32,7 +32,8 @@ class ReachabilityDataset(Dataset):
 
                  loaded_model_1=None, loaded_model_2=None,
                  loaded_dynamics_1=None, loaded_dynamics_2=None,
-                 lam_slice_super=False,
+                 lam_slice_super=False, numpoints_super=10000,
+                 grad_super=False, grad_super_time=False,
                  ):
 
         self.dynamics = dynamics
@@ -50,6 +51,9 @@ class ReachabilityDataset(Dataset):
         self.num_target_samples = num_target_samples
 
         self.lam_slice_super = lam_slice_super
+        self.numpoints_super = numpoints_super
+        self.grad_super = grad_super
+        self.grad_super_time = grad_super_time
 
         # self.use_hopf = use_hopf # FIXME: old name, means use linear data (not necessarily solve hopf formula)
         self.use_hopf = False
@@ -314,10 +318,14 @@ class ReachabilityDataset(Dataset):
             if self.lam_slice_super and self.lambda_var:
                 norm_lambda_target_hi = self.dynamics.lambda_target_hi / self.dynamics.state_var[-1]
                 norm_lambda_target_lo = self.dynamics.lambda_target_lo / self.dynamics.state_var[-1]
-                model_coords_poslam = torch.cat((model_coords[..., :-1], norm_lambda_target_hi + 0*model_coords[..., -2:-1]), -1) 
-                model_coords_neglam = torch.cat((model_coords[..., :-1], norm_lambda_target_lo + 0*model_coords[..., -2:-1]), -1) 
+
+                model_coords_poslam = model_coords[:self.numpoints_super, :]
+                model_coords_poslam[..., -1] = norm_lambda_target_hi
+                
+                model_coords_neglam = model_coords[:self.numpoints_super, :]
+                model_coords_neglam[..., -1] = norm_lambda_target_lo
             else:
-                model_coords_poslam, model_coords_neglam = model_coords, model_coords
+                model_coords_poslam, model_coords_neglam = torch.empty(0), torch.empty(0)
 
         if self.pretrain:
             dirichlet_masks = torch.ones(model_coords.shape[0]) > 0

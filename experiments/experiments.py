@@ -114,7 +114,7 @@ class Experiment(ABC):
         self.model.train()
         self.model.requires_grad_(True)
 
-        train_dataloader = DataLoader(self.dataset, shuffle=True, batch_size=batch_size, pin_memory=True, num_workers=0)
+        train_dataloader = DataLoader(self.dataset, shuffle=True, batch_size=batch_size, pin_memory=True, num_workers=0) # num_workers > 0 => faster loading
 
         ## Define Optimizers and Schedulers ## TODO, would SGD be better than Adam?
         if dual_lr and self.dataset.super_pretrain:
@@ -233,14 +233,14 @@ class Experiment(ABC):
                     start_time = time.time()
 
                     ## Evaluate Sample with Learned Model
-                    if self.timing: start_time_2 = time.time()
+                    if self.timing: torch.cuda.synchronize(); start_time_2 = time.time()
                     model_input = {key: value.cuda() for key, value in model_input.items()}
                     gt = {key: value.cuda() for key, value in gt.items()}
                     model_results = self.model({'coords': model_input['model_coords']})
-                    if self.timing: print("Sample Evaluation took:", time.time() - start_time_2)
+                    if self.timing: torch.cuda.synchronize(); print("Sample Evaluation took:", time.time() - start_time_2)
 
                     ## Pre-Loss Computation
-                    if self.timing: start_time_2 = time.time()
+                    if self.timing: torch.cuda.synchronize(); start_time_2 = time.time()
 
                     ## Evaluate Model
                     results_coord = self.dataset.dynamics.input_to_coord(model_results['model_in'].detach())
@@ -292,7 +292,7 @@ class Experiment(ABC):
                         reach_values = gt['reach_values']
                         avoid_values = gt['avoid_values']
 
-                    if self.timing: print("Pre-loss Computation took:", time.time() - start_time_2)
+                    if self.timing: torch.cuda.synchronize(); print("Pre-loss Computation took:", time.time() - start_time_2)
 
                     if self.dataset.memory_tracking:
                         print(f"Epoch {epoch} - init, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
@@ -300,7 +300,7 @@ class Experiment(ABC):
                         print()  
 
                     ## Compute Loss
-                    if self.timing: start_time_2 = time.time()
+                    if self.timing: torch.cuda.synchronize(); start_time_2 = time.time()
 
                     ## Standard BRT
                     if self.dataset.dynamics.loss_type == 'brt_hjivi':
@@ -362,18 +362,23 @@ class Experiment(ABC):
                         
                         # For fixed lambda slice supervision, infer model values on slices
                         if self.dataset.lam_slice_super:
-                            
+
                             model_results_poslam = self.model({'coords': gt['model_coords_poslam']})
                             model_results_neglam = self.model({'coords': gt['model_coords_neglam']})
 
                             values_poslam = self.dataset.dynamics.io_to_value(model_results_poslam['model_in'].detach(), model_results_poslam['model_out'].squeeze(dim=-1))
                             values_neglam = self.dataset.dynamics.io_to_value(model_results_neglam['model_in'].detach(), model_results_neglam['model_out'].squeeze(dim=-1))
                             
-                            dvs_poslam = self.dataset.dynamics.io_to_dv(model_results_poslam['model_in'], model_results_poslam['model_out'].squeeze(dim=-1))
-                            dvs_neglam = self.dataset.dynamics.io_to_dv(model_results_neglam['model_in'], model_results_neglam['model_out'].squeeze(dim=-1))
+                            dvs_poslam = self.dataset.dynamics.io_to_dv(model_results_poslam['model_in'], model_results_poslam['model_out'].squeeze(dim=-1)) if self.dataset.grad_super else torch.empty(0)
+                            dvs_neglam = self.dataset.dynamics.io_to_dv(model_results_neglam['model_in'], model_results_neglam['model_out'].squeeze(dim=-1)) if self.dataset.grad_super else torch.empty(0)
 
+                        ## For free lambda supervision, use same coords and thus values
                         else:
-                            values_poslam, dvs_poslam, values_neglam, dvs_neglam = values, dvs, values, dvs
+                            values_poslam = values[:, :self.dataset.numpoints_super] 
+                            values_neglam = values[:, :self.dataset.numpoints_super]
+
+                            dvs_poslam = dvs[:, :self.dataset.numpoints_super, :] if self.dataset.grad_super else torch.empty(0)
+                            dvs_neglam = dvs[:, :self.dataset.numpoints_super, :] if self.dataset.grad_super else torch.empty(0)
 
                         losses = loss_fn(states, values, dvs, boundary_values, dirichlet_masks, model_results['model_out'], 
                                         bc_value_1, bc_value_2, 
@@ -456,7 +461,7 @@ class Experiment(ABC):
                         print(f"Epoch {epoch} - after losses, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
                         print()
 
-                    if self.timing: print("Loss Computation took:", time.time() - start_time_2)
+                    if self.timing: torch.cuda.synchronize(); print("Loss Computation took:", time.time() - start_time_2)
 
                     ## Compute & Record Temporal Loss Quartiles #FIXME doesn't work for baseline
                     if record_temporal_loss:
@@ -474,11 +479,11 @@ class Experiment(ABC):
                                 losses_t[str(tp)] = loss_fn(states_t, values_t, dvs_t[..., 0], dvs_t[..., 1:], boundary_values_t, dirichlet_masks_t, model_results_t, hopf_values_t, learned_hopf_values_t, hopf_grads_t, learned_grads_t, epoch, state_times_t)
 
                     ## Switch Optimizers/Rates (after Hopf Pretraining)
-                    if self.timing: start_time_2 = time.time()
+                    if self.timing: torch.cuda.synchronize(); start_time_2 = time.time()
                     if dual_lr and not(self.dataset.super_pretrain) and self.dataset.super_pretrained:
                         optim = optim_std
                         lr_scheduler = lr_scheduler_std
-                    if self.timing: print("Loss Scheduler took:", time.time() - start_time_2)
+                    if self.timing: torch.cuda.synchronize(); print("Loss Scheduler took:", time.time() - start_time_2)
                     
                     ## Decay Hopf Loss(es)
                     if hopf_loss_decay and hopf_loss != 'none': #                         
@@ -509,7 +514,7 @@ class Experiment(ABC):
                         print()
 
                     ## Combine Losses
-                    if self.timing: start_time_2 = time.time()
+                    if self.timing: torch.cuda.synchronize(); start_time_2 = time.time()
                     train_loss = 0.
                     for loss_name, loss in losses.items():
                         single_loss = loss.mean() ## TODO: why did the prev authors put this here?
@@ -518,7 +523,7 @@ class Experiment(ABC):
 
                     train_losses.append(train_loss.item())
                     writer.add_scalar("total_train_loss", train_loss, total_steps)
-                    if self.timing: print("Loss Combination took:", time.time() - start_time_2)
+                    if self.timing: torch.cuda.synchronize(); print("Loss Combination took:", time.time() - start_time_2)
 
                     ## Save Checkpoint
                     if not total_steps % steps_til_summary:
@@ -533,23 +538,23 @@ class Experiment(ABC):
 
                     ## Take Gradient Step
                     if not use_lbfgs:
-                        if self.timing: start_time_2 = time.time()
+                        if self.timing: torch.cuda.synchronize(); start_time_2 = time.time()
                         optim.zero_grad()
                         train_loss.backward()
-                        if self.timing: print("Grad Comp took:", time.time() - start_time_2)
+                        if self.timing: torch.cuda.synchronize(); print("Grad Comp took:", time.time() - start_time_2)
 
-                        if self.timing: start_time_2 = time.time()
+                        if self.timing: torch.cuda.synchronize(); start_time_2 = time.time()
                         if clip_grad:
                             if isinstance(clip_grad, bool):
                                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.)
                             else:
                                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=clip_grad)
-                        if self.timing: print("Grad Clip took:", time.time() - start_time_2)
+                        if self.timing: torch.cuda.synchronize(); print("Grad Clip took:", time.time() - start_time_2)
 
-                        if self.timing: start_time_2 = time.time()
+                        if self.timing: torch.cuda.synchronize(); start_time_2 = time.time()
                         optim.step()
                         lr_scheduler.step()
-                        if self.timing: print("Grad/Sched step took:", time.time() - start_time_2)
+                        if self.timing: torch.cuda.synchronize(); print("Grad/Sched step took:", time.time() - start_time_2)
 
                     if self.dataset.memory_tracking:
                         print(f"Epoch {epoch} - grad step, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
@@ -557,9 +562,10 @@ class Experiment(ABC):
                         print()
 
                     ## Record Data Summary
+                    iter_time = time.time() - start_time
+                    if self.timing: torch.cuda.synchronize(); print("Total iteration time:", iter_time)
+                        
                     if not total_steps % steps_til_summary:
-                        iter_time = time.time() - start_time
-
                         if self.dataset.record_gt_metrics:   
                             JIp, FIp, FEp, Vmse, DVXmse = self.compute_gt_metrics()
                             JIp_s = smoothing_factor * JIp + (1 - smoothing_factor) * JIp_s
@@ -628,7 +634,7 @@ class Experiment(ABC):
 
                 ## cost-supervised learning (CSL) used to be here (removed because not using)
 
-                if self.timing: start_time_2 = time.time()
+                if self.timing: torch.cuda.synchronize(); start_time_2 = time.time()
                 if not (epoch+1) % epochs_til_checkpoint:
                     # Saving the optimizer state is important to produce consistent results
                     checkpoint = { 
@@ -645,7 +651,7 @@ class Experiment(ABC):
                         epoch=epoch+1, save_path=os.path.join(checkpoints_dir, 'BRS_validation_plot_epoch_%04d.png' % (epoch+1)),
                         # epoch=epoch+1, save_path=os.path.join(checkpoints_dir, 'BRS_validation_plot.png'), # overwriting to save data
                         x_resolution = val_x_resolution, y_resolution = val_y_resolution, z_resolution=val_z_resolution, time_resolution=val_time_resolution)
-                if self.timing: print("Checkpointing took:", time.time() - start_time_2)
+                if self.timing: torch.cuda.synchronize(); print("Checkpointing took:", time.time() - start_time_2)
 
         # print("\n PROFILER RESULTS \n")
         # print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))

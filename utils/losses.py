@@ -198,10 +198,8 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
                           dss_value_loss_1_divisor=10., dss_value_loss_2_divisor=10.,
                           dss_grad_loss_1_divisor=10., dss_grad_loss_2_divisor=10.,
                           lbss_value_loss_divisor=1., lbss_grad_loss_divisor=100.,
-                          grad_super=False, grad_super_time=False):
+                          ):
     
-    grad_super = grad_super and experiment.dataset.solve_grad # must solve to use
-
     def mulob_hjivi_loss(state, value, grad, boundary_value, dirichlet_mask, output, bc_value_1, bc_value_2, 
                             decomposed_value_1, decomposed_value_2, decomposed_grad_1, decomposed_grad_2,
                             values_poslam, grad_poslam, values_neglam, grad_neglam):
@@ -218,16 +216,25 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
             if 'augment' in loss_type:
                 if not experiment.dataset.lambda_var: raise AssertionError("Augmented loss requires lambda-varying system")
                 
-                decomposed_value_1_loss = values_poslam - decomposed_value_1
-                decomposed_value_2_loss = values_neglam + decomposed_value_2 if hasattr(experiment.dataset.dynamics, "avoid_fn") else values_neglam - decomposed_value_2
+                ## Value Supervision (batch subset if lambda slice supervision)
+                decomposed_value_1_subset = decomposed_value_1[:, :experiment.dataset.numpoints_super] #if experiment.dataset.lam_slice_super else decomposed_value_1
+                decomposed_value_2_subset = decomposed_value_2[:, :experiment.dataset.numpoints_super] #if experiment.dataset.lam_slice_super else decomposed_value_2
 
-                if grad_super:
-                    if grad_super_time:
-                        decomposed_grad_1_loss = grad_poslam[...,:-1] - decomposed_grad_1
-                        decomposed_grad_2_loss = grad_neglam[...,:-1] + decomposed_grad_2 if hasattr(experiment.dataset.dynamics, "avoid_fn") else grad_neglam[...,:-1] - decomposed_grad_2
+                decomposed_value_1_loss = values_poslam - decomposed_value_1_subset
+                decomposed_value_2_loss = values_neglam + decomposed_value_2_subset if hasattr(experiment.dataset.dynamics, "avoid_fn") else values_neglam - decomposed_value_2_subset
+
+                ## Gradient Supervision
+                if experiment.dataset.grad_super:
+
+                    decomposed_grad_1_subset = decomposed_grad_1[:, :experiment.dataset.numpoints_super, :] #if experiment.dataset.lam_slice_super else decomposed_grad_1
+                    decomposed_grad_2_subset = decomposed_grad_2[:, :experiment.dataset.numpoints_super, :] #if experiment.dataset.lam_slice_super else decomposed_grad_2
+
+                    if experiment.dataset.grad_super_time:
+                        decomposed_grad_1_loss = grad_poslam[...,:-1] - decomposed_grad_1_subset
+                        decomposed_grad_2_loss = grad_neglam[...,:-1] + decomposed_grad_2_subset if hasattr(experiment.dataset.dynamics, "avoid_fn") else grad_neglam[...,:-1] - decomposed_grad_2_subset
                     else:
-                        decomposed_grad_1_loss = grad_poslam[...,1:-1] - decomposed_grad_1[..., 1:]
-                        decomposed_grad_2_loss = grad_neglam[...,1:-1] + decomposed_grad_2[..., 1:] if hasattr(experiment.dataset.dynamics, "avoid_fn") else grad_neglam[...,1:-1] - decomposed_grad_2[..., 1:]
+                        decomposed_grad_1_loss = grad_poslam[...,1:-1] - decomposed_grad_1_subset[..., 1:]
+                        decomposed_grad_2_loss = grad_neglam[...,1:-1] + decomposed_grad_2_subset[..., 1:] if hasattr(experiment.dataset.dynamics, "avoid_fn") else grad_neglam[...,1:-1] - decomposed_grad_2_subset[..., 1:]
 
                 if experiment.dataset.lam_slice_super:
                     dss_value_1_weight = 1 / dss_value_loss_1_divisor
@@ -235,16 +242,16 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
                     dss_grad_1_weight = 1 / dss_grad_loss_1_divisor
                     dss_grad_2_weight = 1 / dss_grad_loss_2_divisor 
                 
-                else: # dynamic lambda weighting
-                    dss_value_1_weight = torch.nn.functional.relu(state[..., -1]) / dss_value_loss_1_divisor
-                    dss_value_2_weight = torch.nn.functional.relu(-state[..., -1]) / dss_value_loss_2_divisor        
-                    dss_grad_1_weight = torch.nn.functional.relu(state[..., -1]) / dss_grad_loss_1_divisor
-                    dss_grad_2_weight = torch.nn.functional.relu(-state[..., -1]) / dss_grad_loss_2_divisor
+                else: ## Free lambda supervision weighting (non-slice supervision)
+                    dss_value_1_weight = torch.nn.functional.relu(state[:, :experiment.dataset.numpoints_super, -1]) / dss_value_loss_1_divisor
+                    dss_value_2_weight = torch.nn.functional.relu(-state[:, :experiment.dataset.numpoints_super, -1]) / dss_value_loss_2_divisor        
+                    dss_grad_1_weight = torch.nn.functional.relu(state[:, :experiment.dataset.numpoints_super, -1]) / dss_grad_loss_1_divisor
+                    dss_grad_2_weight = torch.nn.functional.relu(-state[:, :experiment.dataset.numpoints_super, -1]) / dss_grad_loss_2_divisor
 
                 loss_dict['dss_value_1_loss'] = (dss_value_1_weight * torch.abs(decomposed_value_1_loss)).sum()
                 loss_dict['dss_value_2_loss'] = (dss_value_2_weight * torch.abs(decomposed_value_2_loss)).sum()
                 
-                if grad_super:
+                if experiment.dataset.grad_super:
                     loss_dict['dss_grad_1_loss'] = (dss_grad_1_weight * torch.abs(decomposed_grad_1_loss).sum(-1)).sum()
                     loss_dict['dss_grad_2_loss'] = (dss_grad_2_weight * torch.abs(decomposed_grad_2_loss).sum(-1)).sum()
             
@@ -253,14 +260,14 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
                 lbss_value_loss = value - torch.max(decomposed_value_1, decomposed_value_2)
                 loss_dict['lbss_value_loss'] = lbss_value_loss / lbss_value_loss_divisor
 
-                if grad_super:
-                    if not experiment.dataset.lambda_var: #FIXME need to debug surely
-                        if grad_super_time:
+                if experiment.dataset.grad_super:
+                    if not experiment.dataset.lambda_var: #FIXME need to debug surely, also pre-batch subset
+                        if experiment.dataset.grad_super_time:
                             lbss_grad_loss = grad - torch.cat((decomposed_grad_1, decomposed_grad_2), -1)[..., torch.argmax(decomposed_value_1, decomposed_value_2)] # debug
                         else:
                             lbss_grad_loss = grad[..., 1:] - torch.cat((decomposed_grad_1, decomposed_grad_2), -1)[..., torch.argmax(decomposed_value_1, decomposed_value_2)][..., 1:] # debug
                     else:
-                        if grad_super_time:
+                        if experiment.dataset.grad_super_time:
                             lbss_grad_loss = grad[...,:-1] - torch.cat((decomposed_grad_1, decomposed_grad_2), -1)[..., torch.argmax(decomposed_value_1, decomposed_value_2)] # debug
                         else:
                             lbss_grad_loss = grad[...,1:-1] - torch.cat((decomposed_grad_1, decomposed_grad_2), -1)[..., torch.argmax(decomposed_value_1, decomposed_value_2)][..., 1:] # debug

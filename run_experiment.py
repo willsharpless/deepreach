@@ -80,8 +80,10 @@ if __name__ == '__main__':
     p.add_argument('--super_pretrain', action='store_true', default=False, required=False, help='Pretrain with supervision losses')
     p.add_argument('--super_pretrain_iters', type=int, default=10000, required=False, help='Number of pretrain iterations with supervision losses')
     p.add_argument('--solve_grad', action='store_true', default=False, required=False, help='Compute gradients (forced true if gradient supervision), slower')
-    p.add_argument('--grad_super', action='store_true', default=False, required=False, help='Supervision of not only value but gradient')
+    p.add_argument('--grad_super', action='store_true', default=False, required=False, help='Supervision of not only value but spatial gradient')
+    p.add_argument('--grad_super_time', action='store_true', default=False, required=False, help='Supervision of not only value but spatiotemporal gradient')
     p.add_argument('--lam_slice_super', action='store_true', default=False, required=False, help='Limits supervision losses to data slices with fixed lambda values.')
+    p.add_argument('--numpoints_super', type=int, default=10000, required=False, help='Number of additional datapoints to use for augmented supervision')
     p.add_argument('--LS_w_time_curr', action='store_true', default=False, required=False, help='Do supervision with a temporal curriculum')
     p.add_argument('--gradual_pinn_loss', default=False, required=False, action='store_true', help='Flag to gradually introduce the HJ-PINN loss')
 
@@ -215,8 +217,8 @@ if __name__ == '__main__':
         # opt.num_epochs = 20
         # opt.epochs_til_ckpt = 10
         # opt.super_pretrain_iters = 2000
-        opt.num_epochs = 10000
-        opt.epochs_til_ckpt = 5
+        opt.num_epochs = 10
+        opt.epochs_til_ckpt = 10
         opt.use_bank = False
 
     if opt.capacity_test:
@@ -376,6 +378,8 @@ if __name__ == '__main__':
         tMin=orig_opt.tMin, tMax=orig_opt.tMax, 
         counter_start=orig_opt.counter_start, counter_end=orig_opt.counter_end, 
         num_src_samples=orig_opt.num_src_samples, num_target_samples=orig_opt.num_target_samples,
+        
+        # hopf options
         use_hopf=(orig_opt.hopf_loss != 'none'),
         super_pretrain=orig_opt.super_pretrain, super_pretrain_iters=orig_opt.super_pretrain_iters,
         no_curriculum=orig_opt.no_curr, record_gt_metrics=orig_opt.gt_metrics,
@@ -385,9 +389,11 @@ if __name__ == '__main__':
         loaded_model=loaded_model, lambda_var=orig_opt.dynamics_class.endswith("lambda"), zerolambda_LS=orig_opt.zerolambda_LS,
         LS_w_time_curr=orig_opt.LS_w_time_curr, loaded_dynamics=loaded_dynamics_inst,
         
+        # mulob options
         loaded_model_1=loaded_model_1, loaded_model_2=loaded_model_2,
         loaded_dynamics_1=loaded_dynamics_inst_1, loaded_dynamics_2=loaded_dynamics_inst_2,
         lam_slice_super=orig_opt.lam_slice_super,
+        grad_super=orig_opt.grad_super, grad_super_time=orig_opt.grad_super_time, numpoints_super=orig_opt.numpoints_super,
         )
 
     model = modules.SingleBVPNet(in_features=dynamics_inst.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
@@ -447,11 +453,13 @@ if __name__ == '__main__':
         print(f" - with the {orig_opt.mulob_loss_type} mulob loss")
         
         if orig_opt.lam_slice_super and dataset.lambda_var: 
-            print(f"   - with decomposed supervision being enforced only on lambda slices ({dynamics_inst.lambda_target_lo},{dynamics_inst.lambda_target_hi})")
+            print(f"   - with decomposed supervision being enforced only on lambda slices ({dynamics_inst.lambda_target_lo},{dynamics_inst.lambda_target_hi}) with 2 batches of {orig_opt.numpoints_super}")
         elif dataset.lambda_var:
-            print(f"   - with decomposed supervision losses weighted by ReLU(+- lambda)")
+            print(f"   - with decomposed supervision losses weighted by ReLU(+- lambda) with 2 batches of {orig_opt.numpoints_super}")
         if orig_opt.grad_super: 
-            print(f"   - including gradients in supervision")
+            print(f"   - including spatial gradients in supervision")
+        if orig_opt.grad_super_time: 
+            print(f"   - including spatiotemporal gradients in supervision")
         if orig_opt.gradual_pinn_loss:
             print(f"   - gradually introducing the PINN loss")
 
@@ -483,7 +491,6 @@ if __name__ == '__main__':
                                                         dss_grad_loss_2_divisor=orig_opt.dss_grad_loss_2_divisor, 
                                                         lbss_value_loss_divisor=orig_opt.lbss_value_loss_divisor, 
                                                         lbss_grad_loss_divisor=orig_opt.lbss_grad_loss_divisor,
-                                                        grad_super=orig_opt.grad_super,
             )
             loss_fn_baseline = losses.init_brt_hjivi_loss(dynamics_inst, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
 
