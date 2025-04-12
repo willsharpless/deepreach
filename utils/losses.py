@@ -245,8 +245,8 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
                 loss_dict['dss_value_2_loss'] = (dss_value_2_weight * torch.abs(decomposed_value_2_loss)).sum()
                 
                 if grad_super:
-                    loss_dict['dss_grad_1_loss'] = (dss_grad_1_weight * torch.abs(decomposed_grad_1_loss)).sum()
-                    loss_dict['dss_grad_2_loss'] = (dss_grad_2_weight * torch.abs(decomposed_grad_2_loss)).sum()
+                    loss_dict['dss_grad_1_loss'] = (dss_grad_1_weight * torch.abs(decomposed_grad_1_loss).sum(-1)).sum()
+                    loss_dict['dss_grad_2_loss'] = (dss_grad_2_weight * torch.abs(decomposed_grad_2_loss).sum(-1)).sum()
             
             if 'deform' in loss_type:
 
