@@ -355,7 +355,7 @@ class Experiment(ABC):
                             
                             decomposed_values_1, decomposed_values_2 = gt['gt_decomposed_values_1'], gt['gt_decomposed_values_2']
 
-                            if self.dataset.solve_grad:
+                            if self.dataset.grad_super:
                                 decomposed_grads_1, decomposed_grads_2 = gt['gt_decomposed_grads_1'], gt['gt_decomposed_grads_2']
                             else:
                                 decomposed_grads_1, decomposed_grads_2 = None, None

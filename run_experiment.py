@@ -215,6 +215,10 @@ if __name__ == '__main__':
     if opt.grad_super:
         opt.solve_grad = True # need to solve grad to use it
 
+    if opt.grad_super_time:
+        opt.solve_grad = True # need to solve grad to use it
+        opt.grad_super = True
+
     if opt.baseline:
         opt.hopf_loss = 'none'
         opt.diff_con_loss_incr = False
@@ -323,6 +327,7 @@ if __name__ == '__main__':
         loaded_model_1=loaded_model_1, loaded_model_2=loaded_model_2,
         loaded_dynamics_1=loaded_dynamics_inst_1, loaded_dynamics_2=loaded_dynamics_inst_2,
         lam_slice_super=orig_opt.lam_slice_super,
+        solve_grad=orig_opt.solve_grad,
         grad_super=orig_opt.grad_super, grad_super_time=orig_opt.grad_super_time, numpoints_super=orig_opt.numpoints_super,
         LS_w_time_curr=orig_opt.LS_w_time_curr, 
         super_pretrain=orig_opt.super_pretrain, super_pretrain_iters=orig_opt.super_pretrain_iters,
@@ -366,9 +371,9 @@ if __name__ == '__main__':
             print(f"   - with decomposed supervision being enforced only on lambda slices ({dynamics_inst.lambda_target_lo},{dynamics_inst.lambda_target_hi}) with 2 batches of {orig_opt.numpoints_super}")
         elif dataset.lambda_var:
             print(f"   - with decomposed supervision losses weighted by ReLU(+- lambda) with 2 batches of {orig_opt.numpoints_super}")
-        if orig_opt.grad_super: 
+        if orig_opt.grad_super and not orig_opt.grad_super_time: 
             print(f"   - including spatial gradients in supervision")
-        if orig_opt.grad_super_time: 
+        if orig_opt.grad_super and orig_opt.grad_super_time: 
             print(f"   - including spatiotemporal gradients in supervision")
         if orig_opt.gradual_pinn_loss:
             print(f"   - gradually introducing the PINN loss linearly")
