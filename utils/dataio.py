@@ -129,8 +129,8 @@ class ReachabilityDataset(Dataset):
             if not self.load_decomposed_models:
                 if not self.lambda_var:
                     if self.solve_grad:
-                        gt_decomposed_values_1, gt_decomposed_grads_1 = self.V_DP_1(model_coords.t())
-                        gt_decomposed_values_2, gt_decomposed_grads_2 = self.V_DP_2(model_coords.t())
+                        gt_decomposed_values_1, gt_decomposed_grads_1 = self.V_DP_1_grad(model_coords.t())
+                        gt_decomposed_values_2, gt_decomposed_grads_2 = self.V_DP_2_grad(model_coords.t())
                     else:
                         gt_decomposed_values_1 = self.V_DP_1(model_coords.t())
                         gt_decomposed_values_2 = self.V_DP_2(model_coords.t())
@@ -138,8 +138,8 @@ class ReachabilityDataset(Dataset):
 
                 else: # remove lambda (same coords)
                     if self.solve_grad:
-                        gt_decomposed_values_1, gt_decomposed_grads_1 = self.V_DP_1(model_coords[..., :-1].t())
-                        gt_decomposed_values_2, gt_decomposed_grads_2 = self.V_DP_2(model_coords[..., :-1].t())
+                        gt_decomposed_values_1, gt_decomposed_grads_1 = self.V_DP_1_grad(model_coords[..., :-1].t())
+                        gt_decomposed_values_2, gt_decomposed_grads_2 = self.V_DP_2_grad(model_coords[..., :-1].t())
                     else:
                         gt_decomposed_values_1 = self.V_DP_1(model_coords[..., :-1].t())
                         gt_decomposed_values_2 = self.V_DP_2(model_coords[..., :-1].t())
@@ -276,6 +276,11 @@ class ReachabilityDataset(Dataset):
                 values_itp_tensor = torch.from_numpy(values_itp.__array__().copy())
                 grads_itp_tensor = torch.from_numpy(grads_itp.__array__().copy()) # NOTE: using time grads!
                 
+                if shared_x0:
+                    grads_itp_tensor = torch.cat([grads_itp_tensor, grads_itp_tensor[:, -1:].repeat(1, tXg.shape[0]-3)], dim=1)
+                else:
+                    grads_itp_tensor = torch.cat([grads_itp_tensor, grads_itp_tensor[:, -2:].repeat(1, (tXg.shape[0]-1)//2 - 1)], dim=1)
+
                 return sign_mag * values_itp_tensor, sign_mag * grads_itp_tensor
                 
         ## Define multiobjective and decomposed interpolation fns
@@ -382,9 +387,9 @@ class ReachabilityDataset(Dataset):
                 else:
                     xixj = (self.model_states_grid_2d[:, 1] * torch.ones(self.dynamics.N-1, self.n_grid_pts_2d)).t()
                     
-                    score_plane1[:, 1:] = score_plane1[:, 1:-1] + xixj
-                    score_plane2[:, 1:] = score_plane2[:, 1:-1] + xixj
-                    score_plane3[:, 1:] = score_plane3[:, 1:-1] + xixj
+                    score_plane1[:, 1:-1] = score_plane1[:, 1:-1] + xixj
+                    score_plane2[:, 1:-1] = score_plane2[:, 1:-1] + xixj
+                    score_plane3[:, 1:-1] = score_plane3[:, 1:-1] + xixj
 
                     # Scoring only on specific lambda slice at desired solution
                     score_plane1[:, -1] = self.dynamics.lambda_target * torch.ones(self.n_grid_pts_2d) 
@@ -412,7 +417,7 @@ class ReachabilityDataset(Dataset):
 
             self.model_states_grid = torch.cat((score_plane1, score_plane2, score_plane3), dim=0)
             self.n_grid_pts = 3 * self.n_grid_pts_2d
-            self.model_states_grid_one_plane = score_plane1
+            self.model_states_grid_one_plane = score_plane1.cuda()
 
             times = torch.full((self.n_grid_pts, 1), self.tMin) # TODO: remove first time-point if model='exact'
             self.model_coords_grid_allt = torch.cat((times, self.model_states_grid), dim=1) 
@@ -442,9 +447,11 @@ class ReachabilityDataset(Dataset):
             self.values_DP_grid_inlam1 = self.V_DP_inlam1(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
             self.values_DP_grid_inlam2 = self.V_DP_inlam2(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
         
-        elif self.lambda_var and self.dynamics.name in ["Conveyor", "Canoe"]:
+        elif self.dynamics.loss_type in ["brat_hjivi", "mulob_hjivi"]:
             self.values_DP_1_grid = self.V_DP_1(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
             self.values_DP_2_grid = self.V_DP_2(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
+            self.values_DP_1_grid_sub0_ixs = torch.argwhere(self.values_DP_1_grid <= 0).flatten().cuda()
+            self.values_DP_2_grid_sub0_ixs = torch.argwhere(self.values_DP_2_grid <= 0).flatten().cuda()
 
         # self.values_DP_grid_hi = self.V_DP(self.dynamics.input_to_coord(self.model_coords_grid_allt_hi).t()).cuda()
         # self.values_DP_grid_sub0_ixs_hi = torch.argwhere(self.values_DP_grid_hi <= 0).flatten().cuda()

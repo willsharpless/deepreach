@@ -40,6 +40,10 @@ def init_brat_hjivi_loss(dynamics, minWith, dirichlet_loss_divisor):
 
     def brat_hjivi_loss(state, value, dvdt, dvds, boundary_value, reach_value, avoid_value, dirichlet_mask, output, diss=0.):
 
+        hjb_residual = dvdt - (dynamics.hamiltonian(state, dvds) - diss)
+        loss_priority_residual = hjb_residual + value
+        hjb_loss_perc = ((loss_priority_residual >= -avoid_value) & (loss_priority_residual <= reach_value)).sum()/value.shape[-1]
+
         if torch.all(dirichlet_mask):
             # pretraining loss
             diff_constraint_hom = torch.Tensor([0])
@@ -53,17 +57,31 @@ def init_brat_hjivi_loss(dynamics, minWith, dirichlet_loss_divisor):
             if minWith == 'target':
                 diff_constraint_hom = torch.min(
                     torch.max(diff_constraint_hom, value - reach_value), value + avoid_value)
-
+            
         dirichlet = value[dirichlet_mask] - boundary_value[dirichlet_mask]
 
         if dynamics.deepreach_model == 'exact':
             if torch.all(dirichlet_mask):
                 dirichlet = output.squeeze(dim=-1)[dirichlet_mask]-0.0
             else:
-                return {'diff_constraint_hom': torch.abs(diff_constraint_hom).sum()}
-            
+                return {'diff_constraint_hom': torch.abs(diff_constraint_hom).sum(),
+                        'hjb_loss_perc':hjb_loss_perc, 
+                        'hjb_residual_abs_avg':hjb_residual.abs().mean(), 'hjb_residual_std':hjb_residual.abs().std(),
+                        'BRAT_priority_residual_avg':loss_priority_residual.mean(), 'BRAT_priority_residual_std':loss_priority_residual.std(), 
+                        'value_avg':value.mean(), 'value_std':value.std(),
+                        'value_1_avg':reach_value.mean(), 'value_1_std':reach_value.std(),
+                        'value_2_avg':(-avoid_value).mean(), 'value_2_std':(-avoid_value).std(),
+                        }
+        
         return {'dirichlet': torch.abs(dirichlet).sum() / dirichlet_loss_divisor,
-                'diff_constraint_hom': torch.abs(diff_constraint_hom).sum()}
+                'diff_constraint_hom': torch.abs(diff_constraint_hom).sum(),
+                'hjb_loss_perc':hjb_loss_perc, 
+                'hjb_residual_abs_avg':hjb_residual.abs().mean(), 'hjb_residual_std':hjb_residual.abs().std(),
+                'BRAT_priority_residual_avg':loss_priority_residual.mean(), 'BRAT_priority_residual_std':loss_priority_residual.std(), 
+                'value_avg':value.mean(), 'value_std':value.std(),
+                'value_1_avg':reach_value.mean(), 'value_1_std':reach_value.std(),
+                'value_2_avg':(-avoid_value).mean(), 'value_2_std':(-avoid_value).std(),
+                }
     
     return brat_hjivi_loss
 
@@ -155,6 +173,9 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
             dvdt, dvdx = grad[..., 0], grad[..., 1:]
             ham = experiment.dataset.dynamics.hamiltonian(state, dvdx)
             
+            hjb_residual = dvdt - ham
+            loss_priority_residual = hjb_residual + value
+            
             # Lambda shift (non-lambda) decomposed values
             if experiment.dataset.lambda_var:
                 decomposed_value_1 = decomposed_value_1 - torch.nn.functional.relu(-state[..., -1])
@@ -163,13 +184,16 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
             ## MultiObjective Losses
             if mulob_type == 'BRAT':
 
-                diff_constraint_hom = torch.min(torch.max(dvdt - ham, value - bc_value_1), value + bc_value_2)
-                # TODO BRAT decomp
+                diff_constraint_hom = torch.min(torch.max(hjb_residual, value - bc_value_1), value + bc_value_2)
+
+                loss_dict['hjb_loss_perc'] = ((loss_priority_residual >= decomposed_value_2) & (loss_priority_residual <= decomposed_value_1)).sum()/value.shape[-1]
 
             elif mulob_type == 'BRAAT':
 
-                diff_constraint_hom = torch.max(torch.min(dvdt - ham, value + bc_value_2), 
+                diff_constraint_hom = torch.max(torch.min(hjb_residual, value + bc_value_2), 
                                                 torch.min(value - bc_value_1, value + decomposed_value_2))
+                
+                # TODO: loss_dict['hjb_loss_perc'] = ((loss_priority_residual >= decomposed_value_2) & (loss_priority_residual <= decomposed_value_1)).sum()/value.shape[-1]
                 
             elif mulob_type == 'BRRT':
 
@@ -177,11 +201,22 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
                 #                                 torch.max(value - bc_value_2, value - decomposed_value_1), 
                 #                                 torch.max(value - bc_value_1, value - decomposed_value_2)))
                 
-                diff_constraint_hom = torch.max(dvdt - ham, torch.max(
+                diff_constraint_hom = torch.max(hjb_residual, torch.max(
                                                 torch.min(value - bc_value_2, value - decomposed_value_1), 
                                                 torch.min(value - bc_value_1, value - decomposed_value_2)))
                 
+                # TODO: loss_dict['hjb_loss_perc'] = ((loss_priority_residual >= decomposed_value_2) & (loss_priority_residual <= decomposed_value_1)).sum()/value.shape[-1]
+                
             loss_dict['diff_constraint_hom'] = torch.abs(diff_constraint_hom).sum()
+
+            loss_dict['hjb_residual_avg'] = hjb_residual.mean()
+            loss_dict['hjb_residual_std'] = hjb_residual.std()
+            loss_dict['value_avg'] = value.mean()
+            loss_dict['value_std'] = value.std()
+            loss_dict['value_1_avg'] = decomposed_value_1.mean()
+            loss_dict['value_1_std'] = decomposed_value_1.std()
+            loss_dict['value_2_avg'] = decomposed_value_2.mean()
+            loss_dict['value_2_std'] = decomposed_value_2.std()
 
         return loss_dict
 

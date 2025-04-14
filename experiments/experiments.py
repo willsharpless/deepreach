@@ -437,6 +437,8 @@ class Experiment(ABC):
                     if self.timing: torch.cuda.synchronize(); start_time_2 = time.time()
                     train_loss = 0.
                     for loss_name, loss in losses.items():
+                        if loss_name not in loss_weights.keys(): 
+                            continue
                         single_loss = loss.mean() ## TODO: why did prev authors put here?
                         writer.add_scalar(loss_name, single_loss, total_steps)
                         train_loss += loss_weights[loss_name] * single_loss
@@ -486,8 +488,11 @@ class Experiment(ABC):
                     if self.timing: torch.cuda.synchronize(); print("Total iteration time:", iter_time)
                         
                     if not total_steps % steps_til_summary:
-                        if self.dataset.record_gt_metrics:   
-                            JIp, FIp, FEp, Vmse, DVXmse = self.compute_gt_metrics()
+                        if self.dataset.record_gt_metrics: 
+                            if not self.dataset.dynamics.loss_type in ["brat_hjivi", "mulob_hjivi"]:
+                                JIp, FIp, FEp, Vmse, DVXmse = self.compute_gt_metrics()
+                            else:
+                                JIp, FIp, FEp, FIp_1, FEp_1, FIp_2, FEp_2, Vmse, DVXmse = self.compute_gt_metrics()
                             JIp_s = smoothing_factor * JIp + (1 - smoothing_factor) * JIp_s
                             JIp_s_max = max(JIp_s, JIp_s_max)
                         
@@ -507,7 +512,10 @@ class Experiment(ABC):
                                 'iter_time_sec': iter_time}
                             
                             for loss_name, loss in losses.items():
-                                log_dict[loss_name + "_loss"] = loss
+                                if loss_name in loss_weights.keys(): 
+                                    log_dict[loss_name + "_loss"] = loss
+                                else:
+                                    log_dict[loss_name] = loss
 
                             # if nonlin_scale and not(self.dataset.pretrain) and not(self.dataset.super_pretrain):
                             #     log_dict["Nonlinearity Scale"] = nl_perc
@@ -521,6 +529,13 @@ class Experiment(ABC):
                                 log_dict["Falsely Excluded percent over Time"] = FEp
                                 log_dict["Mean Absolute Spatial Gradient"] = torch.abs(dvdx).sum() / (self.dataset.numpoints * self.N)
                                 log_dict["Mean Squared Error of Value"] = Vmse
+
+                                if self.dataset.dynamics.loss_type in ["brat_hjivi", "mulob_hjivi"]:
+                                    log_dict["V1 Falsely Included percent over Time"] = FIp_1 
+                                    log_dict["V1 Falsely Excluded percent over Time"] = FEp_1 
+                                    log_dict["V2 Falsely Included percent over Time"] = FIp_2 
+                                    log_dict["V2 Falsely Excluded percent over Time"] = FEp_2
+                                    
                                 if self.dataset.solve_grad:
                                     log_dict["Mean Squared Error of Spatial Gradient"] = DVXmse
 
@@ -617,22 +632,25 @@ class DeepReachMulob(Experiment):
     def init_special(self, N=2, timing=False):
         self.N = N
         self.timing = timing
-        if N == 2:
-            if self.dataset.dynamics.name in ["Conveyor","Canoe"]:
-                if not self.dataset.lambda_var:
-                    self.validate = self.validate2D_mulob
-                else:
-                    self.validate = self.validate2Dlambda_mulob
+        if self.dataset.dynamics.name in ["Conveyor","Canoe"]:
+            if not self.dataset.lambda_var:
+                self.validate = self.validate2D_mulob
             else:
-                self.validate = self.validate2D
-        elif N > 2:
-            self.validate = self.validateND
-            if self.dataset.lambda_var and self.dataset.dynamics.name == "LessLinear":
-                self.validate = self.validateNDlambda
-            elif self.dataset.lambda_var and self.dataset.dynamics.name in ["Conveyor","Canoe"]:
                 self.validate = self.validate2Dlambda_mulob
+        else:
+            if N == 2:
+                self.validate = self.validate2D
+            else:
+                self.validate = self.validateND
+                if self.dataset.lambda_var:
+                    self.validate = self.validateNDlambda
 
-        pass        
+        # elif N > 2:
+        #     self.validate = self.validateND
+        #     if self.dataset.lambda_var and self.dataset.dynamics.name == "LessLinear":
+        #         self.validate = self.validateNDlambda
+        #     elif self.dataset.lambda_var and self.dataset.dynamics.name in ["Conveyor","Canoe"]:
+        #         self.validate = self.validate2Dlambda_mulob      
     
     def validate2D(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution):
         was_training = self.model.training
@@ -703,7 +721,7 @@ class DeepReachMulob(Experiment):
         for i in range(len(solve_times)):
             j = 0
 
-            states = self.dataset.model_states_grid
+            states = self.dataset.model_states_grid if not self.dataset.dynamics.N > 2 else self.dataset.model_states_grid_one_plane
             times = torch.full((self.dataset.n_grid_pts_2d, 1), solve_times[i]).cuda()
             coords = torch.cat((times, states), dim=1) 
             n_grid_len = self.dataset.X1g.size()[0]
@@ -773,7 +791,7 @@ class DeepReachMulob(Experiment):
             ax.set_aspect('equal')
 
         if testing:
-            plt.savefig(f"plots/mulob_tests/{self.dataset.dynamics.name}_test_training_plot_gt.png")
+            plt.savefig(f"plots/mulob_tests/{self.dataset.dynamics.name}_{self.dataset.N}D_test_training_plot_gt.png")
         
         else:
             fig.savefig(save_path)
@@ -822,7 +840,7 @@ class DeepReachMulob(Experiment):
         for i in range(len(solve_times)):
             for j in range(len(lambda_vals)):
 
-                states_input = self.dataset.model_states_grid if not self.dataset.dynamics.N > 2 else self.model_states_grid_one_plane
+                states_input = self.dataset.model_states_grid if not self.dataset.dynamics.N > 2 else self.dataset.model_states_grid_one_plane
                 times = torch.full((self.dataset.n_grid_pts_2d, 1), solve_times[i]).cuda()
                 input = torch.cat((times, states_input), dim=1) 
                 input[..., -1] = lambda_vals[j]/self.dataset.dynamics.state_var[-1] + 0*input[..., -1] # certain lambda
@@ -856,7 +874,7 @@ class DeepReachMulob(Experiment):
                     model_results = self.model({'coords': input.clone().cuda()}).copy()
                     values_learned = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach()).reshape(n_grid_len, n_grid_len).cpu()
                     
-                    if testing:
+                    if testing and self.dataset.loaded_model_1 and self.dataset.loaded_model_2:
                         if j == 0:
                             model_results_1 = self.dataset.loaded_model_1({'coords': input[..., :-1].clone().cuda()}).copy()
                             values_learned = self.dataset.loaded_dynamics_1.io_to_value(model_results_1['model_in'].detach(), model_results_1['model_out'].squeeze(dim=-1).detach()).detach().reshape(n_grid_len, n_grid_len).cpu()
@@ -897,7 +915,7 @@ class DeepReachMulob(Experiment):
                 ax.set_aspect('equal')
 
         if testing:
-            plt.savefig(f"plots/mulob_tests/{self.dataset.dynamics.name}_{self.dataset.dynamics.avoid_type}_lambda_test_training_plot_gt.png")
+            plt.savefig(f"plots/mulob_tests/{self.dataset.dynamics.name}_{self.dataset.N}D_{self.dataset.dynamics.avoid_type}_lambda_test_training_plot_gt.png")
         
         else:
             fig.savefig(save_path)
@@ -1568,7 +1586,7 @@ class DeepReachMulob(Experiment):
         if self.dataset.solve_grad:
             model_results_grid = self.model({'coords': self.dataset.model_coords_grid_allt})
             DVX = self.dataset.dynamics.io_to_dv(model_results_grid['model_in'], model_results_grid['model_out'].squeeze(dim=-1))[..., 1:].detach()
-            DVXmse = (self.dataset.value_grads_DP_grid - DVX).square().mean()
+            DVXmse = (self.dataset.value_grads_DP_grid[..., 1:] - DVX).square().mean()
 
         with torch.no_grad():
             if not self.dataset.solve_grad:
@@ -1598,13 +1616,39 @@ class DeepReachMulob(Experiment):
                 FEp = 0.
 
             JIp = n_intersect / n_overlap
-            ## NOTE: still wondering if there is a bug in FIp and JIp... they look slightly off sometimes... I've to think they're right but just very nonlinear metrics (maybe bad).
+
+            ## Compute Falsely Included and Excluded of Independent Sets
+            if self.dataset.dynamics.loss_type in ["brat_hjivi", "mulob_hjivi"]:
+                n_intersect_1 = values_grid_sub0_ixs[(values_grid_sub0_ixs.view(1, -1) == self.dataset.values_DP_1_grid_sub0_ixs.view(-1, 1)).any(dim=0)].size()[0]
+                n_intersect_2 = values_grid_sub0_ixs[(values_grid_sub0_ixs.view(1, -1) == self.dataset.values_DP_2_grid_sub0_ixs.view(-1, 1)).any(dim=0)].size()[0]
+                
+                if values_grid_sub0_ixs.size()[0] > 0:
+                    FIp_1 = (values_grid_sub0_ixs.size()[0] - n_intersect_1) / values_grid_sub0_ixs.size()[0] # <- wrt learned set, wrt grid
+                    if not hasattr(self.dataset.dynamics, "avoid_fn"):
+                        FIp_2 = (values_grid_sub0_ixs.size()[0] - n_intersect_2) / values_grid_sub0_ixs.size()[0] # <- wrt learned set, wrt grid
+                    else:
+                        FIp_2 = (values_grid_sub0_ixs.size()[0] - n_intersect_2) / values_grid_sub0_ixs.size()[0] # <- wrt learned set, wrt grid
+                else:
+                    FIp_1, FIp_2 = 0., 0.
+
+                if self.dataset.values_DP_1_grid_sub0_ixs.size()[0] > 0:
+                    FEp_1 = (self.dataset.values_DP_1_grid_sub0_ixs.size()[0] - n_intersect_1) / self.dataset.values_DP_1_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid
+                else:
+                    FEp_1 = 0.  
+
+                if self.dataset.values_DP_2_grid_sub0_ixs.size()[0] > 0:
+                    FEp_2 = (self.dataset.values_DP_2_grid_sub0_ixs.size()[0] - n_intersect_2) / self.dataset.values_DP_2_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid
+                else:
+                    FEp_2 = 0.                
         
         del values_grid
         del values_grid_sub0_ixs
         torch.cuda.empty_cache()
 
-        return JIp, FIp, FEp, Vmse, DVXmse
+        if self.dataset.dynamics.loss_type in ["brat_hjivi", "mulob_hjivi"]:
+            return JIp, FIp, FEp, FIp_1, FEp_1, FIp_2, FEp_2, Vmse, DVXmse
+        else:
+            return JIp, FIp, FEp, Vmse, DVXmse
         
     def set_metrics_eachtime(self): 
 
