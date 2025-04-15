@@ -22,49 +22,18 @@ if __name__ == '__main__':
     p.add_argument('-c', '--config_filepath', required=False, is_config_file=True, help='Path to config file.')
     p.add_argument('--mode', type=str, default="train", choices=['all', 'train', 'test'], help="Experiment mode to run (new experiments must choose 'all' or 'train').") #FIXME: required=True instead of default
 
-    # save/load directory options
+    ## Save/load directory options
     p.add_argument('--experiments_dir', type=str, default='./runs', help='Where to save the experiment subdirectory.')
     p.add_argument('--experiment_name', type=str, default='test_run', help='Name of the experient subdirectory.') #FIXME: required=True instead of default
     p.add_argument('--use_wandb', default=False, action='store_true', help='use wandb for logging')
     p.add_argument('--baseline', action='store_true', default=False, required=False, help='Baseline DeepReach method (no Hopf)')
 
-    # ## Hopf options
-    # p.add_argument('--hopf_loss', type=str, default='none', choices=['none', 'lin_val_diff', 'lin_val_grad_diff'], help='Method for using Hopf data')
-    # p.add_argument('--hopf_loss_divisor', default=5, required=False, type=float, help='What to divide the hopf loss by for loss reweighting')
-    # p.add_argument('--hopf_grad_loss_divisor', default=25, required=False, type=float, help='What to divide the hopf grad loss by for loss reweighting')
-
-    # p.add_argument('--hopf_loss_decay', action='store_true', default=False, required=False, help='Hopf loss weight decay')
-    # p.add_argument('--hopf_loss_decay_type', type=str, default='linear', choices=['exponential', 'linear', 'negative_exponential'], help='Type of decay for hopf loss term')
-    # p.add_argument('--hopf_loss_decay_w', default=1., required=False, type=float, help='Hopf loss decay rate weight')
-    # p.add_argument('--hopf_loss_decay_early', action='store_true', default=False, required=False, help='Starts hopf loss decay in pretraining')
-    # p.add_argument('--diff_con_loss_incr', action='store_true', default=False, required=False, help='Increments PDE loss introduction of (1 - hopf decay)')
-    # p.add_argument('--dual_lr', action='store_true', default=True, required=False, help='Use separate lr for Hopf Pretraining and Training')
-    # p.add_argument('--lr_hopf', default=2e-5, required=False, type=float, help='Learning rate in hopf pretraining')
-    # p.add_argument('--lr_hopf_decay_w', default=1, required=False, type=float, help='LR exponential decay rate in hopf pretraining')
-    # p.add_argument('--nl_scale', action='store_true', default=False, required=False, help='Scales the "amount" of nonlinearity over training') # TODO: add correct contour?
-    # p.add_argument('--nl_scale_epoch_step', type=int, default=10000, required=False, help='Interval (after pt) to step the nonlinearity scale')
-    # p.add_argument('--nl_scale_epoch_post', type=int, default=50000, required=False, help='Number of epochs to add after nonlinearity scaling')
-    # p.add_argument('--temporal_weighting', action='store_true', default=False, required=False, help='Inversely weights the samples in the loss w.r.t. time')
-    # p.add_argument('--reset_loss_w', action='store_true', default=False, required=False, help='Resets the loss weights to their values at the beginning of training (pre-decay)')
-    # p.add_argument('--reset_loss_period', type=int, default=500, required=False, help='The loss weight reset period')
-    # p.add_argument('--zerolambda_LS', action='store_true', default=False, required=False, help='Will limit linear supervision to loss on lambda = 0 data (for lambda-variation models only AND loaded models)')
-
+    ## Tracking Options
     p.add_argument('--gt_metrics', action='store_true', default=True, required=False, help='Compute and score the learned value and set (needs ground truth)')
-    p.add_argument('--temporal_loss', action='store_true', default=False, required=False, help='Compute the loss over time chunks (slower)')
     p.add_argument('--capacity_test', action='store_true', default=False, required=False, help='Will use supervised-learning to train with the true solution (needs ground truth)')
     p.add_argument('--debug_params', action='store_true', default=False, required=False, help='Quick params for debugging')
     p.add_argument('--timing', action='store_true', default=False, required=False, help='Gives detailed breakdown of computation times per iteration')
     
-    # p.add_argument('--solve_hopf', action='store_true', default=False, required=False, help='Dynamically makes a state & value bank by iteratively solving the Hopf formula')
-    # p.add_argument('--use_bank', action='store_true', default=False, required=False, help='Makes/loads a state & value bank to reduce compute')
-    # p.add_argument('--bank_name', type=str, default='none', required=False, help='Name of the state & value bank file (if none and using bank, will make)')
-    # p.add_argument('--just_make_hopf_bank', action='store_true', default=False, required=False, help='Just solve a bank of Hopf points (and not train)')
-    # p.add_argument('--refine_bank', action='store_true', default=False, required=False, help='Will iteratively throw out non-spatially unique points when hopf solving (slow)')
-    # p.add_argument('--hopf_warm_start', action='store_true', default=False, required=False, help='Passes estimated gradients from DeepReach to the Hopf solvers to warm-start them')
-    # p.add_argument('--load_hopf_model', action='store_true', default=False, required=False, help='Model to load for the supervision')
-    # p.add_argument('--load_hopf_model_name', type=str, default='./runs/capacity_linear', help='Supervision model name')
-    # p.add_argument('--load_model_type', type=str, default='learned', choices=['learned', 'DP'], help='Type of loaded model') # FIXME someday actually use DP option
-
     ## Finite Differencing Options
     p.add_argument('--fin_diff', action='store_true', default=False, required=False, help='Finite Difference Learning: Uses finite diffs for grads and adds dissipation')
     p.add_argument('--fd_as', type=float, nargs='+', default=[2.5, 2., 1.5, 1.], help="Define the dissipation coeffs for fin diff iters") # TODO: cts schedule?
@@ -73,7 +42,7 @@ if __name__ == '__main__':
 
     ## Multi-Objective Options
     p.add_argument('--mulob_type', type=str, default='BRAAT', choices=['BRAT', 'BRAAT', 'BRRT'], help='Type of multiobjective value combination')
-    p.add_argument('--mulob_loss_type', type=str, default='vanilla', choices=['vanilla', 'augmented supervision', 'deformed supervision', 'augment-deform'], help='Type of multiobjective loss')
+    p.add_argument('--mulob_loss_type', type=str, default='vanilla', choices=['vanilla', 'augmented supervision', 'naive-combo supervision', 'naive-combo self-supervision'], help='Type of multiobjective loss')
     p.add_argument('--load_decomposed_models', action='store_true', default=False, required=False, help='Will load models corresponding to the decomposed game values.')
     p.add_argument('--load_decomposed_model_name_1', type=str, default='./runs/mulob/ConveyorND/Conveyor2D/reach_only_2D', help='Decomposed value 1 model name')
     p.add_argument('--load_decomposed_model_name_2', type=str, default='./runs/mulob/ConveyorND/Conveyor2D/avoid_only_2D_fast2', help='Decomposed value 2 model name')
@@ -88,14 +57,16 @@ if __name__ == '__main__':
     p.add_argument('--gradual_pinn_loss', default=False, required=False, action='store_true', help='Flag to gradually introduce the HJ-PINN loss')
     p.add_argument('--spatial_sampling_type', type=str, default='uniform', choices=['uniform', 'normal', 'truncated_normal'], help='Type of spatial sampling to use for data')
     p.add_argument('--spatial_sampling_std', type=float, default=0.5, required=False, help='Spatial sampling standard deviation')
+    p.add_argument('--nc_lower_bound', action='store_true', default=False, required=False, help='Limits naive-combo supervision losses to be lower-bounds (no decay needed)')
+    p.add_argument('--nc_decay', default=False, required=False, action='store_true', help='Flag to gradually decay the naive-combo supervision loss')
 
     ## Multi-Objective Loss Weights
     p.add_argument('--dss_value_loss_1_divisor', default=10., required=False, type=float, help='What to divide the mulob decomposed semi-supervision loss by for loss reweighting')
     p.add_argument('--dss_value_loss_2_divisor', default=10., required=False, type=float, help='What to divide the mulob decomposed semi-supervision loss by for loss reweighting')    
     p.add_argument('--dss_grad_loss_1_divisor', default=100., required=False, type=float, help='What to divide the mulob decomposed grad semi-supervision loss by for loss reweighting')
     p.add_argument('--dss_grad_loss_2_divisor', default=100., required=False, type=float, help='What to divide the mulob decomposed grad semi-supervision loss by for loss reweighting')
-    p.add_argument('--lbss_value_loss_divisor', default=10., required=False, type=float, help='What to divide the mulob lower-bound supervision loss by for loss reweighting')
-    p.add_argument('--lbss_grad_loss_divisor', default=100., required=False, type=float, help='What to divide the mulob lower-bound supervision loss by for loss reweighting')
+    p.add_argument('--ncss_value_loss_divisor', default=0.1, required=False, type=float, help='What to divide the mulob naive-combo supervision loss by for loss reweighting')
+    p.add_argument('--ncss_grad_loss_divisor', default=100., required=False, type=float, help='What to divide the mulob naive-combo supervision loss by for loss reweighting')
                                                         
     use_wandb = p.parse_known_args()[0].use_wandb
     # if use_wandb:
@@ -202,7 +173,7 @@ if __name__ == '__main__':
         opt.pretrain_iters = 2
         opt.super_pretrain_iters = 2
         opt.num_epochs = 10
-        opt.epochs_til_ckpt = 50
+        opt.epochs_til_ckpt = 11
         opt.use_bank = False
 
     if opt.capacity_test:
@@ -370,11 +341,16 @@ if __name__ == '__main__':
         elif not (orig_opt.mulob_type == 'BRAT' and orig_opt.mulob_loss_type == 'vanilla'):
             print(f" - decomposing, with values from ground-truth models (slow)")
         print(f" - with the {orig_opt.mulob_loss_type} mulob loss")
-        if 'supervision' in orig_opt.mulob_loss_type:
+        if 'augment' in orig_opt.mulob_loss_type:
             if orig_opt.lam_slice_super and dataset.lambda_var: 
                 print(f"   - with decomposed supervision being enforced only on lambda slices ({dynamics_inst.lambda_target_lo},{dynamics_inst.lambda_target_hi}) with 2 batches of {orig_opt.numpoints_super}")
             elif dataset.lambda_var:
                 print(f"   - with decomposed supervision losses weighted by ReLU(+- lambda) with 2 batches of {orig_opt.numpoints_super}")
+        if 'naive' in orig_opt.mulob_loss_type:
+            if orig_opt.nc_lower_bound: 
+                print(f"   - lower-bounding the naive-combo supervision loss")
+            if orig_opt.nc_decay:
+                print(f"   - decaying the naive-combo supervision loss")
         if orig_opt.grad_super and not orig_opt.grad_super_time: 
             print(f"   - including spatial gradients in supervision")
         if orig_opt.grad_super and orig_opt.grad_super_time: 
@@ -408,8 +384,9 @@ if __name__ == '__main__':
                                                         dss_value_loss_2_divisor=orig_opt.dss_value_loss_2_divisor,
                                                         dss_grad_loss_1_divisor=orig_opt.dss_grad_loss_1_divisor, 
                                                         dss_grad_loss_2_divisor=orig_opt.dss_grad_loss_2_divisor, 
-                                                        lbss_value_loss_divisor=orig_opt.lbss_value_loss_divisor, 
-                                                        lbss_grad_loss_divisor=orig_opt.lbss_grad_loss_divisor,
+                                                        ncss_value_loss_divisor=orig_opt.ncss_value_loss_divisor, 
+                                                        ncss_grad_loss_divisor=orig_opt.ncss_grad_loss_divisor,
+                                                        nc_lower_bound=orig_opt.nc_lower_bound,
             )
 
         else:
@@ -422,7 +399,7 @@ if __name__ == '__main__':
             val_x_resolution=orig_opt.val_x_resolution, val_y_resolution=orig_opt.val_y_resolution, val_z_resolution=orig_opt.val_z_resolution, val_time_resolution=orig_opt.val_time_resolution,
             use_CSL=orig_opt.use_CSL, CSL_lr=orig_opt.CSL_lr, CSL_dt=orig_opt.CSL_dt, epochs_til_CSL=orig_opt.epochs_til_CSL, num_CSL_samples=orig_opt.num_CSL_samples, CSL_loss_frac_cutoff=orig_opt.CSL_loss_frac_cutoff, max_CSL_epochs=orig_opt.max_CSL_epochs, CSL_loss_weight=orig_opt.CSL_loss_weight, CSL_batch_size=orig_opt.CSL_batch_size,
             lr_decay_w=orig_opt.lr_decay_w, fin_diff=orig_opt.fin_diff, fd_alpha_scale=orig_opt.fd_as, fd_delta_x_scale=orig_opt.fd_dxs, fd_delta_t_scale=orig_opt.fd_dts,
-            gradual_pinn_loss=orig_opt.gradual_pinn_loss,
+            gradual_pinn_loss=orig_opt.gradual_pinn_loss, nc_decay=orig_opt.nc_decay,
             )
 
     if (mode == 'all') or (mode == 'test'):

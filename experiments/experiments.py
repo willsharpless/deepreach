@@ -108,7 +108,8 @@ class Experiment(ABC):
             # nonlin_scale=False, nl_scale_epoch_step=10000, nl_scale_epoch_post=10000, 
             fin_diff = False, fd_alpha_scale = [2.5, 2., 1.5, 1.], 
             fd_delta_x_scale = [0.7, 0.5, 0.3, 0.1], fd_delta_t_scale = [0.05, 0.03, 0.02, 0.01],
-            gradual_pinn_loss = False
+            gradual_pinn_loss = False,
+            nc_decay = False
         ):
         was_eval = not self.model.training
         self.model.train()
@@ -167,7 +168,7 @@ class Experiment(ABC):
                         'diff_constraint_hom': 1., 
                         'dss_value_1_loss': 1., 'dss_value_2_loss': 1., 
                         'dss_grad_1_loss': 1., 'dss_grad_2_loss': 1., 
-                        'lbss_value_loss': 1., 'lbss_grad_loss': 1.,
+                        'ncss_value_loss': 1., 'ncss_grad_loss': 1.,
                         }
         if gradual_pinn_loss: # or diff_con_loss_incr
             loss_weights['diff_constraint_hom'] = 0.
@@ -315,7 +316,7 @@ class Experiment(ABC):
                     ## Multi-Objective (BRAT, BRAAT, BRRT)
                     elif self.dataset.dynamics.loss_type == 'mulob_hjivi':
                         
-                        if self.mulob_type == 'BRAT' and self.mulob_loss_type == 'vanilla':
+                        if not (self.mulob_type in ['BRAAT', 'BRRT'] or self.mulob_loss_type in ['augmented supervision', 'naive-combo supervision']):
                             decomposed_values_1, decomposed_values_2, decomposed_grads_1, decomposed_grads_2 = None, None, None, None
                         
                         elif self.dataset.load_decomposed_models:
@@ -344,12 +345,8 @@ class Experiment(ABC):
                         
                                 decomposed_grads_1 = self.dataset.loaded_dynamics_1.io_to_dv(loaded_model_results_1['model_in'], loaded_model_results_1['model_out'].squeeze(dim=-1)).detach() # NOTE: keeping time grad too now, add [..., 1:] otherwise
                                 decomposed_grads_2 = self.dataset.loaded_dynamics_2.io_to_dv(loaded_model_results_2['model_in'], loaded_model_results_2['model_out'].squeeze(dim=-1)).detach() 
-
-                            # if hasattr(self.dataset.loaded_dynamics_2, 'avoid_only') and self.dataset.loaded_dynamics_2.avoid_only:
-                            #     decomposed_values_2 = -1 * decomposed_values_2 # avoid_only defined positively in DR, so flip
-                            #     if self.dataset.solve_grad:
-                            #         decomposed_grads_2[..., 1:] = -1 * decomposed_grads_2[..., 1:]
-                            
+                        
+                        ## Use Interpolated Ground-Truth Decomposed Models (for testing, slow)
                         else:
 
                             if not hasattr(self.dataset, "V_DP"):
@@ -364,7 +361,7 @@ class Experiment(ABC):
 
                         bc_value_1, bc_value_2 = gt['bc_values_1'], gt['bc_values_2']
                         
-                        # For fixed lambda slice supervision, infer model values on slices
+                        ## For fixed lambda slice supervision, infer model values on slices
                         if self.dataset.lam_slice_super:
 
                             model_results_poslam = self.model({'coords': gt['model_coords_poslam']})
@@ -384,11 +381,22 @@ class Experiment(ABC):
                             dvs_poslam = dvs[:, :self.dataset.numpoints_super, :] if self.dataset.grad_super else torch.empty(0)
                             dvs_neglam = dvs[:, :self.dataset.numpoints_super, :] if self.dataset.grad_super else torch.empty(0)
 
+                        ## For Naive Combo Supervision Losses, use lambda=0 slice
+                        if self.mulob_loss_type in ['naive-combo supervision', 'naive-combo self-supervision']:
+                        
+                            model_results_zerolam = self.model({'coords': gt['model_coords_zerolam']})
+                            values_zerolam = self.dataset.dynamics.io_to_value(model_results_zerolam['model_in'].detach(), model_results_zerolam['model_out'].squeeze(dim=-1))
+                            #TODO add grads
+
+                        else:
+                            values_zerolam = None
+
                         losses = loss_fn(states, values, dvs, boundary_values, dirichlet_masks, model_results['model_out'], 
                                         bc_value_1, bc_value_2, 
                                         decomposed_values_1, decomposed_values_2, 
                                         decomposed_grads_1, decomposed_grads_2,
-                                        values_poslam, dvs_poslam, values_neglam, dvs_neglam)
+                                        values_poslam, dvs_poslam, values_neglam, dvs_neglam,
+                                        values_zerolam)
                                         
                     else:
                         raise NotImplementedError
@@ -429,6 +437,10 @@ class Experiment(ABC):
 
                     if gradual_pinn_loss and epoch >= total_pretrain_iters:
                         loss_weights['diff_constraint_hom'] = (epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters)
+                    
+                    if nc_decay and epoch >= total_pretrain_iters:
+                        # loss_weights['ncss_value_loss'] = 1 - (epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters)
+                        loss_weights['ncss_value_loss'] = (epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters)
 
                     if self.dataset.memory_tracking:
                         print(f"Epoch {epoch} - after weight scheduler, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
@@ -547,6 +559,9 @@ class Experiment(ABC):
 
                             if gradual_pinn_loss and epoch >= total_pretrain_iters:
                                 log_dict['pde_weight'] = loss_weights['diff_constraint_hom']
+
+                            if nc_decay and epoch >= total_pretrain_iters:
+                                log_dict['naive_combo_weight'] = loss_weights['ncss_value_loss']
 
                             wandb.log(log_dict)
 

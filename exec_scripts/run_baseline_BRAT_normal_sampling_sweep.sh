@@ -10,7 +10,7 @@ readonly canoe_lam_dyn="--dynamics_class CanoeNDlambda $base_params"
 
 # readonly use_wandb=""
 readonly use_wandb="--use_wandb"
-readonly wandb_project="mulob_baseline_ND"
+readonly wandb_project="mulob_naive_combo_testing"
 readonly wandb_parms="$use_wandb --wandb_project $wandb_project"
 
 readonly exp_dir_test="--experiments_dir ./runs/mulob/test"
@@ -38,17 +38,24 @@ stds=(
 # for i in $(seq 2 7); do
 # for i in $(seq 1 6); do
 for i in $(seq 4 4); do
-    for j in $(seq 1 4); do
+    for j in $(seq 1 1); do
 
-        learn_params="--lr_std 2e-5 --pretrain_iters 500 --num_epochs 50000 --counter_end 500" 
+        # learn_params="--lr_std 2e-5 --pretrain_iters 500 --num_epochs 50000 --counter_end 500" 
+        learn_params="--lr_std 1e-6 --pretrain_iters 500 --num_epochs 50000 --counter_end 500" 
+        # learn_params="--lr_std 2e-5 --pretrain_iters 500 --num_epochs 5000 --counter_end 500" 
 
         sampling_params="--spatial_sampling_type truncated_normal --spatial_sampling_std ${stds[j-1]}"
 
         dim="--N ${dims[i-1]}"
         
         ## Conveyor
-        python run_experiment.py $convr_dyn $dim --old_brat True --deepreach_model exact $learn_params $sampling_params $exp_dir_convr --experiment_name BRAT_${dims[i-1]}D_TN_std${stds[i-1]} --wandb_name BRAT_${dims[i-1]}D_TN_std${stds[j-1]} $wandb_parms
-        python run_experiment.py $convr_lam_dyn $dim --mulob_type BRAT --deepreach_model exact $learn_params $sampling_params $exp_dir_convr --experiment_name BRAT_lam_${dims[i-1]}D_TN_std${stds[i-1]} --wandb_name BRAT_lam_${dims[i-1]}D_TN_std${stds[j-1]} $wandb_parms
+        # python run_experiment.py $convr_dyn $dim --old_brat True --deepreach_model exact $learn_params $sampling_params $exp_dir_convr --experiment_name BRAT_${dims[i-1]}D_TN_std${stds[i-1]} --wandb_name BRAT_${dims[i-1]}D_TN_std${stds[j-1]} $wandb_parms
+        # python run_experiment.py $convr_lam_dyn $dim --mulob_type BRAT --deepreach_model exact $learn_params $sampling_params $exp_dir_convr --experiment_name BRAT_lam_${dims[i-1]}D_TN_std${stds[i-1]} --wandb_name BRAT_lam_${dims[i-1]}D_TN_std${stds[j-1]} $wandb_parms
+        
+        python run_experiment.py $convr_lam_dyn $dim --mulob_type BRAT --mulob_loss_type 'naive-combo self-supervision' --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_lam_${dims[i-1]}D_uniform_ncss --wandb_name BRAT_lam_${dims[i-1]}D_uniform_ncss $wandb_parms
+        python run_experiment.py $convr_lam_dyn $dim --mulob_type BRAT --mulob_loss_type 'naive-combo self-supervision' --nc_decay --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_lam_${dims[i-1]}D_uniform_ncss_decay --wandb_name BRAT_lam_${dims[i-1]}D_uniform_ncss_decay $wandb_parms
+        python run_experiment.py $convr_lam_dyn $dim --mulob_type BRAT --mulob_loss_type 'naive-combo self-supervision' --nc_lower_bound --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_lam_${dims[i-1]}D_TN_uniform_ncss_lb --wandb_name BRAT_lam_${dims[i-1]}D_uniform_ncss_lb $wandb_parms
+        python run_experiment.py $convr_dyn $dim --old_brat True --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_${dims[i-1]}D --wandb_name BRAT_${dims[i-1]}D $wandb_parms
 
         # python run_experiment.py $convr_dyn $dim --reach_only True $learn_params $exp_dir_convr --experiment_name reach_only_${dims[i-1]}D_p$j --wandb_name reach_only_${dims[i-1]}D_p${j} $wandb_parms
         # python run_experiment.py $convr_dyn $dim --avoid_only True $learn_params $exp_dir_convr --experiment_name avoid_only_${dims[i-1]}D_p$j --wandb_name avoid_only_${dims[i-1]}D_p${j} $wandb_parms

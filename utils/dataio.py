@@ -141,7 +141,8 @@ class ReachabilityDataset(Dataset):
                 bc_values_1 = self.dynamics.reach_fn_1(states_io, times_io)
                 bc_values_2 = self.dynamics.reach_fn_2(states_io, times_io)
 
-            if not self.load_decomposed_models and not (self.mulob_type == 'BRAT' and self.mulob_loss_type == 'vanilla'):
+            ## Use Interpolated Ground-Truth Decomposed Models (for testing, slow)
+            if not self.load_decomposed_models and (self.mulob_type in ['BRAAT', 'BRRT'] or self.mulob_loss_type in ['augmented supervision', 'naive-combo supervision']):
                 if not self.lambda_var:
                     if self.solve_grad:
                         gt_decomposed_values_1, gt_decomposed_grads_1 = self.V_DP_1_grad(model_coords.t())
@@ -162,6 +163,7 @@ class ReachabilityDataset(Dataset):
             else:
                 gt_decomposed_values_1, gt_decomposed_values_2, gt_decomposed_grads_1, gt_decomposed_grads_2 = torch.empty(0), torch.empty(0), torch.empty(0), torch.empty(0)
 
+            ## Make Lambda Slice Datasets
             if self.lam_slice_super and self.lambda_var:
                 norm_lambda_target_hi = self.dynamics.lambda_target_hi / self.dynamics.state_var[-1]
                 norm_lambda_target_lo = self.dynamics.lambda_target_lo / self.dynamics.state_var[-1]
@@ -173,6 +175,12 @@ class ReachabilityDataset(Dataset):
                 model_coords_neglam[..., -1] = norm_lambda_target_lo
             else:
                 model_coords_poslam, model_coords_neglam = torch.empty(0), torch.empty(0)
+
+            if self.mulob_loss_type in ['naive-combo supervision', 'naive-combo self-supervision']:
+                model_coords_zerolam = model_coords[:self.numpoints_super, :]
+                model_coords_zerolam[..., -1] = 0.
+            else:
+                model_coords_zerolam = torch.empty(0)
 
         if self.pretrain:
             dirichlet_masks = torch.ones(model_coords.shape[0]) > 0
@@ -214,6 +222,7 @@ class ReachabilityDataset(Dataset):
                                                     'gt_decomposed_values_1':gt_decomposed_values_1, 'gt_decomposed_values_2':gt_decomposed_values_2, 
                                                     'gt_decomposed_grads_1':gt_decomposed_grads_1, 'gt_decomposed_grads_2':gt_decomposed_grads_2, 
                                                     'model_coords_poslam':model_coords_poslam, 'model_coords_neglam':model_coords_neglam,
+                                                    'model_coords_zerolam':model_coords_zerolam,
                                                     'dirichlet_masks': dirichlet_masks}
         else:
             raise NotImplementedError
