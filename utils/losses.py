@@ -104,7 +104,7 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
         ## Compute Supervision Losses for Decomposed Values
         if experiment.dataset.pretrained: 
 
-            if 'augment' in loss_type:
+            if 'augmented supervision' in loss_type:
                 if not experiment.dataset.lambda_var: raise AssertionError("Augmented loss requires lambda-varying system")
                 
                 ## Value Supervision (batch subset if lambda slice supervision)
@@ -146,7 +146,7 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
                     loss_dict['dss_grad_1_loss'] = (dss_grad_1_weight * torch.abs(decomposed_grad_1_loss).sum(-1)).sum()
                     loss_dict['dss_grad_2_loss'] = (dss_grad_2_weight * torch.abs(decomposed_grad_2_loss).sum(-1)).sum()
             
-            if 'deform' in loss_type:
+            if 'deformed supervision' in loss_type: #TODO untested
 
                 lbss_value_loss = value - torch.max(decomposed_value_1, decomposed_value_2)
                 loss_dict['lbss_value_loss'] = lbss_value_loss / lbss_value_loss_divisor
@@ -175,48 +175,58 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
             
             hjb_residual = dvdt - ham
             loss_priority_residual = hjb_residual + value
-            
-            # Lambda shift (non-lambda) decomposed values
-            if experiment.dataset.lambda_var:
-                decomposed_value_1 = decomposed_value_1 - torch.nn.functional.relu(-state[..., -1])
-                decomposed_value_2 = decomposed_value_2 + torch.nn.functional.relu(state[..., -1])
+            hjb_loss_perc = ((loss_priority_residual >= -bc_value_2) & (loss_priority_residual <= bc_value_1)).sum()/value.shape[-1]
 
             ## MultiObjective Losses
             if mulob_type == 'BRAT':
 
+                if experiment.dataset.lambda_var:
+                    bc_value_1 = bc_value_1 - torch.nn.functional.relu(-state[..., -1])
+                    bc_value_2 = bc_value_2 + torch.nn.functional.relu(state[..., -1])
+
                 diff_constraint_hom = torch.min(torch.max(hjb_residual, value - bc_value_1), value + bc_value_2)
 
-                loss_dict['hjb_loss_perc'] = ((loss_priority_residual >= decomposed_value_2) & (loss_priority_residual <= decomposed_value_1)).sum()/value.shape[-1]
+                loss_dict['hjb_loss_perc'] = ((loss_priority_residual >= bc_value_2) & (loss_priority_residual <= bc_value_1)).sum()/value.shape[-1]
 
-            elif mulob_type == 'BRAAT':
+            else:
 
-                diff_constraint_hom = torch.max(torch.min(hjb_residual, value + bc_value_2), 
-                                                torch.min(value - bc_value_1, value + decomposed_value_2))
-                
-                # TODO: loss_dict['hjb_loss_perc'] = ((loss_priority_residual >= decomposed_value_2) & (loss_priority_residual <= decomposed_value_1)).sum()/value.shape[-1]
-                
-            elif mulob_type == 'BRRT':
+                # Lambda shift (non-lambda) decomposed values
+                if experiment.dataset.lambda_var and not mulob_type == 'BRAT':
+                    decomposed_value_1 = decomposed_value_1 - torch.nn.functional.relu(-state[..., -1])
+                    decomposed_value_2 = decomposed_value_2 + torch.nn.functional.relu(state[..., -1])
 
-                # diff_constraint_hom = torch.min(dvdt - ham, torch.min(
-                #                                 torch.max(value - bc_value_2, value - decomposed_value_1), 
-                #                                 torch.max(value - bc_value_1, value - decomposed_value_2)))
-                
-                diff_constraint_hom = torch.max(hjb_residual, torch.max(
-                                                torch.min(value - bc_value_2, value - decomposed_value_1), 
-                                                torch.min(value - bc_value_1, value - decomposed_value_2)))
-                
-                # TODO: loss_dict['hjb_loss_perc'] = ((loss_priority_residual >= decomposed_value_2) & (loss_priority_residual <= decomposed_value_1)).sum()/value.shape[-1]
-                
+                elif mulob_type == 'BRAAT':
+
+                    diff_constraint_hom = torch.max(torch.min(hjb_residual, value + bc_value_2), 
+                                                    torch.min(value - bc_value_1, value + decomposed_value_2))
+                    
+                    # TODO: loss_dict['hjb_loss_perc'] = ((loss_priority_residual >= decomposed_value_2) & (loss_priority_residual <= decomposed_value_1)).sum()/value.shape[-1]
+                    
+                elif mulob_type == 'BRRT':
+
+                    # diff_constraint_hom = torch.min(dvdt - ham, torch.min(
+                    #                                 torch.max(value - bc_value_2, value - decomposed_value_1), 
+                    #                                 torch.max(value - bc_value_1, value - decomposed_value_2)))
+                    
+                    diff_constraint_hom = torch.max(hjb_residual, torch.max(
+                                                    torch.min(value - bc_value_2, value - decomposed_value_1), 
+                                                    torch.min(value - bc_value_1, value - decomposed_value_2)))
+                    
+                    # TODO: loss_dict['hjb_loss_perc'] = ((loss_priority_residual >= decomposed_value_2) & (loss_priority_residual <= decomposed_value_1)).sum()/value.shape[-1]
+                    
             loss_dict['diff_constraint_hom'] = torch.abs(diff_constraint_hom).sum()
 
-            loss_dict['hjb_residual_avg'] = hjb_residual.mean()
-            loss_dict['hjb_residual_std'] = hjb_residual.std()
+            loss_dict['hjb_loss_perc'] = hjb_loss_perc
+            loss_dict['hjb_residual_abs_avg'] = hjb_residual.abs().mean()
+            loss_dict['hjb_residual_std'] = hjb_residual.abs().std()
+            loss_dict['BRAT_priority_residual_avg'] = loss_priority_residual.mean()
+            loss_dict['BRAT_priority_residual_std'] = loss_priority_residual.std()
             loss_dict['value_avg'] = value.mean()
             loss_dict['value_std'] = value.std()
-            loss_dict['value_1_avg'] = decomposed_value_1.mean()
-            loss_dict['value_1_std'] = decomposed_value_1.std()
-            loss_dict['value_2_avg'] = decomposed_value_2.mean()
-            loss_dict['value_2_std'] = decomposed_value_2.std()
+            # loss_dict['value_1_avg'] = decomposed_value_1.mean()
+            # loss_dict['value_1_std'] = decomposed_value_1.std()
+            # loss_dict['value_2_avg'] = decomposed_value_2.mean()
+            # loss_dict['value_2_std'] = decomposed_value_2.std()
 
         return loss_dict
 

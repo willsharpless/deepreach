@@ -314,8 +314,11 @@ class Experiment(ABC):
                     
                     ## Multi-Objective (BRAT, BRAAT, BRRT)
                     elif self.dataset.dynamics.loss_type == 'mulob_hjivi':
-
-                        if self.dataset.load_decomposed_models:
+                        
+                        if self.mulob_type == 'BRAT' and self.mulob_loss_type == 'vanilla':
+                            decomposed_values_1, decomposed_values_2, decomposed_grads_1, decomposed_grads_2 = None, None, None, None
+                        
+                        elif self.dataset.load_decomposed_models:
                             # note, decomposed values inferred on data wo lambda, and appropriately shifted if augmented for pde loss (but not ss losses)
                             
                             if not self.dataset.solve_grad:
@@ -346,8 +349,7 @@ class Experiment(ABC):
                             #     decomposed_values_2 = -1 * decomposed_values_2 # avoid_only defined positively in DR, so flip
                             #     if self.dataset.solve_grad:
                             #         decomposed_grads_2[..., 1:] = -1 * decomposed_grads_2[..., 1:]
-
-                        # elif self.dataset.use_gt_decomposed:
+                            
                         else:
 
                             if not hasattr(self.dataset, "V_DP"):
@@ -629,28 +631,23 @@ class DeepReach(Experiment):
         pass
 
 class DeepReachMulob(Experiment):
-    def init_special(self, N=2, timing=False):
+    def init_special(self, N=2, timing=False, mulob_type='BRAAT', mulob_loss_type='augmented supervision'):
         self.N = N
         self.timing = timing
+        self.mulob_type = mulob_type
+        self.mulob_loss_type = mulob_loss_type
         if self.dataset.dynamics.name in ["Conveyor","Canoe"]:
             if not self.dataset.lambda_var:
-                self.validate = self.validate2D_mulob
+                self.validate = self.validate_mulob
             else:
-                self.validate = self.validate2Dlambda_mulob
+                self.validate = self.validate_mulob_lambda
         else:
             if N == 2:
                 self.validate = self.validate2D
             else:
                 self.validate = self.validateND
                 if self.dataset.lambda_var:
-                    self.validate = self.validateNDlambda
-
-        # elif N > 2:
-        #     self.validate = self.validateND
-        #     if self.dataset.lambda_var and self.dataset.dynamics.name == "LessLinear":
-        #         self.validate = self.validateNDlambda
-        #     elif self.dataset.lambda_var and self.dataset.dynamics.name in ["Conveyor","Canoe"]:
-        #         self.validate = self.validate2Dlambda_mulob      
+                    self.validate = self.validateNDlambda   
     
     def validate2D(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution):
         was_training = self.model.training
@@ -710,7 +707,7 @@ class DeepReachMulob(Experiment):
             self.model.train()
             self.model.requires_grad_(True)
 
-    def validate2D_mulob(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution, testing=False):
+    def validate_mulob(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution, testing=False):
         was_training = self.model.training
         self.model.eval()
         self.model.requires_grad_(False)
@@ -813,7 +810,7 @@ class DeepReachMulob(Experiment):
             self.model.train()
             self.model.requires_grad_(True)
 
-    def validate2Dlambda_mulob(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution, testing=False):
+    def validate_mulob_lambda(self, epoch, save_path, x_resolution, y_resolution, z_resolution, time_resolution, testing=False):
         was_training = self.model.training
         self.model.eval()
         self.model.requires_grad_(False)
@@ -852,7 +849,11 @@ class DeepReachMulob(Experiment):
                 if lambda_vals[j] == 1.:
                     values_gt = self.dataset.V_DP_1(coords[..., :-1].cpu().t()).reshape(n_grid_len, n_grid_len)
                 elif lambda_vals[j] == -1.:
-                    values_gt = self.dataset.V_DP_2(coords[..., :-1].cpu().t()).reshape(n_grid_len, n_grid_len)
+                    if not self.mulob_type == 'BRAT':
+                        values_gt = self.dataset.V_DP_2(coords[..., :-1].cpu().t()).reshape(n_grid_len, n_grid_len)
+                    else:
+                        avoid_values = self.dataset.dynamics.avoid_fn(states, times).reshape(n_grid_len, n_grid_len).cpu()
+                        values_gt = -avoid_values
                 elif lambda_vals[j] == 0.:
                     values_gt = self.dataset.V_DP(coords[..., :-1].cpu().t()).reshape(n_grid_len, n_grid_len)
 

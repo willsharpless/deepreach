@@ -73,7 +73,7 @@ if __name__ == '__main__':
 
     ## Multi-Objective Options
     p.add_argument('--mulob_type', type=str, default='BRAAT', choices=['BRAT', 'BRAAT', 'BRRT'], help='Type of multiobjective value combination')
-    p.add_argument('--mulob_loss_type', type=str, default='vanilla', choices=['vanilla', 'augment', 'deform', 'augment-deform'], help='Type of multiobjective loss')
+    p.add_argument('--mulob_loss_type', type=str, default='vanilla', choices=['vanilla', 'augmented supervision', 'deformed supervision', 'augment-deform'], help='Type of multiobjective loss')
     p.add_argument('--load_decomposed_models', action='store_true', default=False, required=False, help='Will load models corresponding to the decomposed game values.')
     p.add_argument('--load_decomposed_model_name_1', type=str, default='./runs/mulob/ConveyorND/Conveyor2D/reach_only_2D', help='Decomposed value 1 model name')
     p.add_argument('--load_decomposed_model_name_2', type=str, default='./runs/mulob/ConveyorND/Conveyor2D/avoid_only_2D_fast2', help='Decomposed value 2 model name')
@@ -86,6 +86,8 @@ if __name__ == '__main__':
     p.add_argument('--numpoints_super', type=int, default=10000, required=False, help='Number of additional datapoints to use for augmented supervision')
     p.add_argument('--LS_w_time_curr', action='store_true', default=False, required=False, help='Do supervision with a temporal curriculum')
     p.add_argument('--gradual_pinn_loss', default=False, required=False, action='store_true', help='Flag to gradually introduce the HJ-PINN loss')
+    p.add_argument('--spatial_sampling_type', type=str, default='uniform', choices=['uniform', 'normal', 'truncated_normal'], help='Type of spatial sampling to use for data')
+    p.add_argument('--spatial_sampling_std', type=float, default=0.5, required=False, help='Spatial sampling standard deviation')
 
     ## Multi-Objective Loss Weights
     p.add_argument('--dss_value_loss_1_divisor', default=10., required=False, type=float, help='What to divide the mulob decomposed semi-supervision loss by for loss reweighting')
@@ -114,7 +116,7 @@ if __name__ == '__main__':
         experiment_class = experiment_classes_dict[p.parse_known_args()[0].experiment_class]
         experiment_params = {name: param for name, param in inspect.signature(experiment_class.init_special).parameters.items() if name != 'self'}
         for param in experiment_params.keys():
-            if param == "N" or param == "timing": continue
+            if param == "N" or param == "timing" or param == 'mulob_type' or param == 'mulob_loss_type': continue
             p.add_argument('--' + param, type=experiment_params[param].annotation, required=True, help='special experiment_class argument')
 
         # simulation data source options
@@ -200,7 +202,7 @@ if __name__ == '__main__':
         opt.pretrain_iters = 2
         opt.super_pretrain_iters = 2
         opt.num_epochs = 10
-        opt.epochs_til_ckpt = 5
+        opt.epochs_til_ckpt = 50
         opt.use_bank = False
 
     if opt.capacity_test:
@@ -332,6 +334,8 @@ if __name__ == '__main__':
         LS_w_time_curr=orig_opt.LS_w_time_curr, 
         super_pretrain=orig_opt.super_pretrain, super_pretrain_iters=orig_opt.super_pretrain_iters,
         no_curriculum=orig_opt.no_curr, record_gt_metrics=orig_opt.gt_metrics,
+        mulob_type=orig_opt.mulob_type, mulob_loss_type=orig_opt.mulob_loss_type, 
+        spatial_sampling_type=orig_opt.spatial_sampling_type, spatial_sampling_std=orig_opt.spatial_sampling_std,
         )
 
     model = modules.SingleBVPNet(in_features=dynamics_inst.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
@@ -358,25 +362,29 @@ if __name__ == '__main__':
         print(f"   - FD d_t's:   {orig_opt.fd_dts}")
 
     elif dynamics_inst.loss_type == 'mulob_hjivi':
-        print(f" - via {orig_opt.mulob_type} multi-objective decomposition")
+        print(f" - via {orig_opt.mulob_type} multi-objective learning")
         if orig_opt.load_decomposed_models:
-            print(f" - aquiring decomposed values from learned decomposed models:")
+            print(f" - decomposing, with values from learned decomposed models:")
             print(f"   - (1): {orig_opt.load_decomposed_model_name_1}")
             print(f"   - (2): {orig_opt.load_decomposed_model_name_2}")
-        else:
-            print(f" - aquiring decomposed values from ground-truth models (slow)")
+        elif not (orig_opt.mulob_type == 'BRAT' and orig_opt.mulob_loss_type == 'vanilla'):
+            print(f" - decomposing, with values from ground-truth models (slow)")
         print(f" - with the {orig_opt.mulob_loss_type} mulob loss")
-        
-        if orig_opt.lam_slice_super and dataset.lambda_var: 
-            print(f"   - with decomposed supervision being enforced only on lambda slices ({dynamics_inst.lambda_target_lo},{dynamics_inst.lambda_target_hi}) with 2 batches of {orig_opt.numpoints_super}")
-        elif dataset.lambda_var:
-            print(f"   - with decomposed supervision losses weighted by ReLU(+- lambda) with 2 batches of {orig_opt.numpoints_super}")
+        if 'supervision' in orig_opt.mulob_loss_type:
+            if orig_opt.lam_slice_super and dataset.lambda_var: 
+                print(f"   - with decomposed supervision being enforced only on lambda slices ({dynamics_inst.lambda_target_lo},{dynamics_inst.lambda_target_hi}) with 2 batches of {orig_opt.numpoints_super}")
+            elif dataset.lambda_var:
+                print(f"   - with decomposed supervision losses weighted by ReLU(+- lambda) with 2 batches of {orig_opt.numpoints_super}")
         if orig_opt.grad_super and not orig_opt.grad_super_time: 
             print(f"   - including spatial gradients in supervision")
         if orig_opt.grad_super and orig_opt.grad_super_time: 
             print(f"   - including spatiotemporal gradients in supervision")
         if orig_opt.gradual_pinn_loss:
             print(f"   - gradually introducing the PINN loss linearly")
+        if orig_opt.spatial_sampling_type == 'uniform':
+            print(f" - with states sampled from {orig_opt.spatial_sampling_type} dist")
+        else:
+            print(f" - with states sampled from {orig_opt.spatial_sampling_type} dist, std = {orig_opt.spatial_sampling_std}")
 
     else: 
         print(" - via the original method (baseline).")

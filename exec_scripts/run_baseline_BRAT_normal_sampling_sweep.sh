@@ -25,30 +25,30 @@ for ((i=1; i<=${i_max}; i++)); do
     dims+=($((2 ** i)))
 done
 
+stds=(
+    "0.25"
+    "0.5"
+    "1."
+    "2."
+)
+
 # for j in $(seq 1 1); do
     # for i in $(seq 1 10); do
 
 # for i in $(seq 2 7); do
-for i in $(seq 1 6); do
-    for j in $(seq 2 2); do
+# for i in $(seq 1 6); do
+for i in $(seq 4 4); do
+    for j in $(seq 1 4); do
 
-        if [ $j == 1 ]; then
-            learn_params="--lr_std 2e-5 --pretrain_iters 500  --num_epochs 5000   --counter_end 500"
-        elif [ $j == 2 ]; then
-            learn_params="--lr_std 5e-6 --pretrain_iters 1000 --num_epochs 50000  --counter_end 1000"
-        elif [ $j == 3 ]; then
-            learn_params="--lr_std 2e-6 --pretrain_iters 2000 --num_epochs 100000 --counter_end 5000"
-        elif [ $j == 4 ]; then
-            learn_params="--lr_std 1e-6 --pretrain_iters 5000 --num_epochs 200000 --counter_end 10000" 
-        elif [ $j == 5 ]; then
-            learn_params="--lr_std 1e-6 --pretrain_iters 5000 --num_epochs 300000 --counter_end 20000"  
-        fi
+        learn_params="--lr_std 2e-5 --pretrain_iters 500 --num_epochs 50000 --counter_end 500" 
+
+        sampling_params="--spatial_sampling_type truncated_normal --spatial_sampling_std ${stds[j-1]}"
 
         dim="--N ${dims[i-1]}"
         
         ## Conveyor
-        python run_experiment.py $convr_dyn $dim --old_brat True --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_${dims[i-1]}D_p$j --wandb_name BRAT_${dims[i-1]}D_p$j $wandb_parms
-        python run_experiment.py $convr_lam_dyn $dim --mulob_type BRAT --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_lam_${dims[i-1]}D_p$j --wandb_name BRAT_lam_${dims[i-1]}D_p$j $wandb_parms
+        python run_experiment.py $convr_dyn $dim --old_brat True --deepreach_model exact $learn_params $sampling_params $exp_dir_convr --experiment_name BRAT_${dims[i-1]}D_TN_std${stds[i-1]} --wandb_name BRAT_${dims[i-1]}D_TN_std${stds[j-1]} $wandb_parms
+        python run_experiment.py $convr_lam_dyn $dim --mulob_type BRAT --deepreach_model exact $learn_params $sampling_params $exp_dir_convr --experiment_name BRAT_lam_${dims[i-1]}D_TN_std${stds[i-1]} --wandb_name BRAT_lam_${dims[i-1]}D_TN_std${stds[j-1]} $wandb_parms
 
         # python run_experiment.py $convr_dyn $dim --reach_only True $learn_params $exp_dir_convr --experiment_name reach_only_${dims[i-1]}D_p$j --wandb_name reach_only_${dims[i-1]}D_p${j} $wandb_parms
         # python run_experiment.py $convr_dyn $dim --avoid_only True $learn_params $exp_dir_convr --experiment_name avoid_only_${dims[i-1]}D_p$j --wandb_name avoid_only_${dims[i-1]}D_p${j} $wandb_parms

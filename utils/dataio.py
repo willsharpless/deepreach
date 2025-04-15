@@ -9,7 +9,10 @@ from tqdm.autonotebook import tqdm
 
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+import matplotlib.colors as mcolors
 import hj_reachability as hj
+
+from scipy.stats import truncnorm
 
 # uses model input and real boundary fn
 class ReachabilityDataset(Dataset):
@@ -22,6 +25,8 @@ class ReachabilityDataset(Dataset):
                  loaded_dynamics_1=None, loaded_dynamics_2=None,
                  lam_slice_super=False, numpoints_super=10000,
                  grad_super=False, grad_super_time=False,
+                 mulob_type='BRAT', mulob_loss_type='vanilla',
+                 spatial_sampling_type='uniform', spatial_sampling_std=1.,
                  ):
 
         # Standard DeepReach Options
@@ -55,6 +60,10 @@ class ReachabilityDataset(Dataset):
         self.N = dynamics.N
         self.capacity_test = capacity_test
         self.memory_tracking = memory_tracking
+        self.mulob_type = mulob_type
+        self.mulob_loss_type = mulob_loss_type
+        self.spatial_sampling_type = spatial_sampling_type
+        self.spatial_sampling_std = spatial_sampling_std
 
         # Load pretrained models for decomposed supervision
         self.loaded_model_1 = loaded_model_1
@@ -80,7 +89,13 @@ class ReachabilityDataset(Dataset):
             print()
     
         ## Sample Points and Evaluate
-        model_states = torch.zeros(self.numpoints, self.dynamics.state_dim).uniform_(-1, 1)
+        if self.spatial_sampling_type == 'normal':
+            model_states = torch.zeros(self.numpoints, self.dynamics.state_dim).noraml_(mean=0., std=self.spatial_sampling_std)
+        elif self.spatial_sampling_type == 'truncated_normal':
+            model_states = torch.from_numpy(truncnorm.rvs(-1/self.spatial_sampling_std, 1/self.spatial_sampling_std, scale=self.spatial_sampling_std, size=(self.numpoints, self.dynamics.state_dim)).astype(np.float32))
+        else:
+            model_states = torch.zeros(self.numpoints, self.dynamics.state_dim).uniform_(-1, 1)
+        # self.sample_demo_plot()
 
         if self.num_target_samples > 0:
             target_state_samples = self.dynamics.sample_target_state(self.num_target_samples)
@@ -126,7 +141,7 @@ class ReachabilityDataset(Dataset):
                 bc_values_1 = self.dynamics.reach_fn_1(states_io, times_io)
                 bc_values_2 = self.dynamics.reach_fn_2(states_io, times_io)
 
-            if not self.load_decomposed_models:
+            if not self.load_decomposed_models and not (self.mulob_type == 'BRAT' and self.mulob_loss_type == 'vanilla'):
                 if not self.lambda_var:
                     if self.solve_grad:
                         gt_decomposed_values_1, gt_decomposed_grads_1 = self.V_DP_1_grad(model_coords.t())
@@ -146,8 +161,6 @@ class ReachabilityDataset(Dataset):
                         gt_decomposed_grads_1, gt_decomposed_grads_2 = torch.empty(0), torch.empty(0)
             else:
                 gt_decomposed_values_1, gt_decomposed_values_2, gt_decomposed_grads_1, gt_decomposed_grads_2 = torch.empty(0), torch.empty(0), torch.empty(0), torch.empty(0)
-                    
-                # FIXME: for BRAT decomp, need V_DP_2 == avoid_fn (NOT avoid_value)
 
             if self.lam_slice_super and self.lambda_var:
                 norm_lambda_target_hi = self.dynamics.lambda_target_hi / self.dynamics.state_var[-1]
@@ -324,6 +337,8 @@ class ReachabilityDataset(Dataset):
             self.V_DP = self.V_DP_2
             if self.solve_grad:
                 self.V_DP_grad = self.V_DP_2_grad
+
+        # TODO, if mulob_loss_type == BRAT and self.lambda_var, self.V_DP_2 should be self.dynamics.avoid_fn for correctly computing FI_2 & FE_2 (but requires a wrapper)
 
         ## Define a fixed spatiotemporal grid to score MSE & Jaccard
         
@@ -570,3 +585,52 @@ class ReachabilityDataset(Dataset):
         print(f"Mean Error for bc: {(plot_values_bc_t0 - plot_values_V_DP).abs().mean():2.0e}")
         plt.close()
         return
+    
+    def sample_demo_plot(self):
+        
+        state_dims = [2, 4, 8, 16, 32]
+        stds = [1.0, 0.5, 0.3, 0.2]
+
+        # Init figure
+        fig, axes = plt.subplots(len(state_dims), 1 + len(stds), figsize=(12, 12))
+        # fig.subplots_adjust(hspace=0.3, wspace=0.05)
+        abs_fig_bd = 1.25
+
+        # First column: uniform
+        for i, d in enumerate(state_dims):
+            model_states = torch.zeros(self.numpoints, d).uniform_(-1, 1)
+            ax = axes[i][0] if len(state_dims) > 1 else axes[0]
+            norms = torch.norm(model_states, dim=1)
+            vmin, vmax = norms.min().item(), norms.max().item()  # Store for this row
+            lognorm = mcolors.LogNorm(vmin=1e-1, vmax=vmax)
+            sc = ax.scatter(model_states[:, 0].cpu(), model_states[:, 1].cpu(), c=norms, cmap='viridis', s=0.1, norm=lognorm, alpha=0.1)
+            ax.set_title(f'{d}D, uniform', fontsize=8)
+            ax.set_xlim(-abs_fig_bd, abs_fig_bd)
+            ax.set_ylim(-abs_fig_bd, abs_fig_bd)
+            ax.set_xticks([-1, 1])
+            ax.set_yticks([-1, 1])
+            ax.set_aspect('equal', 'box')
+
+            # Remaining columns: truncated normals
+            for j, std in enumerate(stds):
+                a, b = -1/std, 1/std
+                samples = truncnorm.rvs(a, b, scale=std, size=(self.numpoints, d)).astype(np.float32)
+                model_states = torch.from_numpy(samples)
+                ax = axes[i][j+1] if len(state_dims) > 1 else axes[j+1]
+                norms = torch.norm(model_states, dim=1)
+                ax.scatter(model_states[:, 0].cpu(), model_states[:, 1].cpu(), c=norms, cmap='viridis', s=0.1, norm=lognorm, alpha=0.1)
+                ax.set_title(f'{d}D, std={std}', fontsize=8)
+                ax.set_xlim(-abs_fig_bd, abs_fig_bd)
+                ax.set_ylim(-abs_fig_bd, abs_fig_bd)
+                ax.set_xticks([-1, 1])
+                ax.set_yticks([-1, 1])
+                ax.set_aspect('equal', 'box')
+            
+            cbar_ax = fig.add_axes([0.92, 0.105 + (len(state_dims) - 1 - i) * 0.18, 0.015, 0.12])
+            cbar = fig.colorbar(sc, cax=cbar_ax)
+            cbar.set_label(f'||x|| ({d}D)', fontsize=8)
+            cbar.ax.tick_params(labelsize=7)
+        
+        plt.suptitle("The Woes of High Dimensional Sampling, L2-colored")
+        plt.savefig("plots/mulob_tests/sampling_grid_plot.png", bbox_inches='tight', pad_inches=0.1)
+        plt.close()
