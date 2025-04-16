@@ -59,13 +59,14 @@ if __name__ == '__main__':
     p.add_argument('--spatial_sampling_std', type=float, default=0.5, required=False, help='Spatial sampling standard deviation')
     p.add_argument('--nc_lower_bound', action='store_true', default=False, required=False, help='Limits naive-combo supervision losses to be lower-bounds (no decay needed)')
     p.add_argument('--nc_decay', default=False, required=False, action='store_true', help='Flag to gradually decay the naive-combo supervision loss')
+    p.add_argument('--nc_grow', default=False, required=False, action='store_true', help='Flag to gradually grow the naive-combo supervision loss')
 
     ## Multi-Objective Loss Weights
     p.add_argument('--dss_value_loss_1_divisor', default=10., required=False, type=float, help='What to divide the mulob decomposed semi-supervision loss by for loss reweighting')
     p.add_argument('--dss_value_loss_2_divisor', default=10., required=False, type=float, help='What to divide the mulob decomposed semi-supervision loss by for loss reweighting')    
     p.add_argument('--dss_grad_loss_1_divisor', default=100., required=False, type=float, help='What to divide the mulob decomposed grad semi-supervision loss by for loss reweighting')
     p.add_argument('--dss_grad_loss_2_divisor', default=100., required=False, type=float, help='What to divide the mulob decomposed grad semi-supervision loss by for loss reweighting')
-    p.add_argument('--ncss_value_loss_divisor', default=0.1, required=False, type=float, help='What to divide the mulob naive-combo supervision loss by for loss reweighting')
+    p.add_argument('--ncss_value_loss_divisor', default=10, required=False, type=float, help='What to divide the mulob naive-combo supervision loss by for loss reweighting')
     p.add_argument('--ncss_grad_loss_divisor', default=100., required=False, type=float, help='What to divide the mulob naive-combo supervision loss by for loss reweighting')
                                                         
     use_wandb = p.parse_known_args()[0].use_wandb
@@ -170,10 +171,10 @@ if __name__ == '__main__':
     opt = p.parse_args()
         
     if opt.debug_params:
-        opt.pretrain_iters = 2
-        opt.super_pretrain_iters = 2
+        opt.pretrain_iters = 5
+        opt.super_pretrain_iters = 0
         opt.num_epochs = 10
-        opt.epochs_til_ckpt = 11
+        opt.epochs_til_ckpt = 10
         opt.use_bank = False
 
     if opt.capacity_test:
@@ -351,6 +352,8 @@ if __name__ == '__main__':
                 print(f"   - lower-bounding the naive-combo supervision loss")
             if orig_opt.nc_decay:
                 print(f"   - decaying the naive-combo supervision loss")
+            if orig_opt.nc_grow:
+                print(f"   - growing the naive-combo supervision loss")
         if orig_opt.grad_super and not orig_opt.grad_super_time: 
             print(f"   - including spatial gradients in supervision")
         if orig_opt.grad_super and orig_opt.grad_super_time: 
@@ -399,7 +402,7 @@ if __name__ == '__main__':
             val_x_resolution=orig_opt.val_x_resolution, val_y_resolution=orig_opt.val_y_resolution, val_z_resolution=orig_opt.val_z_resolution, val_time_resolution=orig_opt.val_time_resolution,
             use_CSL=orig_opt.use_CSL, CSL_lr=orig_opt.CSL_lr, CSL_dt=orig_opt.CSL_dt, epochs_til_CSL=orig_opt.epochs_til_CSL, num_CSL_samples=orig_opt.num_CSL_samples, CSL_loss_frac_cutoff=orig_opt.CSL_loss_frac_cutoff, max_CSL_epochs=orig_opt.max_CSL_epochs, CSL_loss_weight=orig_opt.CSL_loss_weight, CSL_batch_size=orig_opt.CSL_batch_size,
             lr_decay_w=orig_opt.lr_decay_w, fin_diff=orig_opt.fin_diff, fd_alpha_scale=orig_opt.fd_as, fd_delta_x_scale=orig_opt.fd_dxs, fd_delta_t_scale=orig_opt.fd_dts,
-            gradual_pinn_loss=orig_opt.gradual_pinn_loss, nc_decay=orig_opt.nc_decay,
+            gradual_pinn_loss=orig_opt.gradual_pinn_loss, nc_decay=orig_opt.nc_decay, nc_grow=orig_opt.nc_grow,
             )
 
     if (mode == 'all') or (mode == 'test'):

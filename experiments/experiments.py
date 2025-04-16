@@ -109,7 +109,8 @@ class Experiment(ABC):
             fin_diff = False, fd_alpha_scale = [2.5, 2., 1.5, 1.], 
             fd_delta_x_scale = [0.7, 0.5, 0.3, 0.1], fd_delta_t_scale = [0.05, 0.03, 0.02, 0.01],
             gradual_pinn_loss = False,
-            nc_decay = False
+            nc_decay = False,
+            nc_grow = False
         ):
         was_eval = not self.model.training
         self.model.train()
@@ -250,6 +251,11 @@ class Experiment(ABC):
                     state_times, states = results_coord[..., 0], results_coord[..., 1:]
                     values = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1))
                     
+                    # if self.dataset.pretrained and (self.dataset.super_pretrained or not self.dataset.super_pretrain):
+                    #     print('PRE PRE : model coords 1st :', model_input['model_coords'][...,0,:])
+                    #     print('PRE PRE : state 1st        :', states[...,0,:])
+                    #     print()
+                    
                     ## Compute Gradients via Jacobian Backprop
                     if not fin_diff:
                         dvs = self.dataset.dynamics.io_to_dv(model_results['model_in'], model_results['model_out'].squeeze(dim=-1))
@@ -358,11 +364,9 @@ class Experiment(ABC):
                                 decomposed_grads_1, decomposed_grads_2 = gt['gt_decomposed_grads_1'], gt['gt_decomposed_grads_2']
                             else:
                                 decomposed_grads_1, decomposed_grads_2 = None, None
-
-                        bc_value_1, bc_value_2 = gt['bc_values_1'], gt['bc_values_2']
                         
-                        ## For fixed lambda slice supervision, infer model values on slices
-                        if self.dataset.lam_slice_super:
+                        ## For augmented slice-supervision or naive-combo self-supervision, infer model values on +/- lambda slices
+                        if self.dataset.lam_slice_super or self.mulob_loss_type in ['naive-combo self-supervision']:
 
                             model_results_poslam = self.model({'coords': gt['model_coords_poslam']})
                             model_results_neglam = self.model({'coords': gt['model_coords_neglam']})
@@ -381,22 +385,34 @@ class Experiment(ABC):
                             dvs_poslam = dvs[:, :self.dataset.numpoints_super, :] if self.dataset.grad_super else torch.empty(0)
                             dvs_neglam = dvs[:, :self.dataset.numpoints_super, :] if self.dataset.grad_super else torch.empty(0)
 
-                        ## For Naive Combo Supervision Losses, use lambda=0 slice
-                        if self.mulob_loss_type in ['naive-combo supervision', 'naive-combo self-supervision']:
+                        ## For naive-combo supervision losses, infer model on lambda=0 slice
+                        if self.mulob_loss_type in ['naive-combo supervision', 'naive-combo self-supervision'] and self.dataset.lambda_var:
                         
                             model_results_zerolam = self.model({'coords': gt['model_coords_zerolam']})
                             values_zerolam = self.dataset.dynamics.io_to_value(model_results_zerolam['model_in'].detach(), model_results_zerolam['model_out'].squeeze(dim=-1))
                             #TODO add grads
 
+                            bc_value_1_zerolam, bc_value_2_zerolam = gt['bc_values_1_zerolam'], gt['bc_values_2_zerolam']
+
                         else:
-                            values_zerolam = None
+                            values_zerolam = values
+                            bc_value_1_zerolam, bc_value_2_zerolam = None, None
+
+                        bc_value_1, bc_value_2 = gt['bc_values_1'], gt['bc_values_2']
+
+                        # if self.dataset.pretrained and (self.dataset.super_pretrained or not self.dataset.super_pretrain):
+                        #     print('PRE LOSS: model coords 1st :', model_input['model_coords'][...,0,:])
+                        #     print('PRE LOSS: state 1st        :', states[...,0,:])
+                        #     print('PRE LOSS: bc_value_1 1st   :', bc_value_1[...,0])
+                        #     print('PRE LOSS: bc_value_2 1st   :', bc_value_2[...,0])
+                        #     print()
 
                         losses = loss_fn(states, values, dvs, boundary_values, dirichlet_masks, model_results['model_out'], 
                                         bc_value_1, bc_value_2, 
                                         decomposed_values_1, decomposed_values_2, 
                                         decomposed_grads_1, decomposed_grads_2,
                                         values_poslam, dvs_poslam, values_neglam, dvs_neglam,
-                                        values_zerolam)
+                                        values_zerolam, bc_value_1_zerolam, bc_value_2_zerolam)
                                         
                     else:
                         raise NotImplementedError
@@ -439,7 +455,8 @@ class Experiment(ABC):
                         loss_weights['diff_constraint_hom'] = (epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters)
                     
                     if nc_decay and epoch >= total_pretrain_iters:
-                        # loss_weights['ncss_value_loss'] = 1 - (epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters)
+                        loss_weights['ncss_value_loss'] = 1 - (epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters)
+                    elif nc_grow and epoch >= total_pretrain_iters:
                         loss_weights['ncss_value_loss'] = (epoch - total_pretrain_iters)/(epochs - 1 - total_pretrain_iters)
 
                     if self.dataset.memory_tracking:
@@ -521,47 +538,47 @@ class Experiment(ABC):
 
                         if self.use_wandb:
                             log_dict = {
-                                'step': epoch,
-                                'train_loss': train_loss,
-                                'iter_time_sec': iter_time}
+                                'other/step': epoch,
+                                'Major Metrics/train_loss': train_loss,
+                                'System/iter_time_sec': iter_time}
                             
                             for loss_name, loss in losses.items():
                                 if loss_name in loss_weights.keys(): 
-                                    log_dict[loss_name + "_loss"] = loss
+                                    log_dict['losses/' + loss_name + "_loss"] = loss
                                 else:
-                                    log_dict[loss_name] = loss
+                                    log_dict['other/' +loss_name] = loss
 
                             # if nonlin_scale and not(self.dataset.pretrain) and not(self.dataset.super_pretrain):
                             #     log_dict["Nonlinearity Scale"] = nl_perc
 
                             if self.dataset.record_gt_metrics:
 
-                                log_dict["Jaccard Index over Time"] = JIp
-                                log_dict["Smooth Jaccard Index over Time"] = JIp_s
-                                log_dict["Max Smooth Jaccard Index over Time"] = JIp_s_max
-                                log_dict["Falsely Included percent over Time"] = FIp
-                                log_dict["Falsely Excluded percent over Time"] = FEp
-                                log_dict["Mean Absolute Spatial Gradient"] = torch.abs(dvdx).sum() / (self.dataset.numpoints * self.N)
-                                log_dict["Mean Squared Error of Value"] = Vmse
+                                log_dict["Major Metrics/Jaccard Index over Time"] = JIp
+                                log_dict["other/Smooth Jaccard Index over Time"] = JIp_s
+                                log_dict["other/Max Smooth Jaccard Index over Time"] = JIp_s_max
+                                log_dict["Major Metrics/Falsely Included percent over Time"] = FIp
+                                log_dict["Major Metrics/Falsely Excluded percent over Time"] = FEp
+                                log_dict["other/Mean Absolute Spatial Gradient"] = torch.abs(dvdx).sum() / (self.dataset.numpoints * self.N)
+                                log_dict["Major Metrics/Mean Squared Error of Value"] = Vmse
 
                                 if self.dataset.dynamics.loss_type in ["brat_hjivi", "mulob_hjivi"]:
-                                    log_dict["V1 Falsely Included percent over Time"] = FIp_1 
-                                    log_dict["V1 Falsely Excluded percent over Time"] = FEp_1 
-                                    log_dict["V2 Falsely Included percent over Time"] = FIp_2 
-                                    log_dict["V2 Falsely Excluded percent over Time"] = FEp_2
+                                    log_dict["other/V1 Falsely Included percent over Time"] = FIp_1 
+                                    log_dict["other/V1 Falsely Excluded percent over Time"] = FEp_1 
+                                    log_dict["Major Metrics/V2 Falsely Included percent over Time"] = FIp_2 
+                                    log_dict["other/V2 Falsely Excluded percent over Time"] = FEp_2
                                     
                                 if self.dataset.solve_grad:
-                                    log_dict["Mean Squared Error of Spatial Gradient"] = DVXmse
+                                    log_dict["Major Metrics/Mean Squared Error of Spatial Gradient"] = DVXmse
 
                             # if hopf_loss_decay and epoch >= total_pretrain_iters:
                             #     log_dict['hopf_weight'] = loss_weights['hopf']
                             #     log_dict['pde_weight'] = loss_weights['diff_constraint_hom']
 
                             if gradual_pinn_loss and epoch >= total_pretrain_iters:
-                                log_dict['pde_weight'] = loss_weights['diff_constraint_hom']
+                                log_dict['other/pde_weight'] = loss_weights['diff_constraint_hom']
 
-                            if nc_decay and epoch >= total_pretrain_iters:
-                                log_dict['naive_combo_weight'] = loss_weights['ncss_value_loss']
+                            if (nc_decay or nc_grow) and epoch >= total_pretrain_iters:
+                                log_dict['other/naive_combo_weight'] = loss_weights['ncss_value_loss']
 
                             wandb.log(log_dict)
 
@@ -1622,12 +1639,12 @@ class DeepReachMulob(Experiment):
             n_overlap = values_grid_sub0_ixs.size()[0] + self.dataset.values_DP_grid_sub0_ixs.size()[0] - n_intersect
             
             if values_grid_sub0_ixs.size()[0] > 0:
-                FIp = (values_grid_sub0_ixs.size()[0] - n_intersect) / values_grid_sub0_ixs.size()[0] # <- wrt learned set, wrt grid
+                FIp = (values_grid_sub0_ixs.size()[0] - n_intersect) / values_grid_sub0_ixs.size()[0] # <- wrt learned set on grid
             else:
                 FIp = 0.
             
             if self.dataset.values_DP_grid_sub0_ixs.size()[0] > 0:
-                FEp = (self.dataset.values_DP_grid_sub0_ixs.size()[0] - n_intersect) / self.dataset.values_DP_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid
+                FEp = (self.dataset.values_DP_grid_sub0_ixs.size()[0] - n_intersect) / self.dataset.values_DP_grid_sub0_ixs.size()[0] # <- wrt true set on grid
             else:
                 FEp = 0.
 
@@ -1635,25 +1652,28 @@ class DeepReachMulob(Experiment):
 
             ## Compute Falsely Included and Excluded of Independent Sets
             if self.dataset.dynamics.loss_type in ["brat_hjivi", "mulob_hjivi"]:
-                n_intersect_1 = values_grid_sub0_ixs[(values_grid_sub0_ixs.view(1, -1) == self.dataset.values_DP_1_grid_sub0_ixs.view(-1, 1)).any(dim=0)].size()[0]
-                n_intersect_2 = values_grid_sub0_ixs[(values_grid_sub0_ixs.view(1, -1) == self.dataset.values_DP_2_grid_sub0_ixs.view(-1, 1)).any(dim=0)].size()[0]
+                n_intersect_1 = values_grid_sub0_ixs[(values_grid_sub0_ixs.view(1, -1) == self.dataset.values_DP_1_grid_sub0_ixs.view(-1, 1)).any(dim=0)].size()[0] # intersection of learned & (reach or reach_1)
+                n_intersect_2 = values_grid_sub0_ixs[(values_grid_sub0_ixs.view(1, -1) == self.dataset.values_DP_2_grid_sub0_ixs.view(-1, 1)).any(dim=0)].size()[0] # intersection of learned & (avoid complement or reach_2)
+                
+                if hasattr(self.dataset.dynamics, 'avoid_fn'):
+                    n_intersect_3 = values_grid_sub0_ixs[(values_grid_sub0_ixs.view(1, -1) == self.dataset.values_DP_2_grid_sup0_ixs.view(-1, 1)).any(dim=0)].size()[0] # intersection of learned & avoid set
                 
                 if values_grid_sub0_ixs.size()[0] > 0:
-                    FIp_1 = (values_grid_sub0_ixs.size()[0] - n_intersect_1) / values_grid_sub0_ixs.size()[0] # <- wrt learned set, wrt grid
-                    if not hasattr(self.dataset.dynamics, "avoid_fn"):
-                        FIp_2 = (values_grid_sub0_ixs.size()[0] - n_intersect_2) / values_grid_sub0_ixs.size()[0] # <- wrt learned set, wrt grid
+                    FIp_1 = (values_grid_sub0_ixs.size()[0] - n_intersect_1) / values_grid_sub0_ixs.size()[0]
+                    if hasattr(self.dataset.dynamics, 'avoid_fn'):
+                        FIp_2 = n_intersect_3 / self.dataset.values_DP_2_grid_sup0_ixs.size()[0] # <- wrt true avoid set on grid
                     else:
-                        FIp_2 = (values_grid_sub0_ixs.size()[0] - n_intersect_2) / values_grid_sub0_ixs.size()[0] # <- wrt learned set, wrt grid
+                        FIp_2 = (values_grid_sub0_ixs.size()[0] - n_intersect_2) / values_grid_sub0_ixs.size()[0]
                 else:
                     FIp_1, FIp_2 = 0., 0.
 
                 if self.dataset.values_DP_1_grid_sub0_ixs.size()[0] > 0:
-                    FEp_1 = (self.dataset.values_DP_1_grid_sub0_ixs.size()[0] - n_intersect_1) / self.dataset.values_DP_1_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid
+                    FEp_1 = (self.dataset.values_DP_1_grid_sub0_ixs.size()[0] - n_intersect_1) / self.dataset.values_DP_1_grid_sub0_ixs.size()[0]
                 else:
                     FEp_1 = 0.  
 
                 if self.dataset.values_DP_2_grid_sub0_ixs.size()[0] > 0:
-                    FEp_2 = (self.dataset.values_DP_2_grid_sub0_ixs.size()[0] - n_intersect_2) / self.dataset.values_DP_2_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid
+                    FEp_2 = (self.dataset.values_DP_2_grid_sub0_ixs.size()[0] - n_intersect_2) / self.dataset.values_DP_2_grid_sub0_ixs.size()[0]
                 else:
                     FEp_2 = 0.                
         
@@ -1682,10 +1702,10 @@ class DeepReachMulob(Experiment):
             n_overlap = values_grid_sub0_ixs.size()[0] + values_DP_grid_sub0_ixs.size()[0] - n_intersect
 
             if values_grid_sub0_ixs.size()[0] > 0:
-                FIps[i] = (values_grid_sub0_ixs.size()[0] - n_intersect) / values_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: self.dataset.n_grid_pts
+                FIps[i] = (values_grid_sub0_ixs.size()[0] - n_intersect) / values_grid_sub0_ixs.size()[0] # <- wrt true set on grid: self.dataset.n_grid_pts
             else:
                 FIps[i]  = 1.
-            FEps[i] = (values_DP_grid_sub0_ixs.size()[0] - n_intersect) / values_DP_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: self.dataset.n_grid_pts
+            FEps[i] = (values_DP_grid_sub0_ixs.size()[0] - n_intersect) / values_DP_grid_sub0_ixs.size()[0] # <- wrt true set on grid: self.dataset.n_grid_pts
             JIps[i] = n_intersect / n_overlap
 
         return JIps, FIps, FEps
@@ -2162,10 +2182,10 @@ class DeepReachMulob(Experiment):
                     n_overlap = values_grid_sub0_ixs.size()[0] + values_DP_grid_sub0_ixs.size()[0] - n_intersect
                     
                     if values_grid_sub0_ixs.size()[0] > 0:
-                        FIp = (values_grid_sub0_ixs.size()[0] - n_intersect) / values_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
+                        FIp = (values_grid_sub0_ixs.size()[0] - n_intersect) / values_grid_sub0_ixs.size()[0] # <- wrt true set on grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
                     else:
                         FIp = 1.
-                    FEp = (values_DP_grid_sub0_ixs.size()[0] - n_intersect) / values_DP_grid_sub0_ixs.size()[0] # <- wrt true set, wrt grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
+                    FEp = (values_DP_grid_sub0_ixs.size()[0] - n_intersect) / values_DP_grid_sub0_ixs.size()[0] # <- wrt true set on grid: (self.dataset.n_grid_t_pts * self.dataset.n_grid_pts)
                     JIp = n_intersect / n_overlap
 
                 models_JIp.append(JIp) 

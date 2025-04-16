@@ -134,12 +134,38 @@ class ReachabilityDataset(Dataset):
         if self.dynamics.loss_type == 'mulob_hjivi':
 
             if hasattr(self.dynamics, 'reach_fn') and hasattr(self.dynamics, 'avoid_fn'):
+                
                 bc_values_1 = self.dynamics.reach_fn(states_io, times_io)
                 bc_values_2 = self.dynamics.avoid_fn(states_io, times_io)
+
+                if self.mulob_loss_type in ['naive-combo supervision', 'naive-combo self-supervision'] and self.lambda_var:
+                    
+                    times_io_zerolam = times_io[:self.numpoints_super, :]
+                    states_io_zerolam = states_io[:self.numpoints_super, :]
+                    states_io_zerolam[..., -1] = 0.
+
+                    bc_values_1_zerolam = self.dynamics.reach_fn(states_io_zerolam, times_io_zerolam)
+                    bc_values_2_zerolam = self.dynamics.avoid_fn(states_io_zerolam, times_io_zerolam)
+                
+                else:
+                    bc_values_1_zerolam, bc_values_2_zerolam = torch.empty(0), torch.empty(0)
                 
             elif hasattr(self.dynamics, 'reach_fn_1') and hasattr(self.dynamics, 'reach_fn_2'):
+                
                 bc_values_1 = self.dynamics.reach_fn_1(states_io, times_io)
                 bc_values_2 = self.dynamics.reach_fn_2(states_io, times_io)
+
+                if self.mulob_loss_type in ['naive-combo supervision', 'naive-combo self-supervision'] and self.dataset.lambda_var:
+                    
+                    times_io_zerolam = times_io[:self.numpoints_super, :]
+                    states_io_zerolam = states_io[:self.numpoints_super, :]
+                    states_io_zerolam[..., -1] = 0.
+
+                    bc_values_1_zerolam = self.dynamics.reach_fn_1(states_io_zerolam, times_io_zerolam)
+                    bc_values_2_zerolam = self.dynamics.reach_fn_2(states_io_zerolam, times_io_zerolam)
+                
+                else:
+                    bc_values_1_zerolam, bc_values_2_zerolam = torch.empty(0), torch.empty(0)
 
             ## Use Interpolated Ground-Truth Decomposed Models (for testing, slow)
             if not self.load_decomposed_models and (self.mulob_type in ['BRAAT', 'BRRT'] or self.mulob_loss_type in ['augmented supervision', 'naive-combo supervision']):
@@ -163,21 +189,22 @@ class ReachabilityDataset(Dataset):
             else:
                 gt_decomposed_values_1, gt_decomposed_values_2, gt_decomposed_grads_1, gt_decomposed_grads_2 = torch.empty(0), torch.empty(0), torch.empty(0), torch.empty(0)
 
-            ## Make Lambda Slice Datasets
-            if self.lam_slice_super and self.lambda_var:
+            ## Make +/- lambda slice model coords
+            if self.lambda_var and (self.lam_slice_super or 'naive-combo self-supervision' in self.mulob_loss_type):
                 norm_lambda_target_hi = self.dynamics.lambda_target_hi / self.dynamics.state_var[-1]
                 norm_lambda_target_lo = self.dynamics.lambda_target_lo / self.dynamics.state_var[-1]
 
-                model_coords_poslam = model_coords[:self.numpoints_super, :]
+                model_coords_poslam = model_coords[:self.numpoints_super, :].clone()
                 model_coords_poslam[..., -1] = norm_lambda_target_hi
                 
-                model_coords_neglam = model_coords[:self.numpoints_super, :]
+                model_coords_neglam = model_coords[:self.numpoints_super, :].clone()
                 model_coords_neglam[..., -1] = norm_lambda_target_lo
             else:
                 model_coords_poslam, model_coords_neglam = torch.empty(0), torch.empty(0)
 
+            ## Make 0 lambda slice model coords
             if self.mulob_loss_type in ['naive-combo supervision', 'naive-combo self-supervision']:
-                model_coords_zerolam = model_coords[:self.numpoints_super, :]
+                model_coords_zerolam = model_coords[:self.numpoints_super, :].clone()
                 model_coords_zerolam[..., -1] = 0.
             else:
                 model_coords_zerolam = torch.empty(0)
@@ -222,7 +249,8 @@ class ReachabilityDataset(Dataset):
                                                     'gt_decomposed_values_1':gt_decomposed_values_1, 'gt_decomposed_values_2':gt_decomposed_values_2, 
                                                     'gt_decomposed_grads_1':gt_decomposed_grads_1, 'gt_decomposed_grads_2':gt_decomposed_grads_2, 
                                                     'model_coords_poslam':model_coords_poslam, 'model_coords_neglam':model_coords_neglam,
-                                                    'model_coords_zerolam':model_coords_zerolam,
+                                                    'model_coords_zerolam':model_coords_zerolam, 
+                                                    'bc_values_1_zerolam':bc_values_1_zerolam, 'bc_values_2_zerolam':bc_values_2_zerolam, 
                                                     'dirichlet_masks': dirichlet_masks}
         else:
             raise NotImplementedError
@@ -475,7 +503,11 @@ class ReachabilityDataset(Dataset):
             self.values_DP_1_grid = self.V_DP_1(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
             self.values_DP_2_grid = self.V_DP_2(self.dynamics.input_to_coord(self.model_coords_grid_allt).t()).cuda()
             self.values_DP_1_grid_sub0_ixs = torch.argwhere(self.values_DP_1_grid <= 0).flatten().cuda()
-            self.values_DP_2_grid_sub0_ixs = torch.argwhere(self.values_DP_2_grid <= 0).flatten().cuda()
+            if hasattr(self.dynamics, "avoid_fn"):
+                self.values_DP_2_grid_sup0_ixs = torch.argwhere(self.values_DP_2_grid > 0).flatten().cuda()
+                self.values_DP_2_grid_sub0_ixs = torch.argwhere(self.values_DP_2_grid <= 0).flatten().cuda()
+            else:
+                self.values_DP_2_grid_sub0_ixs = torch.argwhere(self.values_DP_2_grid <= 0).flatten().cuda()
 
         # self.values_DP_grid_hi = self.V_DP(self.dynamics.input_to_coord(self.model_coords_grid_allt_hi).t()).cuda()
         # self.values_DP_grid_sub0_ixs_hi = torch.argwhere(self.values_DP_grid_hi <= 0).flatten().cuda()

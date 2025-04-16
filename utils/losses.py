@@ -95,7 +95,7 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
     def mulob_hjivi_loss(state, value, grad, boundary_value, dirichlet_mask, output, bc_value_1, bc_value_2, 
                             decomposed_value_1, decomposed_value_2, decomposed_grad_1, decomposed_grad_2,
                             value_poslam, grad_poslam, value_neglam, grad_neglam,
-                            value_zerolam):
+                            value_zerolam, bc_value_1_zerolam, bc_value_2_zerolam,):
 
         dirichlet = value[dirichlet_mask] - boundary_value[dirichlet_mask]
         if experiment.dataset.dynamics.deepreach_model == 'exact' and torch.all(dirichlet_mask):
@@ -153,29 +153,43 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
                 if not experiment.dataset.lambda_var: raise AssertionError("Naive-combo self-supervision loss requires lambda-varying system")
 
                 if mulob_type == 'BRAT':
-                    value_neglam = -bc_value_2[:, :experiment.dataset.numpoints_super]
+                    value_neglam_ = -bc_value_2_zerolam # in BRAT, know negative lambda should be avoid values (-avoid_fn)
+                else:
+                    value_neglam_ = -value_neglam # in BRAT, know negative lambda should be avoid values (-avoid_fn)
 
                 if nc_lower_bound:
-                    ncss_value_loss = torch.max(value_zerolam - torch.max(value_poslam, value_neglam), 0 * value_zerolam).sum()
+                    ncss_value_loss = torch.abs(torch.min(value_zerolam - torch.max(value_poslam, value_neglam_), 0 * value_zerolam)).sum()
                 else:
-                    ncss_value_loss = torch.abs(value_zerolam - torch.max(value_poslam, value_neglam)).sum()
+                    ncss_value_loss = torch.abs(value_zerolam - torch.max(value_poslam, value_neglam_)).sum()
 
                 loss_dict['ncss_value_loss'] = ncss_value_loss / ncss_value_loss_divisor
+                # print("ncss_value_loss    :", loss_dict['ncss_value_loss'])
 
                 # TODO add grads
             
             ## Supervision of the Naive Combined Solution
             elif 'naive-combo supervision' in loss_type: #TODO untested
 
-                decomposed_value_1_subset = decomposed_value_1[:, :experiment.dataset.numpoints_super] #if experiment.dataset.lam_slice_super else decomposed_value_1
-                decomposed_value_2_subset = decomposed_value_2[:, :experiment.dataset.numpoints_super] #if experiment.dataset.lam_slice_super else decomposed_value_2
+                decomposed_value_1_subset = decomposed_value_1[:, :experiment.dataset.numpoints_super] 
+                decomposed_value_2_subset = decomposed_value_2[:, :experiment.dataset.numpoints_super]
+                
+                if mulob_type == 'BRAT':
+                    decomposed_value_2_subset = -bc_value_2_zerolam
+                elif mulob_type == 'BRAAT':
+                    decomposed_value_2_subset = -decomposed_value_2_subset
 
-                ncss_value_loss = value - torch.max(decomposed_value_1_subset, decomposed_value_2_subset)
+                if nc_lower_bound:
+                    # ncss_value_loss = torch.max(value_zerolam - torch.max(value_poslam, value_neglam), 0 * value_zerolam).sum()
+                    ncss_value_loss = torch.abs(torch.min(value_zerolam - torch.max(decomposed_value_1_subset, decomposed_value_2_subset), 0 * value_zerolam)).sum()
+                else:
+                    ncss_value_loss = torch.abs(value_zerolam - torch.max(decomposed_value_1_subset, decomposed_value_2_subset)).sum()
+                
                 loss_dict['ncss_value_loss'] = ncss_value_loss / ncss_value_loss_divisor
+                # print("ncss_value_loss    :", loss_dict['ncss_value_loss'])
 
                 # TODO add grads
                 # if experiment.dataset.grad_super:
-                #     if not experiment.dataset.lambda_var: #FIXME need to debug surely, also pre-batch subset
+                #     if not experiment.dataset.lambda_var: #FIXME debug surely, also pre-batch subset
                 #         if experiment.dataset.grad_super_time:
                 #             ncss_grad_loss = grad - torch.cat((decomposed_grad_1, decomposed_grad_2), -1)[..., torch.argmax(decomposed_value_1, decomposed_value_2)] # debug
                 #         else:
@@ -197,8 +211,7 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
             ham = experiment.dataset.dynamics.hamiltonian(state, dvdx)
             
             hjb_residual = dvdt - ham
-            loss_priority_residual = hjb_residual + value
-            hjb_loss_perc = ((loss_priority_residual >= -bc_value_2) & (loss_priority_residual <= bc_value_1)).sum()/value.shape[-1]
+            loss_priority_residual = hjb_residual + value # aka eta
 
             ## MultiObjective Losses
             if mulob_type == 'BRAT':
@@ -207,14 +220,32 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
                     bc_value_1 = bc_value_1 - torch.nn.functional.relu(-state[..., -1])
                     bc_value_2 = bc_value_2 + torch.nn.functional.relu(state[..., -1])
 
+                # print('state 1st        :', state[...,0,:])
+                # print('hjb_residual 1st :', hjb_residual[...,0])
+                # print('value 1st        :', value[...,0])
+                # print('grad  1st        :', grad[...,0,:])
+                # print('bc_value_1 1st   :', bc_value_1[...,0])
+                # print('bc_value_2 1st   :', bc_value_2[...,0])
+
                 diff_constraint_hom = torch.min(torch.max(hjb_residual, value - bc_value_1), value + bc_value_2)
 
-                loss_dict['hjb_loss_perc'] = ((loss_priority_residual >= bc_value_2) & (loss_priority_residual <= bc_value_1)).sum()/value.shape[-1]
+                if experiment.dataset.lambda_var:
+                    loss_priority_residual = loss_priority_residual[..., torch.abs(state[..., -1]) < 0.1]
+                    bc_value_2 = bc_value_2[..., torch.abs(state[..., -1]) < 0.1]
+                    bc_value_1 = bc_value_1[..., torch.abs(state[..., -1]) < 0.1]
+                    value = value[..., torch.abs(state[..., -1]) < 0.1]
+                    loss_dict['hjb_loss_perc'] = ((loss_priority_residual >= -bc_value_2) & (loss_priority_residual <= bc_value_1)).sum()/value.shape[-1]
+                    loss_dict['bc1_loss_perc'] = ((torch.min(loss_priority_residual, bc_value_1) >= -bc_value_2) & (loss_priority_residual >= bc_value_1)).sum()/value.shape[-1]
+                    loss_dict['bc2_loss_perc'] = (torch.min(loss_priority_residual, bc_value_1) <= -bc_value_2).sum()/value.shape[-1]                
+                else:
+                    loss_dict['hjb_loss_perc'] = ((loss_priority_residual >= -bc_value_2) & (loss_priority_residual <= bc_value_1)).sum()/value.shape[-1]
+                    loss_dict['bc1_loss_perc'] = ((torch.min(loss_priority_residual, bc_value_1) >= -bc_value_2) & (loss_priority_residual >= bc_value_1)).sum()/value.shape[-1]
+                    loss_dict['bc2_loss_perc'] = (torch.min(loss_priority_residual, bc_value_1) <= -bc_value_2).sum()/value.shape[-1]
 
             else:
 
                 # Lambda shift (non-lambda) decomposed values
-                if experiment.dataset.lambda_var and not mulob_type == 'BRAT':
+                if experiment.dataset.lambda_var:
                     decomposed_value_1 = decomposed_value_1 - torch.nn.functional.relu(-state[..., -1])
                     decomposed_value_2 = decomposed_value_2 + torch.nn.functional.relu(state[..., -1])
 
@@ -223,7 +254,7 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
                     diff_constraint_hom = torch.max(torch.min(hjb_residual, value + bc_value_2), 
                                                     torch.min(value - bc_value_1, value + decomposed_value_2))
                     
-                    # TODO: loss_dict['hjb_loss_perc'] = ((loss_priority_residual >= decomposed_value_2) & (loss_priority_residual <= decomposed_value_1)).sum()/value.shape[-1]
+                    # TODO: loss_dict['hjb_loss_perc'] = ...
                     
                 elif mulob_type == 'BRRT':
 
@@ -235,11 +266,11 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
                                                     torch.min(value - bc_value_2, value - decomposed_value_1), 
                                                     torch.min(value - bc_value_1, value - decomposed_value_2)))
                     
-                    # TODO: loss_dict['hjb_loss_perc'] = ((loss_priority_residual >= decomposed_value_2) & (loss_priority_residual <= decomposed_value_1)).sum()/value.shape[-1]
+                    # TODO: loss_dict['hjb_loss_perc'] = ...
                     
             loss_dict['diff_constraint_hom'] = torch.abs(diff_constraint_hom).sum()
+            # print("diff_constraint_hom:", loss_dict['diff_constraint_hom'])
 
-            loss_dict['hjb_loss_perc'] = hjb_loss_perc
             loss_dict['hjb_residual_abs_avg'] = hjb_residual.abs().mean()
             loss_dict['hjb_residual_std'] = hjb_residual.abs().std()
             loss_dict['BRAT_priority_residual_avg'] = loss_priority_residual.mean()
