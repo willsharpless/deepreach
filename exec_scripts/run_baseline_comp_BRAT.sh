@@ -24,7 +24,7 @@ for ((i=1; i<=${i_max}; i++)); do
     dims+=($((2 ** i)))
 done
 
-for i in $(seq 1 7); do
+for i in $(seq 3 3); do
 
     if [ $i == 1 ]; then
         j="1"
@@ -45,23 +45,25 @@ for i in $(seq 1 7); do
     # fi
 
     dim="--N ${dims[i-1]}"
+
+    sampling_params="--spatial_sampling_type truncated_normal --spatial_sampling_std 0.3"
     
     ## Conveyor
-    python run_experiment.py $convr_dyn $dim --mulob_type BRAT --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_${dims[i-1]}D_p$j --wandb_name BRAT_${dims[i-1]}D_p$j $wandb_parms
+    python run_experiment.py $convr_dyn $dim $sampling_params --mulob_type BRAT --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_${dims[i-1]}D_p$j --wandb_name BRAT_${dims[i-1]}D_p$j $wandb_parms
 
-    nc_loss_divisor="0.5"
+    nc_loss_divisor="0.1"
 
     # Using presolved reach fn for naive-combo supervisor
     load_model_1="--load_decomposed_model_name_1 ./value_fns/Conveyor/models/Conveyor2D/reach_only_${dims[i-1]}D"
     load_params="--load_decomposed_models $load_model_1 $load_model_1" # model 2 uneeded in BRAT
 
-    python run_experiment.py $convr_lam_dyn $dim --mulob_type BRAT --ncss_value_loss_divisor $nc_loss_divisor --mulob_loss_type 'naive-combo supervision' $load_params --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_lam_${dims[i-1]}D_ncs_$nc_loss_divisor --wandb_name BRAT_lam_${dims[i-1]}D_ncs_$nc_loss_divisor $wandb_parms
-    python run_experiment.py $convr_lam_dyn $dim --mulob_type BRAT --decay --ncss_value_loss_divisor $nc_loss_divisor --mulob_loss_type 'naive-combo supervision' $load_params --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_lam_${dims[i-1]}D_ncs_decay_$nc_loss_divisor --wandb_name BRAT_lam_${dims[i-1]}D_ncs_decay_$nc_loss_divisor $wandb_parms
-    python run_experiment.py $convr_lam_dyn $dim --mulob_type BRAT --nc_lower_bound --ncss_value_loss_divisor $nc_loss_divisor --mulob_loss_type 'naive-combo supervision' $load_params --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_lam_${dims[i-1]}D_ncs_lb_$nc_loss_divisor --wandb_name BRAT_lam_${dims[i-1]}D_ncs_lb_$nc_loss_divisor $wandb_parms
+    # python run_experiment.py $convr_lam_dyn $dim --mulob_type BRAT --ncss_value_loss_divisor $nc_loss_divisor --mulob_loss_type 'naive-combo supervision' $load_params --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_lam_${dims[i-1]}D_ncs_$nc_loss_divisor --wandb_name BRAT_lam_${dims[i-1]}D_ncs_$nc_loss_divisor $wandb_parms
+    # python run_experiment.py $convr_lam_dyn $dim --mulob_type BRAT --decay --ncss_value_loss_divisor $nc_loss_divisor --mulob_loss_type 'naive-combo supervision' $load_params --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_lam_${dims[i-1]}D_ncs_decay_$nc_loss_divisor --wandb_name BRAT_lam_${dims[i-1]}D_ncs_decay_$nc_loss_divisor $wandb_parms
+    # python run_experiment.py $convr_lam_dyn $dim --mulob_type BRAT --nc_lower_bound --ncss_value_loss_divisor $nc_loss_divisor --mulob_loss_type 'naive-combo supervision' $load_params --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_lam_${dims[i-1]}D_ncs_lb_$nc_loss_divisor --wandb_name BRAT_lam_${dims[i-1]}D_ncs_lb_$nc_loss_divisor $wandb_parms
 
     # Using self lambda-slice for naive-combo supervisor
-    python run_experiment.py $convr_lam_dyn $dim --mulob_type BRAT --ncss_value_loss_divisor $nc_loss_divisor --mulob_loss_type 'naive-combo self-supervision' --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_lam_${dims[i-1]}D_ncss_$nc_loss_divisor --wandb_name BRAT_lam_${dims[i-1]}D_ncss_$nc_loss_divisor $wandb_parms
-    python run_experiment.py $convr_lam_dyn $dim --mulob_type BRAT --decay --ncss_value_loss_divisor $nc_loss_divisor --mulob_loss_type 'naive-combo self-supervision' --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_lam_${dims[i-1]}D_ncss_decay_$nc_loss_divisor --wandb_name BRAT_lam_${dims[i-1]}D_ncss_decay_$nc_loss_divisor $wandb_parms
-    python run_experiment.py $convr_lam_dyn $dim --mulob_type BRAT --nc_lower_bound --ncss_value_loss_divisor $nc_loss_divisor --mulob_loss_type 'naive-combo self-supervision' --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_lam_${dims[i-1]}D_ncss_lb_$nc_loss_divisor --wandb_name BRAT_lam_${dims[i-1]}D_ncss_lb_$nc_loss_divisor $wandb_parms
+    python run_experiment.py $convr_lam_dyn $dim $sampling_params --mulob_type BRAT --ncss_value_loss_divisor $nc_loss_divisor --mulob_loss_type 'naive-combo self-supervision' --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_lam_${dims[i-1]}D_ncss_$nc_loss_divisor --wandb_name BRAT_lam_${dims[i-1]}D_TN_ncss_$nc_loss_divisor $wandb_parms
+    python run_experiment.py $convr_lam_dyn $dim $sampling_params --mulob_type BRAT --decay --ncss_value_loss_divisor $nc_loss_divisor --mulob_loss_type 'naive-combo self-supervision' --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_lam_${dims[i-1]}D_ncss_decay_$nc_loss_divisor --wandb_name BRAT_lam_${dims[i-1]}D_TN_ncss_decay_$nc_loss_divisor $wandb_parms
+    python run_experiment.py $convr_lam_dyn $dim $sampling_params --mulob_type BRAT --nc_lower_bound --ncss_value_loss_divisor $nc_loss_divisor --mulob_loss_type 'naive-combo self-supervision' --deepreach_model exact $learn_params $exp_dir_convr --experiment_name BRAT_lam_${dims[i-1]}D_ncss_lb_$nc_loss_divisor --wandb_name BRAT_lam_${dims[i-1]}D_TN_ncss_lb_$nc_loss_divisor $wandb_parms
 
 done
