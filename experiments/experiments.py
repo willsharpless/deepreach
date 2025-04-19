@@ -236,6 +236,13 @@ class Experiment(ABC):
                 for step, (model_input, gt) in enumerate(train_dataloader):
                     start_time = time.time()
 
+                    ## Rejection sample based on bc and learned model
+                    # if self.timing: torch.cuda.synchronize(); start_time_2 = time.time()
+                    # if self.dataset.boundary_sampling and self.dataset.pretrained and (self.dataset.super_pretrained or not self.dataset.super_pretrain):
+                    #     model_input['model_coords'] = self.dataset.sample_boundary(self.dataset.numpoints, learned_model=self.model).unsqueeze(0)
+                    #     # needs a fix, bc after resampling, need to remake all the secondary data based on model_coords
+                    # if self.timing: torch.cuda.synchronize(); print("Boundary sampling took:", time.time() - start_time_2)
+
                     ## Evaluate Sample with Learned Model
                     if self.timing: torch.cuda.synchronize(); start_time_2 = time.time()
                     model_input = {key: value.cuda() for key, value in model_input.items()}
@@ -579,6 +586,12 @@ class Experiment(ABC):
 
                             if (nc_decay or nc_grow) and epoch >= total_pretrain_iters:
                                 log_dict['other/naive_combo_weight'] = loss_weights['ncss_value_loss']
+
+                            if self.dataset.boundary_sampling:
+                                log_dict['other/boundary_samples_1'] = self.dataset.bc_sample_1
+                                log_dict['other/boundary_samples_2'] = self.dataset.bc_sample_2
+                                if self.dataset.boundary_sample_learned:
+                                    log_dict['other/boundary_samples_learned'] = self.dataset.bc_sample_learned
 
                             wandb.log(log_dict)
 

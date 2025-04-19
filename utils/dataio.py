@@ -27,6 +27,10 @@ class ReachabilityDataset(Dataset):
                  grad_super=False, grad_super_time=False,
                  mulob_type='BRAT', mulob_loss_type='vanilla',
                  spatial_sampling_type='uniform', spatial_sampling_std=1.,
+                 boundary_sampling=False, boundary_sample_thresh=0.1, 
+                 boundary_sample_pts=10000, boundary_sample_bs=100000, 
+                 boundary_sample_max_iters=50, boundary_sample_max_iters_model=10,
+                 boundary_sample_learned=False,
                  ):
 
         # Standard DeepReach Options
@@ -65,6 +69,14 @@ class ReachabilityDataset(Dataset):
         self.spatial_sampling_type = spatial_sampling_type
         self.spatial_sampling_std = spatial_sampling_std
 
+        self.boundary_sampling = boundary_sampling
+        self.boundary_sample_thresh = boundary_sample_thresh
+        self.boundary_sample_pts = boundary_sample_pts
+        self.boundary_sample_bs = boundary_sample_bs
+        self.boundary_sample_max_iters = boundary_sample_max_iters
+        self.boundary_sample_max_iters_model = boundary_sample_max_iters_model
+        self.boundary_sample_learned = boundary_sample_learned
+
         # Load pretrained models for decomposed supervision
         self.loaded_model_1 = loaded_model_1
         self.loaded_model_2 = loaded_model_2
@@ -88,32 +100,37 @@ class ReachabilityDataset(Dataset):
             print(f"getitem - start, torch.cuda.memory_reserved:  {torch.cuda.memory_reserved()/1000000:2.2f} MB")
             print()
     
-        ## Sample Points and Evaluate
-        if self.spatial_sampling_type == 'normal':
-            model_states = torch.zeros(self.numpoints, self.dynamics.state_dim).noraml_(mean=0., std=self.spatial_sampling_std)
-        elif self.spatial_sampling_type == 'truncated_normal':
-            model_states = torch.from_numpy(truncnorm.rvs(-1/self.spatial_sampling_std, 1/self.spatial_sampling_std, scale=self.spatial_sampling_std, size=(self.numpoints, self.dynamics.state_dim)).astype(np.float32))
+        # ## Sample Points and Evaluate
+        # if self.spatial_sampling_type == 'normal':
+        #     model_states = torch.zeros(self.numpoints, self.dynamics.state_dim).noraml_(mean=0., std=self.spatial_sampling_std)
+        # elif self.spatial_sampling_type == 'truncated_normal':
+        #     model_states = torch.from_numpy(truncnorm.rvs(-1/self.spatial_sampling_std, 1/self.spatial_sampling_std, scale=self.spatial_sampling_std, size=(self.numpoints, self.dynamics.state_dim)).astype(np.float32))
+        # else:
+        #     model_states = torch.zeros(self.numpoints, self.dynamics.state_dim).uniform_(-1, 1)
+        # # self.sample_demo_plot()
+
+        # if self.num_target_samples > 0:
+        #     target_state_samples = self.dynamics.sample_target_state(self.num_target_samples)
+        #     model_states[-self.num_target_samples:] = self.dynamics.coord_to_input(torch.cat((torch.zeros(self.num_target_samples, 1), target_state_samples), dim=-1))[:, 1:self.dynamics.state_dim+1]
+
+        # if self.pretrain:
+        #     times = torch.full((self.numpoints, 1), self.tMin)
+
+        # else:
+        #     if self.super_pretrain or self.no_curriculum or (self.super_pretrained and not self.LS_w_time_curr):
+        #         times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin)) # during super pt, sample across all time?
+        #     else:
+        #         times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * (self.counter/self.counter_end))
+        #     times[-self.num_src_samples:, 0] = self.tMin # force include initial time samples
+
+        # model_coords = torch.cat((times, model_states), dim=1)        
+        # if self.dynamics.input_dim > self.dynamics.state_dim + 1: # temporary workaround for having to deal with dynamics classes for parametrized models with extra inputs
+        #     model_coords = torch.cat((model_coords, torch.zeros(self.numpoints, self.dynamics.input_dim - self.dynamics.state_dim - 1)), dim=1)
+
+        if self.boundary_sampling and not self.boundary_sample_learned:
+            model_coords = self.sample_boundary(self.numpoints)
         else:
-            model_states = torch.zeros(self.numpoints, self.dynamics.state_dim).uniform_(-1, 1)
-        # self.sample_demo_plot()
-
-        if self.num_target_samples > 0:
-            target_state_samples = self.dynamics.sample_target_state(self.num_target_samples)
-            model_states[-self.num_target_samples:] = self.dynamics.coord_to_input(torch.cat((torch.zeros(self.num_target_samples, 1), target_state_samples), dim=-1))[:, 1:self.dynamics.state_dim+1]
-
-        if self.pretrain:
-            times = torch.full((self.numpoints, 1), self.tMin)
-
-        else:
-            if self.super_pretrain or self.no_curriculum or (self.super_pretrained and not self.LS_w_time_curr):
-                times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin)) # during super pt, sample across all time?
-            else:
-                times = self.tMin + torch.zeros(self.numpoints, 1).uniform_(0, (self.tMax-self.tMin) * (self.counter/self.counter_end))
-            times[-self.num_src_samples:, 0] = self.tMin # force include initial time samples
-
-        model_coords = torch.cat((times, model_states), dim=1)        
-        if self.dynamics.input_dim > self.dynamics.state_dim + 1: # temporary workaround for having to deal with dynamics classes for parametrized models with extra inputs
-            model_coords = torch.cat((model_coords, torch.zeros(self.numpoints, self.dynamics.input_dim - self.dynamics.state_dim - 1)), dim=1)
+            model_coords = self.sample_coords(self.numpoints)
 
         if self.memory_tracking:
             print(f"getitem - after model_coords, torch.cuda.memory_allocated: {torch.cuda.memory_allocated()/1000000:2.2f} MB")
@@ -255,18 +272,118 @@ class ReachabilityDataset(Dataset):
         else:
             raise NotImplementedError
     
+    def sample_coords(self, numpoints):
+
+        ## Sample Points and Evaluate
+        if self.spatial_sampling_type == 'normal':
+            model_states = torch.zeros(numpoints, self.dynamics.state_dim).normal_(mean=0., std=self.spatial_sampling_std)
+        elif self.spatial_sampling_type == 'truncated_normal':
+            model_states = torch.from_numpy(truncnorm.rvs(-1/self.spatial_sampling_std, 1/self.spatial_sampling_std, scale=self.spatial_sampling_std, size=(numpoints, self.dynamics.state_dim)).astype(np.float32))
+        else:
+            model_states = torch.zeros(numpoints, self.dynamics.state_dim).uniform_(-1, 1)
+        # self.sample_demo_plot()
+
+        if self.num_target_samples > 0:
+            target_state_samples = self.dynamics.sample_target_state(self.num_target_samples)
+            model_states[-self.num_target_samples:] = self.dynamics.coord_to_input(torch.cat((torch.zeros(self.num_target_samples, 1), target_state_samples), dim=-1))[:, 1:self.dynamics.state_dim+1]
+
+        if self.pretrain:
+            times = torch.full((numpoints, 1), self.tMin)
+        else:
+            if self.super_pretrain or self.no_curriculum or (self.super_pretrained and not self.LS_w_time_curr):
+                times = self.tMin + torch.zeros(numpoints, 1).uniform_(0, (self.tMax-self.tMin)) # during super pt, sample across all time?
+            else:
+                times = self.tMin + torch.zeros(numpoints, 1).uniform_(0, (self.tMax-self.tMin) * (self.counter/self.counter_end))
+        
+        times[-self.num_src_samples:, 0] = self.tMin # force include initial time samples
+
+        model_coords = torch.cat((times, model_states), dim=1)        
+        if self.dynamics.input_dim > self.dynamics.state_dim + 1: # temporary workaround for having to deal with dynamics classes for parametrized models with extra inputs
+            model_coords = torch.cat((model_coords, torch.zeros(numpoints, self.dynamics.input_dim - self.dynamics.state_dim - 1)), dim=1)
+        
+        return model_coords
+    
+    def sample_boundary(self, numpoints, learned_model=None):
+
+        if 3 * self.boundary_sample_pts > self.numpoints - self.num_src_samples: raise AssertionError("Rejection min <= 1/3 * (numpoints - num_src_samples)")
+
+        numpoints_near0, numpoints_1_near0, numpoints_2_near0 = 0, 0, 0
+        model_coords_near0 = torch.zeros_like(self.sample_coords(1))
+        model_coords_near0_1, model_coords_near0_2 = model_coords_near0.clone(), model_coords_near0.clone()
+
+        ## Iteratively sample and filter
+        iters, iters_model = 0, 0
+        learned_condition = numpoints_near0 < self.boundary_sample_pts and learned_model is not None and self.boundary_sample_learned
+        
+        while learned_condition or numpoints_1_near0 < self.boundary_sample_pts or numpoints_2_near0 < self.boundary_sample_pts:
+            
+            model_coords = self.sample_coords(self.boundary_sample_bs)
+            
+            # ## Check for learned boundary samples
+            # if (numpoints_near0 < self.boundary_sample_pts and iters_model < self.boundary_sample_max_iters_model and learned_model is not None and self.boundary_sample_learned):
+                
+            #     with torch.no_grad():
+            #         values = learned_model({'coords': model_coords.cuda()})['model_out'].squeeze(dim=-1)
+            #         values_near0_ix = (torch.abs(values) < self.boundary_sample_thresh).squeeze()
+            #     numpoints_near0 += values_near0_ix.sum().item()
+
+            #     model_coords_near0 = torch.cat((model_coords_near0, model_coords[values_near0_ix]), dim=0)
+            #     iters_model += 1
+            
+            # if numpoints_1_near0 > self.boundary_sample_pts and numpoints_2_near0 > self.boundary_sample_pts and iters_model > self.boundary_sample_max_iters_model:
+            #     # print(f"Rejection sample maxed out, totals are (learned bc:{numpoints_near0}, bc 1:{numpoints_1_near0}, bc 2:{numpoints_2_near0})")
+            #     break
+
+            ## Check for boundary samples (dual)
+            if numpoints_1_near0 < self.boundary_sample_pts or numpoints_2_near0 < self.boundary_sample_pts:
+
+                coords_io = self.dynamics.input_to_coord(model_coords)
+                states_io, times_io = coords_io[..., 1:], coords_io[..., 0:1]
+
+                if numpoints_1_near0 < self.boundary_sample_pts:
+
+                    values_1 = self.dynamics.reach_fn(states_io, times_io) if hasattr(self.dynamics, 'reach_fn') else self.dynamics.reach_fn_1(states_io, times_io)
+                    values_1_near0_ix = (torch.abs(values_1) < self.boundary_sample_thresh).squeeze()
+                    numpoints_1_near0 += values_1_near0_ix.sum().item()
+
+                    model_coords_near0_1 = torch.cat((model_coords_near0_1, model_coords[values_1_near0_ix]), dim=0)
+
+                if numpoints_2_near0 < self.boundary_sample_pts:
+            
+                    values_2 = self.dynamics.avoid_fn(states_io, times_io) if hasattr(self.dynamics, 'avoid_fn') else self.dynamics.reach_fn_2(states_io, times_io)                        
+                    values_2_near0_ix = (torch.abs(values_2) < self.boundary_sample_thresh).squeeze()
+                    numpoints_2_near0 += values_2_near0_ix.sum().item()
+
+                    model_coords_near0_2 = torch.cat((model_coords_near0_2, model_coords[values_2_near0_ix]), dim=0)
+            
+            iters+=1
+            if iters > self.boundary_sample_max_iters:
+                # print(f"Rejection sample maxed out, totals are (learned bc:{numpoints_near0}, bc 1:{numpoints_1_near0}, bc 2:{numpoints_2_near0})")
+                break
+
+        ## Put them all together
+        # print(f"Rejection sample totals are (learned bc:{model_coords_near0[:self.boundary_sample_pts].shape[0]}, bc 1:{model_coords_near0_1[:self.boundary_sample_pts].shape[0]}, bc 2:{model_coords_near0_2[:self.boundary_sample_pts].shape[0]})")
+        self.bc_sample_learned = model_coords_near0[:self.boundary_sample_pts].shape[0]
+        self.bc_sample_1 = model_coords_near0_1[:self.boundary_sample_pts].shape[0]
+        self.bc_sample_2 = model_coords_near0_2[:self.boundary_sample_pts].shape[0]
+        model_coords_bc = torch.cat((model_coords_near0[:self.boundary_sample_pts], model_coords_near0_1[:self.boundary_sample_pts], model_coords_near0_2[:self.boundary_sample_pts]), dim=0)
+        random_coords = self.sample_coords(numpoints - model_coords_bc.shape[0])
+        model_coords = torch.cat((model_coords_bc, random_coords), dim=0)
+
+        return model_coords
+    
     def init_groundtruth_tests(self, make_gt_solutions=False):
         
         ## Python Ground Truth Solutions
         if not hasattr(self.dynamics, "name") and self.dynamics.name not in ["Conveyor","Canoe"]: raise NotImplementedError
         
-        # TODO: just for testing, make parsed arg later
         bd_tag = "bdbc" if self.dynamics.bounded_bc else "ubdbc"
+        bd_dir = "bounded" if self.dynamics.bounded_bc else "unbounded"
+
         if self.dynamics.name == "Conveyor":
-            # self.gt_key = "bounded/axes/Conveyor2D_BRAAT_bdbc_axes_lin"
-            self.gt_key = f"bounded/{self.dynamics.avoid_type}/Conveyor2D_BRAAT_{bd_tag}_{self.dynamics.avoid_type}_lin"
+            self.gt_key = f"{bd_dir}/{self.dynamics.avoid_type}/Conveyor2D_BRAAT_{bd_tag}_{self.dynamics.avoid_type}_lin"
         elif self.dynamics.name == "Canoe":
-            self.gt_key = f"bounded/Canoe2D_BRRT_{bd_tag}_tv"
+            self.gt_key = f"{bd_dir}/Canoe2D_BRRT_{bd_tag}_tv"
 
         ## Load HJR solutions
         if not make_gt_solutions:
