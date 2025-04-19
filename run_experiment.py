@@ -61,6 +61,14 @@ if __name__ == '__main__':
     p.add_argument('--nc_decay', default=False, required=False, action='store_true', help='Flag to gradually decay the naive-combo supervision loss')
     p.add_argument('--nc_grow', default=False, required=False, action='store_true', help='Flag to gradually grow the naive-combo supervision loss')
 
+    p.add_argument('--boundary_sampling', default=False, required=False, action='store_true', help='Flag to sample near the boundary via rejection sampling')
+    p.add_argument('--boundary_sample_thresh', type=float, default=0.2, required=False, help='Value distance threshold for near boundary samples')
+    p.add_argument('--boundary_sample_pts', type=int, default=10000, required=False, help='Number of minimum near-0 datapoints per type (learned, bc1, bc2) to use in each batch')
+    p.add_argument('--boundary_sample_bs', type=int, default=100000, required=False, help='Number of points to sample in each iter of boundary sampling')
+    p.add_argument('--boundary_sample_max_iters', type=int, default=10, required=False, help='Numer of max iters in boundary sampling')
+    p.add_argument('--boundary_sample_max_iters_model', type=int, default=2, required=False, help='Numer of max iters in boundary sampling for model sampling (some models are crap)')
+    p.add_argument('--boundary_sample_learned', default=False, required=False, action='store_true', help='Flag to sample near the boundary of learned value as well')
+
     ## Multi-Objective Loss Weights
     p.add_argument('--dss_value_loss_1_divisor', default=10., required=False, type=float, help='What to divide the mulob decomposed semi-supervision loss by for loss reweighting')
     p.add_argument('--dss_value_loss_2_divisor', default=10., required=False, type=float, help='What to divide the mulob decomposed semi-supervision loss by for loss reweighting')    
@@ -107,7 +115,9 @@ if __name__ == '__main__':
         p.add_argument('--model_mode', type=str, default='mlp', required=False, choices=['mlp', 'rbf', 'pinn'], help='Whether to use uniform velocity parameter')
         p.add_argument('--num_hl', type=int, default=3, required=False, help='The number of hidden layers')
         p.add_argument('--num_nl', type=int, default=512, required=False, help='Number of neurons per hidden layer.')
-        p.add_argument('--deepreach_model', type=str, default='exact', required=False, choices=['exact', 'diff', 'vanilla'], help='deepreach model')
+        p.add_argument('--deepreach_model', type=str, default='exact', required=False, choices=['exact', 'diff', 'vanilla', 'exact_ra', 'exact_ra_itp', 'exact_ra_itp_2sigma'], help='deepreach model')
+        p.add_argument('--sigmoid_slope', default=1., type=float, help='Sigmoid slope parameter for exact_ra_itp deepreach model') 
+        p.add_argument('--sigmoid_slope_t', default=1., type=float, help='Sigmoid-t slope parameter for exact_ra_itp_2sigma deepreach model')
 
         # training options
         p.add_argument('--epochs_til_ckpt', type=int, default=1000, help='Time interval in seconds until checkpoint is saved.')
@@ -171,9 +181,9 @@ if __name__ == '__main__':
     opt = p.parse_args()
         
     if opt.debug_params:
-        opt.pretrain_iters = 5
+        opt.pretrain_iters = 3
         opt.super_pretrain_iters = 0
-        opt.num_epochs = 10
+        opt.num_epochs = 5
         opt.epochs_til_ckpt = 10
         opt.use_bank = False
 
@@ -252,6 +262,8 @@ if __name__ == '__main__':
     dynamics_class = getattr(dynamics, orig_opt.dynamics_class)
     dynamics_inst = dynamics_class(**{argname: getattr(orig_opt, argname) for argname in inspect.signature(dynamics_class).parameters.keys() if argname != 'self'})
     dynamics_inst.deepreach_model=orig_opt.deepreach_model
+    dynamics_inst.sigmoid_slope=orig_opt.sigmoid_slope
+    dynamics_inst.sigmoid_slope_t=orig_opt.sigmoid_slope_t
 
     # if orig_opt.hopf_loss != 'none':
     #     dynamics_inst.loss_type = 'brt_hjivi_hopf' ## TODO: why is loss type in dynamics?
@@ -308,6 +320,10 @@ if __name__ == '__main__':
         no_curriculum=orig_opt.no_curr, record_gt_metrics=orig_opt.gt_metrics,
         mulob_type=orig_opt.mulob_type, mulob_loss_type=orig_opt.mulob_loss_type, 
         spatial_sampling_type=orig_opt.spatial_sampling_type, spatial_sampling_std=orig_opt.spatial_sampling_std,
+        boundary_sampling=orig_opt.boundary_sampling, boundary_sample_thresh=orig_opt.boundary_sample_thresh, 
+        boundary_sample_pts=orig_opt.boundary_sample_pts, boundary_sample_bs=orig_opt.boundary_sample_bs, 
+        boundary_sample_max_iters=orig_opt.boundary_sample_max_iters, boundary_sample_max_iters_model=orig_opt.boundary_sample_max_iters_model,
+        boundary_sample_learned=orig_opt.boundary_sample_learned,
         )
 
     model = modules.SingleBVPNet(in_features=dynamics_inst.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,

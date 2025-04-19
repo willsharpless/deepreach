@@ -16,7 +16,7 @@ class Dynamics(ABC):
     control_dim:int, disturbance_dim:int, 
     state_mean:list, state_var:list, 
     value_mean:float, value_var:float, value_normto:float, 
-    deepreach_model:str):
+    deepreach_model:str, sigmoid_slope:float=1., sigmoid_slope_t:float=1.):
         self.loss_type = loss_type
         self.set_mode = set_mode
         self.state_dim = state_dim 
@@ -29,6 +29,8 @@ class Dynamics(ABC):
         self.value_var = value_var
         self.value_normto = value_normto
         self.deepreach_model = deepreach_model
+        self.sigmoid_slope = sigmoid_slope
+        self.sigmoid_slope_t = sigmoid_slope_t
         # assert self.loss_type in ['brt_hjivi', 'brat_hjivi'], f'loss type {self.loss_type} not recognized'
         if self.loss_type == 'brat_hjivi':
             assert callable(self.reach_fn) and callable(self.avoid_fn)
@@ -56,39 +58,154 @@ class Dynamics(ABC):
     def io_to_value(self, input, output):
         coord = self.input_to_coord(input)
         state, time = coord[..., 1:], coord[..., 0:1]
+        
+        # Learn difference: 
+        # V_theta = bc + NN
         if self.deepreach_model=="diff":
             return (output * self.value_var / self.value_normto) + self.boundary_fn(state, time)
+        
+        # Learn temporal difference: 
+        # V_theta = bc + t * NN
         elif self.deepreach_model=="exact":
             return (output * input[..., 0] * self.value_var / self.value_normto) + self.boundary_fn(state, time)
+
+        # Learn reach-avoid temporal difference: 
+        # V_theta = max{ min{ bc + t * NN, reach_bc }, avoid_bc }
+        elif self.deepreach_model=="exact_ra":
+            exact_value = (output * input[..., 0] * self.value_var / self.value_normto) + self.boundary_fn(state, time)
+            return torch.max(torch.min(exact_value, self.reach_fn(state, time)), -self.avoid_fn(state, time))
+        
+        # Learn reach-avoid interpolated temporal difference: 
+        # V_theta = bc + (avoid_bc - bc) * sigmoid_k,5(t * NN)
+        elif self.deepreach_model=="exact_ra_itp":
+            return (-self.avoid_fn(state, time) - self.boundary_fn(state, time)) * torch.sigmoid(-5 + self.sigmoid_slope * output * input[..., 0] * self.value_var / self.value_normto) + self.boundary_fn(state, time)
+
+        # Learn reach-avoid interpolated temporal difference: 
+        # V_theta = bc + (avoid_bc - bc) * sigmoid_k,5(t * NN)
+        elif self.deepreach_model=="exact_ra_itp_2sigma":
+            return (-self.avoid_fn(state, time) - self.boundary_fn(state, time)) * torch.sigmoid(-5 + self.sigmoid_slope_t * input[..., 0]) * torch.sigmoid(-5 + self.sigmoid_slope * output * self.value_var / self.value_normto) + self.boundary_fn(state, time)
+
+        # Vanilla (V_theta = NN)
         else:
             return (output * self.value_var / self.value_normto) + self.value_mean
-
+        
     # convert model io to real dv
     def io_to_dv(self, input, output):
         dodi = diff_operators.jacobian(output.unsqueeze(dim=-1), input)[0].squeeze(dim=-2)
 
+        coord = self.input_to_coord(input)
+        state, time = coord[..., 1:], coord[..., 0:1]
+        
         if self.deepreach_model=="diff":
+
             dvdt = (self.value_var / self.value_normto) * dodi[..., 0]
+            
+            # TODO: if bc is time varying, also need jacobian wrt time (currently wrong)
+            # dvdt_bc = diff_operators.jacobian(self.boundary_fn(state, time).unsqueeze(dim=-1), time)[0].squeeze(dim=-2)
 
-            dvds_term1 = (self.value_var / self.value_normto / self.state_var.to(device=dodi.device)) * dodi[..., 1:]
-            coord = self.input_to_coord(input)
-            state, time = coord[..., 1:], coord[..., 0:1]
-            dvds_term2 = diff_operators.jacobian(self.boundary_fn(state, time).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
-            dvds = dvds_term1 + dvds_term2
+            dvds_NN = (self.value_var / self.value_normto / self.state_var.to(device=dodi.device)) * dodi[..., 1:]
+            dvds_bc = diff_operators.jacobian(self.boundary_fn(state, time).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
+            dvds = dvds_NN + dvds_bc
+        
         elif self.deepreach_model=="exact":
-            dvdt = (self.value_var / self.value_normto) * \
-                (input[..., 0]*dodi[..., 0] + output)
 
-            dvds_term1 = (self.value_var / self.value_normto /
-                          self.state_var.to(device=dodi.device)) * dodi[..., 1:] * input[..., 0].unsqueeze(-1)
-            coord = self.input_to_coord(input)
-            state, time = coord[..., 1:], coord[..., 0:1]
-            dvds_term2 = diff_operators.jacobian(self.boundary_fn(state, time).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
-            dvds = dvds_term1 + dvds_term2
+            dvdt = (self.value_var / self.value_normto) * (input[..., 0]*dodi[..., 0] + output)
+            
+            # TODO: if bc is time varying, also need jacobian wrt time (currently wrong)
+            # dvdt_bc = diff_operators.jacobian(self.boundary_fn(state, time).unsqueeze(dim=-1), time)[0].squeeze(dim=-2)
+
+            dvds_NN = (self.value_var / self.value_normto / self.state_var.to(device=dodi.device)) * dodi[..., 1:] * input[..., 0].unsqueeze(-1)
+            dvds_bc = diff_operators.jacobian(self.boundary_fn(state, time).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
+            dvds = dvds_NN + dvds_bc
+        
+        elif self.deepreach_model=="exact_ra":
+
+            dvdt_exact = (self.value_var / self.value_normto) * (input[..., 0]*dodi[..., 0] + output)
+            
+            # TODO: if bc is time varying, also need jacobian wrt time (currently wrong)
+            # dvdt_bc = diff_operators.jacobian(self.boundary_fn(state, time).unsqueeze(dim=-1), time)[0].squeeze(dim=-2)
+            # dvdt_reach = diff_operators.jacobian(self.reach_fn(state, time).unsqueeze(dim=-1), time)[0].squeeze(dim=-2)
+            # dvdt_avoid = diff_operators.jacobian(self.avoid_fn(state, time).unsqueeze(dim=-1), time)[0].squeeze(dim=-2)
+
+            dvds_NN = (self.value_var / self.value_normto / self.state_var.to(device=dodi.device)) * dodi[..., 1:] * input[..., 0].unsqueeze(-1)
+            dvds_bc = diff_operators.jacobian(self.boundary_fn(state, time).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
+            dvds_exact = dvds_NN + dvds_bc
+
+            dvds_reach = diff_operators.jacobian(self.reach_fn(state, time).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
+            dvds_avoid = diff_operators.jacobian(self.avoid_fn(state, time).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
+
+            exact_value = (output * input[..., 0] * self.value_var / self.value_normto) + self.boundary_fn(state, time)
+            bc_value = self.boundary_fn(state, time)
+            avoid_value = self.avoid_fn(state, time)
+            
+            reach_ix = (torch.min(exact_value, bc_value) >= -avoid_value) & (exact_value >= bc_value)
+            avoid_ix = torch.min(exact_value, bc_value) <= -avoid_value
+
+            dvdt = dvdt_exact.clone()
+            dvds = dvds_exact.clone()
+
+            # dvdt[reach_ix] = dvdt_reach
+            # dvdt[avoid_ix] = dvdt_avoid
+
+            dvds[reach_ix] = dvds_reach[reach_ix]
+            dvds[avoid_ix] = -dvds_avoid[avoid_ix]
+
+        elif self.deepreach_model=="exact_ra_itp":
+            
+            sig = torch.sigmoid(-5 + self.sigmoid_slope * output * input[..., 0] * self.value_var / self.value_normto)
+            dsig = sig * (1 - sig)
+
+            # dV/dt
+            bc_value = self.boundary_fn(state, time)
+            avoid_value = self.avoid_fn(state, time)
+
+            dvdt_exact = self.sigmoid_slope * (self.value_var / self.value_normto) * (input[..., 0]*dodi[..., 0] + output)
+            dvdt = (-avoid_value - bc_value) * dvdt_exact * dsig
+
+            # TODO: if bc is time varying, also need jacobian wrt time (currently wrong)
+            # dvdt_bc = diff_operators.jacobian(self.boundary_fn(state, time).unsqueeze(dim=-1), time)[0].squeeze(dim=-2)
+            # dvdt_avoid = diff_operators.jacobian(self.avoid_fn(state, time).unsqueeze(dim=-1), time)[0].squeeze(dim=-2)
+
+            # grad_x V
+            dvds_NN = self.sigmoid_slope * (self.value_var / self.value_normto / self.state_var.to(device=dodi.device)) * dodi[..., 1:] * input[..., 0].unsqueeze(-1)
+            dvds_bc = diff_operators.jacobian(self.boundary_fn(state, time).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
+            dvds_avoid = diff_operators.jacobian(self.avoid_fn(state, time).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
+            
+            dvds = dvds_bc + (-dvds_avoid - dvds_bc) * sig.unsqueeze(-1) + ((-avoid_value - bc_value) * dsig).unsqueeze(-1) * dvds_NN
+        
+        elif self.deepreach_model=="exact_ra_itp_2sigma":
+            
+            sig_t = torch.sigmoid(-5 + self.sigmoid_slope_t * input[..., 0])
+            sig = torch.sigmoid(-5 + self.sigmoid_slope * output * self.value_var / self.value_normto)
+            dsig_t = sig_t * (1 - sig_t)
+            dsig = sig * (1 - sig)
+            # sig = torch.sigmoid(-5 + self.sigmoid_slope * output * input[..., 0] * self.value_var / self.value_normto)
+
+            # dV/dt
+            bc_value = self.boundary_fn(state, time)
+            avoid_value = self.avoid_fn(state, time)
+
+            # dvdt_exact = self.sigmoid_slope * (self.value_var / self.value_normto) * (input[..., 0]*dodi[..., 0] + output)
+            # dvdt = (-avoid_value - bc_value) * dvdt_exact * dsig
+
+            ddt_2sigma = sig * dsig_t * self.sigmoid_slope_t + sig_t * dsig * self.sigmoid_slope * (self.value_var / self.value_normto) * dodi[..., 0]
+            dvdt = (-avoid_value - bc_value) * ddt_2sigma
+
+            # TODO: if bc is time varying, also need jacobian wrt time (currently wrong)
+            # dvdt_bc = diff_operators.jacobian(self.boundary_fn(state, time).unsqueeze(dim=-1), time)[0].squeeze(dim=-2)
+            # dvdt_avoid = diff_operators.jacobian(self.avoid_fn(state, time).unsqueeze(dim=-1), time)[0].squeeze(dim=-2)
+
+            # grad_x V
+            dvds_NN = self.sigmoid_slope * (self.value_var / self.value_normto / self.state_var.to(device=dodi.device)) * dodi[..., 1:]
+            dvds_bc = diff_operators.jacobian(self.boundary_fn(state, time).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
+            dvds_avoid = diff_operators.jacobian(self.avoid_fn(state, time).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
+            
+            dvds = dvds_bc + (-dvds_avoid - dvds_bc) * (sig_t * sig).unsqueeze(-1) + ((-avoid_value - bc_value) * sig_t * dsig).unsqueeze(-1) * dvds_NN
+        
         else:
             dvdt = (self.value_var / self.value_normto) * dodi[..., 0]
             dvds = (self.value_var / self.value_normto / self.state_var.to(device=dodi.device)) * dodi[..., 1:]
-        
+
         return torch.cat((dvdt.unsqueeze(dim=-1), dvds), dim=-1)
 
     # ALL FOLLOWING METHODS USE REAL UNITS

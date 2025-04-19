@@ -24,7 +24,7 @@ def init_brt_hjivi_loss(dynamics, minWith, dirichlet_loss_divisor):
                 
         dirichlet = value[dirichlet_mask] - boundary_value[dirichlet_mask]
 
-        if dynamics.deepreach_model == 'exact':
+        if 'exact' in dynamics.deepreach_model:
             if torch.all(dirichlet_mask):
                 # pretraining
                 dirichlet = output.squeeze(dim=-1)[dirichlet_mask]-0.0
@@ -60,7 +60,7 @@ def init_brat_hjivi_loss(dynamics, minWith, dirichlet_loss_divisor):
             
         dirichlet = value[dirichlet_mask] - boundary_value[dirichlet_mask]
 
-        if dynamics.deepreach_model == 'exact':
+        if 'exact' in dynamics.deepreach_model:
             if torch.all(dirichlet_mask):
                 dirichlet = output.squeeze(dim=-1)[dirichlet_mask]-0.0
             else:
@@ -98,7 +98,7 @@ def init_mulob_hjivi_loss(experiment, minWith, dirichlet_loss_divisor, mulob_typ
                             value_zerolam, bc_value_1_zerolam, bc_value_2_zerolam,):
 
         dirichlet = value[dirichlet_mask] - boundary_value[dirichlet_mask]
-        if experiment.dataset.dynamics.deepreach_model == 'exact' and torch.all(dirichlet_mask):
+        if 'exact' in experiment.dataset.dynamics.deepreach_model and torch.all(dirichlet_mask):
             dirichlet = output.squeeze(dim=-1)[dirichlet_mask] - 0.0
 
         loss_dict = {'dirichlet': torch.abs(dirichlet).sum() / dirichlet_loss_divisor}
