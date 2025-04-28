@@ -1163,7 +1163,7 @@ class DeepReachHopf(Experiment):
                 ax.set_xlabel('Time')
                 ax.set_ylabel('Epoch (C)')
     
-    def demo_lambdavar_plot(self, save_path, x_resolution, y_resolution, plot_value=True):
+    def demo_lambdavar_plot(self, save_path, save_name, x_resolution, y_resolution, plot_value=True, log_coloring=False):
         # was_training = self.model.training
         # self.model.eval()
         # self.model.requires_grad_(False)
@@ -1191,19 +1191,20 @@ class DeepReachHopf(Experiment):
         plt.rcParams['text.usetex'] = False
 
         # for i in range(3*len(times)):
+        title_fontsize=25
         for i in range(2*len(lambdas)):
 
             lambda_val = lambdas[i % len(lambdas)]
             if i > len(lambdas):
                 ax = fig.add_subplot(2, len(lambdas), 1+i)
                 if i % len(lambdas) == 4:
-                    ax.set_title(r"$|V_\ell - V_\lambda|$, $\lambda = 1$", fontsize=14)
+                    ax.set_title(r"$|V_\lambda - V_\ell|$, $\lambda = 1$", fontsize=title_fontsize)
                 elif i % len(lambdas) == 1:
-                    ax.set_title(r"$|V_\ell - V_\lambda|$, $\lambda = 1/10$", fontsize=16)
+                    ax.set_title(r"$|V_\lambda - V_\ell|$, $\lambda = 1/10$", fontsize=title_fontsize)
                 elif i % len(lambdas) == 2:
-                    ax.set_title(r"$|V_\ell - V_\lambda|$, $\lambda = 1/5$", fontsize=16)
+                    ax.set_title(r"$|V_\lambda - V_\ell|$, $\lambda = 1/5$", fontsize=title_fontsize)
                 elif i % len(lambdas) == 3:
-                    ax.set_title(r"$|V_\ell - V_\lambda|$, $\lambda = 1/2$", fontsize=16)
+                    ax.set_title(r"$|V_\lambda - V_\ell|$, $\lambda = 1/2$", fontsize=title_fontsize)
                 # else:
                 #     ax.set_title(r"$|V_\ell - V_\lambda|$, $\lambda = $ " + f"{lambda_val:1.1f}", fontsize=14)
             elif i == len(lambdas):
@@ -1211,15 +1212,15 @@ class DeepReachHopf(Experiment):
             else:
                 ax = fig.add_subplot(2, len(lambdas), 1+i, projection='3d')
                 if i == 0:
-                    ax.set_title(r"$V_\ell = V_\lambda$, $\lambda = 0$", fontsize=16)
+                    ax.set_title(r"$V_\lambda = V_\ell$, $\lambda = 0$", fontsize=title_fontsize)
                 elif i == 1:
-                    ax.set_title(r"$V_\lambda$, $\lambda = 1/10$", fontsize=16)
+                    ax.set_title(r"$V_\lambda$, $\lambda = 1/10$", fontsize=title_fontsize)
                 elif i == 2:
-                    ax.set_title(r"$V_\lambda$, $\lambda = 1/5$", fontsize=16)
+                    ax.set_title(r"$V_\lambda$, $\lambda = 1/5$", fontsize=title_fontsize)
                 elif i == 3:
-                    ax.set_title(r"$V_\lambda$, $\lambda = 1/2$", fontsize=16)
+                    ax.set_title(r"$V_\lambda$, $\lambda = 1/2$", fontsize=title_fontsize)
                 elif i == 4:
-                    ax.set_title(r"$V_\lambda$, $\lambda = 1$", fontsize=16)
+                    ax.set_title(r"$V_\lambda = V$, $\lambda = 1$", fontsize=title_fontsize)
                 # else:
                 #     ax.set_title(r"$V_\lambda$, $\lambda =$ " + f"{lambda_val:1.1f}", fontsize=16)
 
@@ -1233,7 +1234,8 @@ class DeepReachHopf(Experiment):
 
             if i >= len(lambdas):
                 pad_label = 0
-                ax.set_xlabel(r"$x_N$", fontsize=12, labelpad=pad_label); ax.set_ylabel(r"$x_i = x_j$", fontsize=12, labelpad=pad_label)
+                ax.set_xlabel(r"$x_N$", fontsize=title_fontsize, labelpad=pad_label); 
+                ax.set_ylabel(r"$x_i = x_j$", fontsize=title_fontsize, labelpad=pad_label)
                 ax.set_xticks([-1, 1])
                 ax.set_xticklabels([r'$-1$', r'$1$'])
                 ax.set_yticks([-1, 1])
@@ -1245,8 +1247,8 @@ class DeepReachHopf(Experiment):
 
             else:
                 pad_label = 6
-                ax.set_xlabel(r"$x_N$", fontsize=12, labelpad=pad_label); 
-                ax.set_ylabel(r"$x_i = x_j$", fontsize=12, labelpad=pad_label); 
+                ax.set_xlabel(r"$x_N$", fontsize=title_fontsize, labelpad=pad_label); 
+                ax.set_ylabel(r"$x_i = x_j$", fontsize=title_fontsize, labelpad=pad_label); 
                 # ax.set_zlabel(r"$V$", fontsize=12, labelpad=10) #, labelpad=pad_label)
                 ax.set_xticks([-1, 0, 1])
                 ax.set_xticklabels([r'$-1$', r'$0$', r'$1$'])
@@ -1341,29 +1343,36 @@ class DeepReachHopf(Experiment):
                 max_v = 1.5
 
                 ## Log Colorbar
-                offset = 1e-5
-                log_norm = matplotlib.colors.LogNorm(vmin=offset, vmax=max_v)
-                s = ax.imshow(torch.abs(Vgt - Vgt_linear).T + torch.tensor([offset]), cmap=matplotlib.colormaps["viridis_r"], origin='lower', extent=(-1., 1., -1., 1.), norm=log_norm) # viridis, terrain, nipy_spectral, rainbow
-                # s = ax.contourf(Xg, Yg, Vgt, cmap=RdWhBl_vscaled, levels=256)
-                divider = make_axes_locatable(ax)
-                cax = divider.append_axes("right", size="5%", pad=0.05)
-                cbar = fig.colorbar(s, cax=cax)
-                cbar.set_ticks([offset, max_v])  # FIXME fixed max
+                if log_coloring:
+                    offset = 1e-5
+                    log_norm = matplotlib.colors.LogNorm(vmin=offset, vmax=max_v)
+                    s = ax.imshow(torch.abs(Vgt - Vgt_linear).T + torch.tensor([offset]), cmap=matplotlib.colormaps["viridis_r"], origin='lower', extent=(-1., 1., -1., 1.), norm=log_norm) # viridis, terrain, nipy_spectral, rainbow
+                    # s = ax.contourf(Xg, Yg, Vgt, cmap=RdWhBl_vscaled, levels=256)
+
+                    if i == 4 or i == 2*len(lambdas)-1:
+                        divider = make_axes_locatable(ax)
+                        cax = divider.append_axes("right", size="5%", pad=0.05)
+                        cbar = fig.colorbar(s, cax=cax)
+                        cbar.set_ticks([offset, max_v])  # FIXME fixed max
 
                 ## Linear Colorbar
-                # offset = 0
-                # s = ax.imshow(torch.abs(Vgt - Vgt_linear).T + torch.tensor([offset]), cmap=matplotlib.colormaps["viridis_r"], origin='lower', extent=(-1., 1., -1., 1.), vmin=offset, vmax=max_v) # viridis, terrain, nipy_spectral, rainbow
-                # # s = ax.contourf(Xg, Yg, Vgt, cmap=RdWhBl_vscaled, levels=256)
-                # divider = make_axes_locatable(ax)
-                # cax = divider.append_axes("right", size="5%", pad=0.05)
-                # cbar = fig.colorbar(s, cax=cax)
-                # cbar.set_ticks([offset, max_v])  # FIXME fixed max
+                else:
+                    offset = 0
+                    s = ax.imshow(torch.abs(Vgt - Vgt_linear).T + torch.tensor([offset]), cmap=matplotlib.colormaps["viridis"], origin='lower', extent=(-1., 1., -1., 1.), vmin=offset, vmax=max_v) # viridis, terrain, nipy_spectral, rainbow
+                    # s = ax.contourf(Xg, Yg, Vgt, cmap=RdWhBl_vscaled, levels=256)
+                    if i == 4 or i == 2*len(lambdas)-1:
+                        divider = make_axes_locatable(ax)
+                        cax = divider.append_axes("right", size="5%", pad=0.05)
+                        cbar = fig.colorbar(s, cax=cax)
+                        cbar.set_ticks([offset, max_v])  # FIXME fixed max
 
                 # cbar.set_ticks([0., torch.abs(Vgt_full - Vgt_linear).max()])  # Define custom tick locations
                 # cbar.set_ticks([0., torch.abs(Vgt - Vgt_linear).max()])  # FIXME fixed max
                 # cbar.set_ticklabels([f'0', f'{torch.abs(Vgt_full - Vgt_linear).max():1.1f}'])  # Define custom tick labels
                 # cbar.set_ticklabels([f'0', f'{max_v:1d}'])  # Define custom tick labels
-                cbar.set_ticklabels([f'0', f'{max_v:1.1f}'])  # Define custom tick labels
+                
+                if i == 4 or i == 2*len(lambdas)-1:
+                    cbar.set_ticklabels([f'{offset}', f'{max_v:1.1f}'])  # Define custom tick labels
 
                 # ## Plot Ground-Truth Zero-Level Contour
 
@@ -1383,16 +1392,18 @@ class DeepReachHopf(Experiment):
                     surf = ax.plot_surface(Xg, Yg, Vgt, cmap=RdWhBl_vscaled, alpha=0.8, vmax=max_v_3d) #cmap='bwr_r')
                     # surf = ax.plot_surface(self.dataset.X1g, self.dataset.X2g, Vgt, cmap=RdWhBl_vscaled, alpha=0.8) #cmap='bwr_r')
                     
-                    # divider = make_axes_locatable(ax_set)
-                    # cax = divider.append_axes("right", size="5%", pad=0.05)
-                    # fig_set.colorbar(s, cax=cax)
-                    cbar = fig.colorbar(surf, ax=ax, fraction=0.02, pad=0.0)
+                    if i == 4 or i == 2*len(lambdas)-1:
+                        # divider = make_axes_locatable(ax_set)
+                        # cax = divider.append_axes("right", size="5%", pad=0.05)
+                        # fig_set.colorbar(s, cax=cax)
+                        
+                        cbar = fig.colorbar(surf, ax=ax, fraction=0.02, pad=0.0)
 
-                    # cbar.ax.yaxis.set_ticks_position('left')
-                    # cbar.ax.yaxis.set_label_position('left')
-                    
-                    cbar.set_ticks([0, max_v_3d])  # FIXME fixed max
-                    cbar.set_ticklabels([f'0', f'{max_v_3d:1d}'])  # Define custom tick labels
+                        # cbar.ax.yaxis.set_ticks_position('left')
+                        # cbar.ax.yaxis.set_label_position('left')
+                        
+                        cbar.set_ticks([0, max_v_3d])  # FIXME fixed max
+                        cbar.set_ticklabels([f'0', f'{max_v_3d:1d}'])  # Define custom tick labels
 
                     # ax.set_zlim(-max(ax.get_zlim()[1]/5, 0.5))
                     # ax.set_zlim(-max(Vgt.max().item()/5, 0.5), max(Vgt.max().item(), 2.5))
@@ -1406,12 +1417,12 @@ class DeepReachHopf(Experiment):
                     ax.set_facecolor((1, 1, 1, 1))
                     # ax_val.grid(False)
 
-        fig.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
+        fig.subplots_adjust(left=0.0, right=0.98, top=0.95, bottom=0.05, hspace=0.2, wspace=0.15)
 
-        fig.savefig(save_path)
+        fig.savefig(save_path + save_name)
         plt.close()
 
-    def plot_final_comparison(self, save_path, loaded_models_dict, x_resolution, y_resolution, time_resolution, plot_value=True):
+    def plot_final_comparison(self, save_path, save_name, loaded_models_dict, x_resolution, y_resolution, time_resolution, plot_value=True):
             # was_training = self.model.training
             # self.model.eval()
             # self.model.requires_grad_(False)
@@ -1453,7 +1464,7 @@ class DeepReachHopf(Experiment):
                 ax = fig.add_subplot(len(methods), 4, 1+i)
 
                 pad_label = 0
-                ax.set_xlabel(r"$x_0$", fontsize=12, labelpad=pad_label); ax.set_ylabel(r"$x_i = x_j$", fontsize=12, labelpad=pad_label)
+                ax.set_xlabel(r"$x_0$", fontsize=15, labelpad=pad_label); ax.set_ylabel(r"$x_i = x_j$", fontsize=15, labelpad=pad_label)
                 ax.set_xticks([-1, 1])
                 ax.set_xticklabels([r'$-1$', r'$1$'])
                 ax.set_yticks([-1, 1])
@@ -1582,20 +1593,21 @@ class DeepReachHopf(Experiment):
 
 
                 if i < 4:
-                    titles = [r'$ \alpha = 20, \beta = 0$', r'$ \alpha = -20,, \beta = 0$', r'$ \alpha = -20, \beta = 20$', r'$ \alpha = 10, \beta = -10$']
-                    ax.set_title(titles[i], fontsize=10)
+                    titles = [r'$ \alpha = 20, \beta = 0$', r'$ \alpha = -20, \beta = 0$', r'$ \alpha = -20, \beta = 20$', r'$ \alpha = 10, \beta = -10$']
+                    ax.set_title(titles[i], fontsize=15)
 
                 if i % 4 == 0:
                     labels = [r"BASELINE", r"LSS DECAY", r"$ V_\lambda $ LSS"]
                     ax.text(
-                        x=-1.5,  # Position to the left of the y-axis
+                        x=-1.3,  # Position to the left of the y-axis
                         y=0.,   # Vertical position in data coordinates
                         s=labels[int(i/4)],  # Annotation text
                         rotation=90,              # Rotate text to vertical
                         va='center',              # Vertical alignment
                         ha='right',               # Horizontal alignment
-                        fontsize=20,              # Font size
-                        color='black'              # Text color
+                        fontsize=23,              # Font size
+                        color='black',            # Text color
+                        fontweight='bold'
                     )
 
                 ## Compute GT Metrics
@@ -1633,9 +1645,9 @@ class DeepReachHopf(Experiment):
                 models_Vmse.append(Vmse)
                 models_DVXmse.append(DVXmse) 
 
-            fig.subplots_adjust(left=0.075, right=0.95, top=0.95, bottom=0.05, wspace=0.25, hspace=0.3)
+            fig.subplots_adjust(left=0.05, right=0.975, top=0.95, bottom=0.05, wspace=0.15, hspace=0.15)
 
-            fig.savefig(save_path)
+            fig.savefig(save_path + save_name + '.png')
             plt.close()
 
             fig_bar = plt.figure(figsize=(10, 10), facecolor='white', dpi=300)
@@ -1647,7 +1659,7 @@ class DeepReachHopf(Experiment):
 
             model_times = [7.00, 6.85, 7.01, 6.98, 0.33, 0.45, 0.31, 0.38, 7.96, 7.85, 7.58, 7.91]
             # data_list = [models_JIp, models_FIp, models_FEp, models_Vmse, models_DVXmse, model_times]
-            datas = {r"IOU":models_JIp, r"Run Time (Hours)":model_times, r"Mean Square Error of Value":models_Vmse, r"Mean Square Error of Gradient":models_DVXmse}
+            datas = {r"IOU":models_JIp, r"Run Time (Hours)":model_times, r"MSE of Value":models_Vmse, r"MSE of Gradient":models_DVXmse}
 
             for (i, data_name) in enumerate(datas.keys()):
 
@@ -1667,7 +1679,7 @@ class DeepReachHopf(Experiment):
                 ax.bar(x - width, group1, width, label=labels[0] + f", mean {sum(group1)/4:1.2f}", edgecolor='black', color=colors[0])
                 ax.bar(x, group2, width, label=labels[1] + f", mean {sum(group2)/4:1.2f}", edgecolor='black', color=colors[1])
                 ax.bar(x + width, group3, width, label=labels[2] + f", mean {sum(group3)/4:1.2f}", edgecolor='black', color=colors[2])
-                ax.set_xlabel(r'$(\alpha, \beta)$')
+                ax.set_xlabel(r'$(\alpha, \beta)$', fontsize=13)
 
                 # ax.text(
                 #     x=ax.get_xlim[1]/2,  # Position to the left of the y-axis
@@ -1680,16 +1692,16 @@ class DeepReachHopf(Experiment):
                 # )
 
                 if i == 0:
-                    ax.set_ylim(0., 1.0)
+                    ax.set_ylim(0., 1.2)
 
                 if i == 1:
-                    ax.set_ylim(0., 10.)
+                    ax.set_ylim(0., 12.)
 
                 if i == 2:
-                    ax.set_ylim(1.)
+                    ax.set_ylim(1., 1000)
 
                 if i == 3:
-                    ax.set_ylim(0., 25.)
+                    ax.set_ylim(0., 30)
 
                 ax.grid(True, axis='y', alpha=0.7, zorder=0)
                 ax.set_axisbelow(True)
@@ -1697,19 +1709,21 @@ class DeepReachHopf(Experiment):
                 if i == 2:
                     ax.set_yscale('log')
 
-                ax.set_title(data_name, fontsize=15)
-                ax.set_xticks(x, categories)  # Replace x-ticks with category names
-                ax.legend(loc='upper left')
+                ax.set_title(data_name, fontsize=18, fontweight='bold')
+                # ax.set_xticks(x, categories, fontsize=10)  # Replace x-ticks with category names
+                ax.set_xticks(x)
+                ax.set_xticklabels(categories, fontsize=12)
+                ax.legend(loc='upper left', fontsize=14)
             
-            fig_bar.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05, wspace=0.2, hspace=0.2)
-            fig_bar.savefig("bar_" + save_path)
+            fig_bar.subplots_adjust(left=0.05, right=0.975, top=0.95, bottom=0.05, wspace=0.15, hspace=0.25)
+            fig_bar.savefig(save_path + 'bar_' + save_name + '.png')
             plt.close()
 
             from PIL import Image
 
             # Open the saved images
-            img1 = Image.open(save_path)
-            img2 = Image.open("bar_" + save_path)
+            img1 = Image.open(save_path + save_name + '.png')
+            img2 = Image.open(save_path + 'bar_' + save_name + '.png')
 
             # Combine the images side by side
             combined_width = img1.width + img2.width
@@ -1721,4 +1735,4 @@ class DeepReachHopf(Experiment):
             combined_img.paste(img2, (img1.width, 0))
 
             # Save the combined image
-            combined_img.save("Final_Comparison_Plot_combined.png", dpi=(300, 300))
+            combined_img.save(save_path + 'Final_Comparison_Plot_combined.png', dpi=(300, 300))

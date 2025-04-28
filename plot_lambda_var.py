@@ -49,7 +49,17 @@ if __name__ == '__main__':
     p.add_argument('--temporal_weighting', action='store_true', default=False, required=False, help='Inversely weights the samples in the loss w.r.t. time')
     p.add_argument('--reset_loss_w', action='store_true', default=False, required=False, help='Resets the loss weights to their values at the beginning of training (pre-decay)')
     p.add_argument('--reset_loss_period', type=int, default=500, required=False, help='The loss weight reset period')
-
+    
+    # Fixed plotting args
+    p.add_argument('--N', type=int, default=3, required=False, help='Lambda var plotting')
+    p.add_argument('--gamma', type=int, default=-20, required=False, help='Lambda var plotting')
+    p.add_argument('--mu', type=int, default=-20, required=False, help='Lambda var plotting')
+    p.add_argument('--alpha', type=int, default=1, required=False, help='Lambda var plotting')
+    p.add_argument('--goalR', type=float, default=0.25, required=False, help='Lambda var plotting')
+    p.add_argument('--plot_path', type=str, default='./plots/hopf/', required=False, help='Lambda var plotting')
+    p.add_argument('--plot_name', type=str, default='Lambda_Variation_Demo_Plot', required=False, help='Lambda var plotting')
+    p.add_argument('--log_coloring', action='store_true', default=False, required=False, help='Lambda var plotting (log)')
+    
     p.add_argument('--gt_metrics', action='store_true', default=True, required=False, help='Compute and score the learned value and set (needs ground truth)')
     p.add_argument('--temporal_loss', action='store_true', default=False, required=False, help='Compute the loss over time chunks (slower)')
     p.add_argument('--capacity_test', action='store_true', default=False, required=False, help='Will use supervised-learning to train with the true solution (needs ground truth)')
@@ -142,12 +152,12 @@ if __name__ == '__main__':
         
         # load dynamics_class choices dynamically from dynamics module
         dynamics_classes_dict = {name: clss for name, clss in inspect.getmembers(dynamics, inspect.isclass) if clss.__bases__[0] == dynamics.Dynamics}
-        p.add_argument('--dynamics_class', type=str, default="LessLinearND", choices=dynamics_classes_dict.keys(), help='Dynamics class to use.') #FIXME: required=True instead of default
+        p.add_argument('--dynamics_class', type=str, default="LessLinearNDlambda", choices=dynamics_classes_dict.keys(), help='Dynamics class to use.') #FIXME: required=True instead of default
         # load special dynamics_class arguments dynamically from chosen dynamics class
         dynamics_class = dynamics_classes_dict[p.parse_known_args()[0].dynamics_class]
         dynamics_params = {name: param for name, param in inspect.signature(dynamics_class).parameters.items() if name != 'self'}
         for param in dynamics_params.keys():
-            # if param == 'N': continue
+            if param in ['N', 'gamma', 'mu', 'alpha', 'goalR']: continue
             if dynamics_params[param].annotation is bool:
                 p.add_argument('--' + param, type=dynamics_params[param].annotation, default=False, help='special dynamics_class argument')
             else:
@@ -324,40 +334,6 @@ if __name__ == '__main__':
     experiment = experiment_class(model=model, dataset=dataset, experiment_dir=experiment_dir, use_wandb=use_wandb)
     experiment.init_special(**{argname: getattr(orig_opt, argname) for argname in inspect.signature(experiment_class.init_special).parameters.keys() if argname != 'self'})
 
-    save_path = os.path.join(experiment_dir, 'Lambda_Variation_Demo_Plot.png')
-    experiment.demo_lambdavar_plot(save_path, orig_opt.val_x_resolution, orig_opt.val_y_resolution, plot_value=True)
-
-    # if (mode == 'all') or (mode == 'train'):
-    #     if dynamics.loss_type == 'brt_hjivi':
-    #         loss_fn = losses.init_brt_hjivi_loss(dynamics, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
-    #     elif dynamics.loss_type == 'brat_hjivi':
-    #         loss_fn = losses.init_brat_hjivi_loss(dynamics, orig_opt.minWith, orig_opt.dirichlet_loss_divisor)
-    #     elif dynamics.loss_type == 'brt_hjivi_hopf':
-    #         loss_fn = losses.init_brt_hjivi_hopf_loss(experiment, orig_opt.minWith, orig_opt.dirichlet_loss_divisor, orig_opt.hopf_loss_divisor, orig_opt.hopf_grad_loss_divisor, orig_opt.hopf_loss, orig_opt.temporal_weighting)
-    #     else:
-    #         raise NotImplementedError
-    #     experiment.train(
-    #         batch_size=orig_opt.batch_size, epochs=orig_opt.num_epochs, lr=orig_opt.lr, 
-    #         steps_til_summary=orig_opt.steps_til_summary, epochs_til_checkpoint=orig_opt.epochs_til_ckpt, 
-    #         loss_fn=loss_fn, clip_grad=orig_opt.clip_grad, use_lbfgs=orig_opt.use_lbfgs, adjust_relative_grads=orig_opt.adj_rel_grads,
-    #         val_x_resolution=orig_opt.val_x_resolution, val_y_resolution=orig_opt.val_y_resolution, val_z_resolution=orig_opt.val_z_resolution, val_time_resolution=orig_opt.val_time_resolution,
-    #         use_CSL=orig_opt.use_CSL, CSL_lr=orig_opt.CSL_lr, CSL_dt=orig_opt.CSL_dt, epochs_til_CSL=orig_opt.epochs_til_CSL, num_CSL_samples=orig_opt.num_CSL_samples, CSL_loss_frac_cutoff=orig_opt.CSL_loss_frac_cutoff, max_CSL_epochs=orig_opt.max_CSL_epochs, CSL_loss_weight=orig_opt.CSL_loss_weight, CSL_batch_size=orig_opt.CSL_batch_size,
-    #         dual_lr=orig_opt.dual_lr, lr_decay_w=orig_opt.lr_decay_w, lr_hopf=orig_opt.lr_hopf, lr_hopf_decay_w=orig_opt.lr_hopf_decay_w, 
-    #         hopf_loss=orig_opt.hopf_loss, hopf_loss_decay=orig_opt.hopf_loss_decay, hopf_loss_decay_early=orig_opt.hopf_loss_decay_early, diff_con_loss_incr=orig_opt.diff_con_loss_incr, 
-    #         hopf_loss_decay_type=orig_opt.hopf_loss_decay_type, hopf_loss_decay_w=orig_opt.hopf_loss_decay_w, 
-    #         reset_loss_w=orig_opt.reset_loss_w, reset_loss_period=orig_opt.reset_loss_period,
-    #         nonlin_scale=orig_opt.nl_scale, nl_scale_epoch_step=orig_opt.nl_scale_epoch_step, nl_scale_epoch_post=orig_opt.nl_scale_epoch_post,
-    #         record_temporal_loss=orig_opt.temporal_loss)
-
-    # if (mode == 'all') or (mode == 'test'):
-    #     experiment.test(
-    #         current_time=current_time, 
-    #         last_checkpoint=orig_opt.num_epochs, checkpoint_dt=orig_opt.epochs_til_ckpt, 
-    #         checkpoint_toload=opt.checkpoint_toload, dt=opt.dt,
-    #         num_scenarios=opt.num_scenarios, num_violations=opt.num_violations, 
-    #         set_type='BRT' if orig_opt.minWith in ['zero', 'target'] else 'BRS', control_type=opt.control_type, data_step=opt.data_step)
-        
-    # if orig_opt.solve_hopf and dataset.hjpool:
-    #     print("Retiring hopf-julia workers and shared memory.")
-    #     dataset.hjpool.dispose()
-    #     print("He hecho.")
+    save_path = orig_opt.plot_path
+    save_name = orig_opt.plot_name
+    experiment.demo_lambdavar_plot(save_path, save_name, orig_opt.val_x_resolution, orig_opt.val_y_resolution, plot_value=True, log_coloring=orig_opt.log_coloring)

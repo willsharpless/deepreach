@@ -55,7 +55,14 @@ if __name__ == '__main__':
     p.add_argument('--capacity_test', action='store_true', default=False, required=False, help='Will use supervised-learning to train with the true solution (needs ground truth)')
     p.add_argument('--debug_params', action='store_true', default=False, required=False, help='Quick params for debugging')
     p.add_argument('--timing', action='store_true', default=False, required=False, help='Gives detailed breakdown of computation times per iteration')
-    p.add_argument('--plot_comp_final', action='store_true', default=False, required=False, help='Computes ground-truths for all LLND benchamrks')
+    p.add_argument('--plot_comp_final', action='store_true', default=True, required=False, help='Computes ground-truths for all LLND benchamrks')
+    p.add_argument('--N', type=int, default=3, required=False, help='Asses 50D Plots')
+    p.add_argument('--gamma', type=int, default=20, required=False, help='Asses 50D Plots')
+    p.add_argument('--mu', type=int, default=0, required=False, help='Asses 50D Plots')
+    p.add_argument('--alpha', type=int, default=0, required=False, help='Asses 50D Plots')
+    p.add_argument('--goalR', type=float, default=0.25, required=False, help='Asses 50D Plots')
+    p.add_argument('--plot_path', type=str, default='./plots/hopf/', required=False, help='Asses 50D Plots')
+    p.add_argument('--plot_name', type=str, default='Final_Comparison_Plot_50D', required=False, help='Asses 50D Plots')
     
     p.add_argument('--solve_hopf', action='store_true', default=False, required=False, help='Dynamically makes a state & value bank by iteratively solving the Hopf formula')
     p.add_argument('--use_bank', action='store_true', default=False, required=False, help='Makes/loads a state & value bank to reduce compute')
@@ -148,7 +155,7 @@ if __name__ == '__main__':
         dynamics_class = dynamics_classes_dict[p.parse_known_args()[0].dynamics_class]
         dynamics_params = {name: param for name, param in inspect.signature(dynamics_class).parameters.items() if name != 'self'}
         for param in dynamics_params.keys():
-            # if param == 'N': continue
+            if param in ['N', 'gamma', 'mu', 'alpha', 'goalR']: continue
             if dynamics_params[param].annotation is bool:
                 p.add_argument('--' + param, type=dynamics_params[param].annotation, default=False, help='special dynamics_class argument')
             else:
@@ -201,22 +208,22 @@ if __name__ == '__main__':
     comp_model_paths = [
 
         # Baselines
-        "./runs/baseline_50D_300k_b1",
-        "./runs/baseline_50D_300k_b2",
-        "./runs/baseline_50D_300k_b3",
-        "./runs/baseline_50D_300k_b4",
+        "./runs/hopf/baseline_50D_300k_b1",
+        "./runs/hopf/baseline_50D_300k_b2",
+        "./runs/hopf/baseline_50D_300k_b3",
+        "./runs/hopf/baseline_50D_300k_b4",
 
         # LSS Decays
-        "./runs/LSD_50D_10k_dwp4_hld10_b1", 
-        "./runs/LSD_50D_10k_dwp2_hld5_lr1e-6_b2", 
-        "./runs/LSS_50D_10k_hld5_hgld50_b3", 
-        "./runs/LSD_50D_10k_dwp4_hld50_lr5e-6_b4", 
+        "./runs/hopf/LSD_50D_10k_dwp4_hld10_b1", 
+        "./runs/hopf/LSD_50D_10k_dwp2_hld5_lr1e-6_b2", 
+        "./runs/hopf/LSS_50D_10k_hld5_hgld50_b3", 
+        "./runs/hopf/LSD_50D_10k_dwp4_hld50_lr5e-6_b4", 
 
         # LSS NL-Aug
-        "./runs/ZLLS_hld100_hgld250_50D_300k_b1",
-        "./runs/ZLLS_hld500_hgld1000_50D_300k_b2",
-        "./runs/ZLLS_hld500_hgld4k_50D_300k_b3",
-        "./runs/ZLLS_hld100_hgld250_50D_300k_b4",
+        "./runs/hopf/ZLLS_hld100_hgld250_50D_300k_b1",
+        "./runs/hopf/ZLLS_hld500_hgld1000_50D_300k_b2",
+        "./runs/hopf/ZLLS_hld500_hgld4k_50D_300k_b3",
+        "./runs/hopf/ZLLS_hld100_hgld250_50D_300k_b4",
 
     ]
         
@@ -288,5 +295,6 @@ if __name__ == '__main__':
     experiment.init_special(**{argname: getattr(orig_opt, argname) for argname in inspect.signature(experiment_class.init_special).parameters.keys() if argname != 'self'})
 
     # save_path = os.path.join('./plots/Final_Comparison_Plot_50D.png')
-    save_path = 'Final_Comparison_Plot_50D.png'
-    experiment.plot_final_comparison(save_path, loaded_models_dict, orig_opt.val_x_resolution, orig_opt.val_y_resolution, time_resolution=orig_opt.val_time_resolution, plot_value=True)
+    save_path = orig_opt.plot_path
+    save_name = orig_opt.plot_name
+    experiment.plot_final_comparison(save_path, save_name, loaded_models_dict, orig_opt.val_x_resolution, orig_opt.val_y_resolution, time_resolution=orig_opt.val_time_resolution, plot_value=True)
